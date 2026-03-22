@@ -6,6 +6,8 @@ use std::sync::atomic::Ordering;
 
 static DEFAULT_PALETTE_VERSION: AtomicU64 = AtomicU64::new(0);
 pub(crate) const PARENT_BG_RGB_ENV_VAR: &str = "CODEX_TUI_PARENT_BG_RGB";
+pub(crate) const PARENT_FG_RGB_ENV_VAR: &str = "CODEX_TUI_PARENT_FG_RGB";
+pub(crate) const SKIP_DEFAULT_COLOR_PROBE_ENV_VAR: &str = "CODEX_TUI_SKIP_DEFAULT_COLOR_PROBE";
 
 fn bump_palette_version() {
     DEFAULT_PALETTE_VERSION.fetch_add(1, Ordering::Relaxed);
@@ -72,7 +74,7 @@ pub fn default_colors() -> Option<DefaultColors> {
 }
 
 pub fn default_fg() -> Option<(u8, u8, u8)> {
-    default_colors().map(|c| c.fg)
+    env_default_fg().or_else(|| default_colors().map(|c| c.fg))
 }
 
 pub fn default_bg() -> Option<(u8, u8, u8)> {
@@ -87,11 +89,29 @@ pub fn palette_version() -> u64 {
     DEFAULT_PALETTE_VERSION.load(Ordering::Relaxed)
 }
 
-fn env_default_bg() -> Option<(u8, u8, u8)> {
-    parse_bg_rgb_env(&env::var(PARENT_BG_RGB_ENV_VAR).ok()?)
+fn should_skip_default_color_probe() -> bool {
+    matches!(
+        env::var(SKIP_DEFAULT_COLOR_PROBE_ENV_VAR).ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "True")
+    )
 }
 
-fn parse_bg_rgb_env(value: &str) -> Option<(u8, u8, u8)> {
+fn inherited_default_colors() -> Option<DefaultColors> {
+    Some(DefaultColors {
+        fg: env_default_fg()?,
+        bg: env_default_bg()?,
+    })
+}
+
+fn env_default_fg() -> Option<(u8, u8, u8)> {
+    parse_rgb_env(&env::var(PARENT_FG_RGB_ENV_VAR).ok()?)
+}
+
+fn env_default_bg() -> Option<(u8, u8, u8)> {
+    parse_rgb_env(&env::var(PARENT_BG_RGB_ENV_VAR).ok()?)
+}
+
+fn parse_rgb_env(value: &str) -> Option<(u8, u8, u8)> {
     let mut parts = value.split(',');
     let red = parts.next()?.trim().parse().ok()?;
     let green = parts.next()?.trim().parse().ok()?;
@@ -149,11 +169,31 @@ mod imp {
     pub(super) fn default_colors() -> Option<DefaultColors> {
         let cache = default_colors_cache();
         let mut cache = cache.lock().ok()?;
+        if let Some(colors) = super::inherited_default_colors() {
+            cache.attempted = true;
+            cache.value = Some(colors);
+            return Some(colors);
+        }
+        if super::should_skip_default_color_probe() {
+            cache.attempted = true;
+            cache.value = None;
+            return None;
+        }
         cache.get_or_init_with(|| query_default_colors().unwrap_or_default())
     }
 
     pub(super) fn requery_default_colors() {
         if let Ok(mut cache) = default_colors_cache().lock() {
+            if let Some(colors) = super::inherited_default_colors() {
+                cache.attempted = true;
+                cache.value = Some(colors);
+                return;
+            }
+            if super::should_skip_default_color_probe() {
+                cache.attempted = true;
+                cache.value = None;
+                return;
+            }
             // Don't try to refresh if the cache is already attempted and failed.
             if cache.attempted && cache.value.is_none() {
                 return;

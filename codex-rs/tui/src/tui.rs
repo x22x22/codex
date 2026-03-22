@@ -61,6 +61,8 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
+pub(crate) const PARENT_ENHANCED_KEYS_SUPPORTED_ENV_VAR: &str =
+    "CODEX_TUI_PARENT_ENHANCED_KEYS_SUPPORTED";
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
@@ -227,6 +229,17 @@ pub fn init() -> Result<Terminal> {
     Ok(tui)
 }
 
+fn inherited_enhanced_keys_supported() -> Option<bool> {
+    match std::env::var(PARENT_ENHANCED_KEYS_SUPPORTED_ENV_VAR)
+        .ok()?
+        .as_str()
+    {
+        "1" | "true" | "TRUE" | "True" => Some(true),
+        "0" | "false" | "FALSE" | "False" => Some(false),
+        _ => None,
+    }
+}
+
 fn set_panic_hook() {
     let hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
@@ -270,7 +283,11 @@ impl Tui {
 
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        let enhanced_keys_supported = if let Some(supported) = inherited_enhanced_keys_supported() {
+            supported
+        } else {
+            supports_keyboard_enhancement().unwrap_or(false)
+        };
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();

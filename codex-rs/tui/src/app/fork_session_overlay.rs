@@ -23,6 +23,8 @@ use crate::custom_terminal::Frame;
 use crate::insert_history::insert_history_lines;
 use crate::render::renderable::Renderable;
 use crate::terminal_palette::PARENT_BG_RGB_ENV_VAR;
+use crate::terminal_palette::PARENT_FG_RGB_ENV_VAR;
+use crate::terminal_palette::SKIP_DEFAULT_COLOR_PROBE_ENV_VAR;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::vt100_backend::VT100Backend;
@@ -295,12 +297,15 @@ fn append_config_override(args: &mut Vec<String>, key: &str, value: impl std::fm
     args.push(format!("{key}={value}"));
 }
 
-fn parent_bg_rgb_env_value(bg: (u8, u8, u8)) -> String {
-    let (red, green, blue) = bg;
+fn rgb_env_value(rgb: (u8, u8, u8)) -> String {
+    let (red, green, blue) = rgb;
     format!("{red},{green},{blue}")
 }
 
-fn child_overlay_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
+fn child_overlay_env(
+    mut env: HashMap<String, String>,
+    enhanced_keys_supported: bool,
+) -> HashMap<String, String> {
     for key in [
         "TMUX",
         "TMUX_PANE",
@@ -310,11 +315,19 @@ fn child_overlay_env(mut env: HashMap<String, String>) -> HashMap<String, String
     ] {
         env.remove(key);
     }
+    env.insert(
+        crate::tui::PARENT_ENHANCED_KEYS_SUPPORTED_ENV_VAR.to_string(),
+        if enhanced_keys_supported { "1" } else { "0" }.to_string(),
+    );
+    env.insert(
+        SKIP_DEFAULT_COLOR_PROBE_ENV_VAR.to_string(),
+        "1".to_string(),
+    );
+    if let Some(fg) = crate::terminal_palette::default_fg() {
+        env.insert(PARENT_FG_RGB_ENV_VAR.to_string(), rgb_env_value(fg));
+    }
     if let Some(bg) = crate::terminal_palette::default_bg() {
-        env.insert(
-            PARENT_BG_RGB_ENV_VAR.to_string(),
-            parent_bg_rgb_env_value(bg),
-        );
+        env.insert(PARENT_BG_RGB_ENV_VAR.to_string(), rgb_env_value(bg));
     }
     env
 }
@@ -344,7 +357,10 @@ impl App {
         let popup = stacked_popup_rect(area, existing_popups);
         let terminal_size = popup_terminal_size(popup);
         let program = std::env::current_exe()?.to_string_lossy().into_owned();
-        let env = child_overlay_env(std::env::vars().collect::<HashMap<_, _>>());
+        let env = child_overlay_env(
+            std::env::vars().collect::<HashMap<_, _>>(),
+            tui.enhanced_keys_supported(),
+        );
         let args = self.build_fork_session_overlay_args(thread_id);
         let terminal = ForkSessionTerminal::spawn(
             &program,
@@ -1103,14 +1119,17 @@ mod tests {
 
     #[test]
     fn child_overlay_env_strips_terminal_multiplexer_markers() {
-        let env = child_overlay_env(HashMap::from([
-            ("PATH".to_string(), "/usr/bin".to_string()),
-            ("TMUX".to_string(), "1".to_string()),
-            ("TMUX_PANE".to_string(), "%1".to_string()),
-            ("ZELLIJ".to_string(), "1".to_string()),
-            ("ZELLIJ_SESSION_NAME".to_string(), "codex".to_string()),
-            ("ZELLIJ_VERSION".to_string(), "0.44.0".to_string()),
-        ]));
+        let env = child_overlay_env(
+            HashMap::from([
+                ("PATH".to_string(), "/usr/bin".to_string()),
+                ("TMUX".to_string(), "1".to_string()),
+                ("TMUX_PANE".to_string(), "%1".to_string()),
+                ("ZELLIJ".to_string(), "1".to_string()),
+                ("ZELLIJ_SESSION_NAME".to_string(), "codex".to_string()),
+                ("ZELLIJ_VERSION".to_string(), "0.44.0".to_string()),
+            ]),
+            /*enhanced_keys_supported*/ true,
+        );
 
         assert_eq!(env.get("PATH"), Some(&"/usr/bin".to_string()));
         assert_eq!(env.get("TMUX"), None);
@@ -1118,11 +1137,19 @@ mod tests {
         assert_eq!(env.get("ZELLIJ"), None);
         assert_eq!(env.get("ZELLIJ_SESSION_NAME"), None);
         assert_eq!(env.get("ZELLIJ_VERSION"), None);
+        assert_eq!(
+            env.get(crate::tui::PARENT_ENHANCED_KEYS_SUPPORTED_ENV_VAR),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            env.get(SKIP_DEFAULT_COLOR_PROBE_ENV_VAR),
+            Some(&"1".to_string())
+        );
     }
 
     #[test]
-    fn parent_bg_rgb_env_value_formats_rgb_triplet() {
-        assert_eq!(parent_bg_rgb_env_value((12, 34, 56)), "12,34,56");
+    fn rgb_env_value_formats_rgb_triplet() {
+        assert_eq!(rgb_env_value((12, 34, 56)), "12,34,56");
     }
 
     #[test]
