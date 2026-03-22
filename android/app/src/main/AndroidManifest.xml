@@ -6,6 +6,13 @@
     <uses-permission android:name="android.permission.START_GENIE_EXECUTION" />
     <uses-permission android:name="android.permission.OBSERVE_AGENT_SESSIONS" />
 
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:label="@string/app_name"
         android:allowBackup="false"
