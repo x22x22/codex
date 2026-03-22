@@ -264,12 +264,17 @@ pub(crate) fn guardian_approval_request_to_json(
                 ("host".to_string(), Value::String(host.clone())),
                 (
                     "protocol".to_string(),
-                    serde_json::to_value(protocol).expect("protocol serializes"),
+                    Value::String(
+                        match protocol {
+                            NetworkApprovalProtocol::Http => "Http",
+                            NetworkApprovalProtocol::Https => "Https",
+                            NetworkApprovalProtocol::Socks5Tcp => "Socks5Tcp",
+                            NetworkApprovalProtocol::Socks5Udp => "Socks5Udp",
+                        }
+                        .to_string(),
+                    ),
                 ),
-                (
-                    "port".to_string(),
-                    serde_json::to_value(port).expect("port serializes"),
-                ),
+                ("port".to_string(), Value::from(*port)),
             ]);
             if let Some(parent_tool_item_id) = parent_tool_item_id {
                 action.insert(
@@ -355,12 +360,17 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
                 ("host".to_string(), Value::String(host.clone())),
                 (
                     "protocol".to_string(),
-                    serde_json::to_value(protocol).expect("protocol serializes"),
+                    Value::String(
+                        match protocol {
+                            NetworkApprovalProtocol::Http => "Http",
+                            NetworkApprovalProtocol::Https => "Https",
+                            NetworkApprovalProtocol::Socks5Tcp => "Socks5Tcp",
+                            NetworkApprovalProtocol::Socks5Udp => "Socks5Udp",
+                        }
+                        .to_string(),
+                    ),
                 ),
-                (
-                    "port".to_string(),
-                    serde_json::to_value(port).expect("port serializes"),
-                ),
+                ("port".to_string(), Value::from(*port)),
             ]);
             if let Some(parent_tool_item_id) = parent_tool_item_id {
                 action.insert(
