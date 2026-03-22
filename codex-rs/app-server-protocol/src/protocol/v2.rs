@@ -4839,6 +4839,8 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub target_item_id: String,
+    #[serde(default)]
+    pub parent_tool_item_id: Option<String>,
     pub review: GuardianApprovalReview,
     pub action: Option<JsonValue>,
 }
@@ -4856,6 +4858,8 @@ pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub target_item_id: String,
+    #[serde(default)]
+    pub parent_tool_item_id: Option<String>,
     pub review: GuardianApprovalReview,
     pub action: Option<JsonValue>,
 }

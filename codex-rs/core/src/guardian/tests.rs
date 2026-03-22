@@ -373,7 +373,7 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
 }
 
 #[test]
-fn guardian_assessment_action_value_includes_network_access_parent_tool_item_id() {
+fn guardian_assessment_action_value_omits_network_access_parent_tool_item_id() {
     let network_access = GuardianApprovalRequest::NetworkAccess {
         id: "network-1".to_string(),
         turn_id: "owner-turn".to_string(),
@@ -392,7 +392,6 @@ fn guardian_assessment_action_value_includes_network_access_parent_tool_item_id(
             "host": "example.com",
             "protocol": "https",
             "port": 443,
-            "parent_tool_item_id": "command-1",
         })
     );
 }
@@ -439,6 +438,56 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
         ]
     );
     assert!(warnings.is_empty());
+}
+
+#[tokio::test]
+async fn cancelled_network_guardian_review_preserves_parent_tool_item_id() {
+    let (session, turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+
+    let decision = review_approval_request_with_cancel(
+        &session,
+        &turn,
+        GuardianApprovalRequest::NetworkAccess {
+            id: "network-1".to_string(),
+            turn_id: "owner-turn".to_string(),
+            parent_tool_item_id: Some("command-1".to_string()),
+            target: "https://example.com:443".to_string(),
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Https,
+            port: 443,
+        },
+        None,
+        cancel_token,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Abort);
+
+    let mut guardian_events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let EventMsg::GuardianAssessment(event) = event.msg {
+            guardian_events.push(event);
+        }
+    }
+
+    assert_eq!(
+        guardian_events
+            .into_iter()
+            .map(|event| (event.status, event.parent_tool_item_id))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                GuardianAssessmentStatus::InProgress,
+                Some("command-1".to_string()),
+            ),
+            (
+                GuardianAssessmentStatus::Aborted,
+                Some("command-1".to_string()),
+            ),
+        ]
+    );
 }
 
 #[tokio::test]

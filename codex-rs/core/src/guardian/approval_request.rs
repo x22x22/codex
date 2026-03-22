@@ -337,33 +337,18 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
-            parent_tool_item_id,
             target,
             host,
             protocol,
             port,
-        } => {
-            let mut action = serde_json::Map::from_iter([
-                (
-                    "tool".to_string(),
-                    Value::String("network_access".to_string()),
-                ),
-                ("target".to_string(), Value::String(target.clone())),
-                ("host".to_string(), Value::String(host.clone())),
-                (
-                    "protocol".to_string(),
-                    network_approval_protocol_value(*protocol),
-                ),
-                ("port".to_string(), Value::from(*port)),
-            ]);
-            if let Some(parent_tool_item_id) = parent_tool_item_id {
-                action.insert(
-                    "parent_tool_item_id".to_string(),
-                    Value::String(parent_tool_item_id.clone()),
-                );
-            }
-            Value::Object(action)
-        }
+            ..
+        } => serde_json::json!({
+            "tool": "network_access",
+            "target": target,
+            "host": host,
+            "protocol": network_approval_protocol_value(*protocol),
+            "port": port,
+        }),
         GuardianApprovalRequest::McpToolCall {
             server, tool_name, ..
         } => serde_json::json!({
@@ -410,6 +395,23 @@ pub(crate) fn guardian_request_turn_id<'a>(
         | GuardianApprovalRequest::McpToolCall { .. } => default_turn_id,
         #[cfg(unix)]
         GuardianApprovalRequest::Execve { .. } => default_turn_id,
+    }
+}
+
+pub(crate) fn guardian_request_parent_tool_item_id(
+    request: &GuardianApprovalRequest,
+) -> Option<&str> {
+    match request {
+        GuardianApprovalRequest::NetworkAccess {
+            parent_tool_item_id,
+            ..
+        } => parent_tool_item_id.as_deref(),
+        GuardianApprovalRequest::Shell { .. }
+        | GuardianApprovalRequest::ExecCommand { .. }
+        | GuardianApprovalRequest::ApplyPatch { .. }
+        | GuardianApprovalRequest::McpToolCall { .. } => None,
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve { .. } => None,
     }
 }
 

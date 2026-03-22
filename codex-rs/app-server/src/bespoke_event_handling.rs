@@ -224,6 +224,7 @@ fn guardian_auto_approval_review_notification(
         risk_level: assessment.risk_level.map(Into::into),
         rationale: assessment.rationale.clone(),
     };
+    let parent_tool_item_id = assessment.parent_tool_item_id.clone();
     let target_item_id = assessment.id.clone();
     match assessment.status {
         codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
@@ -232,6 +233,7 @@ fn guardian_auto_approval_review_notification(
                     thread_id: conversation_id.to_string(),
                     turn_id,
                     target_item_id,
+                    parent_tool_item_id,
                     review,
                     action: assessment.action.clone(),
                 },
@@ -245,6 +247,7 @@ fn guardian_auto_approval_review_notification(
                     thread_id: conversation_id.to_string(),
                     turn_id,
                     target_item_id,
+                    parent_tool_item_id,
                     review,
                     action: assessment.action.clone(),
                 },
@@ -2919,6 +2922,7 @@ mod tests {
             "turn-from-event",
             &GuardianAssessmentEvent {
                 id: "item-1".to_string(),
+                parent_tool_item_id: None,
                 turn_id: String::new(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
                 risk_score: None,
@@ -2933,6 +2937,7 @@ mod tests {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-event");
                 assert_eq!(payload.target_item_id, "item-1");
+                assert_eq!(payload.parent_tool_item_id, None);
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -2958,6 +2963,7 @@ mod tests {
             "turn-from-event",
             &GuardianAssessmentEvent {
                 id: "item-2".to_string(),
+                parent_tool_item_id: None,
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_score: Some(91),
@@ -2972,6 +2978,7 @@ mod tests {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-2");
+                assert_eq!(payload.parent_tool_item_id, None);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(payload.review.risk_score, Some(91));
                 assert_eq!(
@@ -2990,7 +2997,6 @@ mod tests {
         let conversation_id = ThreadId::new();
         let action = json!({
             "tool": "network_access",
-            "parent_tool_item_id": "command-3",
             "target": "api.openai.com:443",
         });
         let notification = guardian_auto_approval_review_notification(
@@ -2998,6 +3004,7 @@ mod tests {
             "turn-from-event",
             &GuardianAssessmentEvent {
                 id: "guardian-3".to_string(),
+                parent_tool_item_id: Some("command-3".to_string()),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
                 risk_score: None,
@@ -3012,6 +3019,7 @@ mod tests {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "guardian-3");
+                assert_eq!(payload.parent_tool_item_id.as_deref(), Some("command-3"));
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
@@ -3034,6 +3042,7 @@ mod tests {
             "turn-from-event",
             &GuardianAssessmentEvent {
                 id: "guardian-4".to_string(),
+                parent_tool_item_id: None,
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
                 risk_score: None,
@@ -3048,6 +3057,7 @@ mod tests {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "guardian-4");
+                assert_eq!(payload.parent_tool_item_id, None);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
