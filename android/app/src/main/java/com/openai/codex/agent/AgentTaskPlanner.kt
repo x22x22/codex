@@ -2,6 +2,7 @@ package com.openai.codex.agent
 
 import android.content.Context
 import android.util.Log
+import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.IOException
 import org.json.JSONArray
 import org.json.JSONObject
@@ -55,13 +56,13 @@ object AgentTaskPlanner {
         - Use `DETACHED_HIDDEN` when the target should complete in the background without remaining visible.
         - Use `AGENT_CHOICE` only when the final presentation state does not matter.
         - Stop after at most 6 shell commands.
-        - Prefer direct package-manager commands over grepping large package lists.
-        - Verify each chosen package by inspecting its package dump or query-activities output before returning it.
+        - Start from the installed package list, then narrow to the most likely candidates.
+        - Prefer direct package-manager commands over broad shell pipelines.
+        - Verify each chosen package by inspecting focused query-activities or resolve-activity output before returning it.
         - Only choose packages that directly own the requested app behavior. Never choose helper packages such as `com.android.shell`, `com.android.systemui`, or the Codex Agent/Genie packages unless the user explicitly asked for them.
-        - For intent resolution commands, include `--user 0`.
         - If the user objective already names a specific installed package, use it directly after verification.
-        - `cmd package list packages PACKAGE_NAME` alone is not sufficient verification.
-        - Prefer focused verification commands such as `cmd package dump PACKAGE | sed -n '1,120p'`, `cmd package query-activities --brief --user 0 -p PACKAGE -a android.intent.action.MAIN`, and `cmd package query-activities --brief --user 0 -p PACKAGE -a RELEVANT_ACTION`.
+        - `pm list packages PACKAGE_NAME` alone is not sufficient verification.
+        - Prefer focused verification commands such as `pm list packages clock`, `cmd package query-activities --brief -p PACKAGE -a android.intent.action.MAIN`, and `cmd package resolve-activity --brief -a RELEVANT_ACTION PACKAGE`.
         - Do not enumerate every launcher activity on the device. Query specific candidate packages instead.
         """.trimIndent()
     private val PLANNER_OUTPUT_SCHEMA =
@@ -120,6 +121,7 @@ object AgentTaskPlanner {
         targetPackageOverride: String?,
         allowDetachedMode: Boolean,
         finalPresentationPolicyOverride: SessionFinalPresentationPolicy? = null,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
         sessionController: AgentSessionController,
         requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
     ): SessionStartResult {
@@ -166,6 +168,7 @@ object AgentTaskPlanner {
                 ),
                 outputSchema = PLANNER_OUTPUT_SCHEMA,
                 requestUserInputHandler = requestUserInputHandler,
+                executionSettings = executionSettings,
             )
             Log.i(TAG, "Planner response=${plannerResponse.take(400)}")
             previousPlannerResponse = plannerResponse

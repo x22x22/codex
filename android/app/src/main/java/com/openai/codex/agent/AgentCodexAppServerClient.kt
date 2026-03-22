@@ -3,6 +3,7 @@ package com.openai.codex.agent
 import android.content.Context
 import android.util.Log
 import com.openai.codex.bridge.HostedCodexConfig
+import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.BufferedWriter
 import java.io.File
 import java.io.IOException
@@ -99,6 +100,7 @@ object AgentCodexAppServerClient {
         dynamicTools: JSONArray? = null,
         toolCallHandler: ((String, JSONObject) -> JSONObject)? = null,
         requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
     ): String = synchronized(lifecycleLock) {
         ensureStarted(context.applicationContext)
         activeRequests.incrementAndGet()
@@ -113,11 +115,13 @@ object AgentCodexAppServerClient {
                 context = context.applicationContext,
                 instructions = instructions,
                 dynamicTools = dynamicTools,
+                executionSettings = executionSettings,
             )
             startTurn(
                 threadId = threadId,
                 prompt = prompt,
                 outputSchema = outputSchema,
+                executionSettings = executionSettings,
             )
             waitForTurnCompletion(toolCallHandler, requestUserInputHandler).also { response ->
                 Log.i(TAG, "requestText completed response=${response.take(160)}")
@@ -173,6 +177,47 @@ object AgentCodexAppServerClient {
             params = null,
         )
         refreshRuntimeStatusAsync(context.applicationContext)
+    }
+
+    fun listModels(context: Context): List<AgentModelOption> = synchronized(lifecycleLock) {
+        ensureStarted(context.applicationContext)
+        val models = mutableListOf<AgentModelOption>()
+        var cursor: String? = null
+        do {
+            val result = request(
+                method = "model/list",
+                params = JSONObject().apply {
+                    put("includeHidden", false)
+                    cursor?.let { put("cursor", it) }
+                },
+            )
+            val data = result.optJSONArray("data") ?: JSONArray()
+            for (index in 0 until data.length()) {
+                val item = data.optJSONObject(index) ?: continue
+                models += AgentModelOption(
+                    id = item.optString("id"),
+                    model = item.optString("model"),
+                    displayName = item.optString("displayName").ifBlank { item.optString("model") },
+                    description = item.optString("description"),
+                    supportedReasoningEfforts = buildList {
+                        val efforts = item.optJSONArray("supportedReasoningEfforts") ?: JSONArray()
+                        for (effortIndex in 0 until efforts.length()) {
+                            val effort = efforts.optJSONObject(effortIndex) ?: continue
+                            add(
+                                AgentReasoningEffortOption(
+                                    reasoningEffort = effort.optString("reasoningEffort"),
+                                    description = effort.optString("description"),
+                                ),
+                            )
+                        }
+                    },
+                    defaultReasoningEffort = item.optString("defaultReasoningEffort"),
+                    isDefault = item.optBoolean("isDefault"),
+                )
+            }
+            cursor = result.optNullableString("nextCursor")
+        } while (cursor != null)
+        models
     }
 
     private fun ensureStarted(context: Context) {
@@ -244,6 +289,7 @@ object AgentCodexAppServerClient {
         context: Context,
         instructions: String,
         dynamicTools: JSONArray?,
+        executionSettings: SessionExecutionSettings,
     ): String {
         val params = JSONObject()
             .put("approvalPolicy", "never")
@@ -252,6 +298,9 @@ object AgentCodexAppServerClient {
             .put("cwd", context.filesDir.absolutePath)
             .put("serviceName", "android_agent")
             .put("baseInstructions", instructions)
+        executionSettings.model
+            ?.takeIf(String::isNotBlank)
+            ?.let { params.put("model", it) }
         if (dynamicTools != null) {
             params.put("dynamicTools", dynamicTools)
         }
@@ -266,6 +315,7 @@ object AgentCodexAppServerClient {
         threadId: String,
         prompt: String,
         outputSchema: JSONObject?,
+        executionSettings: SessionExecutionSettings,
     ) {
         val turnParams = JSONObject()
             .put("threadId", threadId)
@@ -277,6 +327,12 @@ object AgentCodexAppServerClient {
                         .put("text", prompt),
                 ),
             )
+        executionSettings.model
+            ?.takeIf(String::isNotBlank)
+            ?.let { turnParams.put("model", it) }
+        executionSettings.reasoningEffort
+            ?.takeIf(String::isNotBlank)
+            ?.let { turnParams.put("effort", it) }
         if (outputSchema != null) {
             turnParams.put("outputSchema", outputSchema)
         }

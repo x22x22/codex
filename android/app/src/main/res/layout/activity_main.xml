@@ -1,216 +1,78 @@
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
 
-    <LinearLayout
+    <Button
+        android:id="@+id/create_session_button"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp">
+        android:text="Create New Session" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Agent Sessions"
-            android:textStyle="bold" />
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:text="Agent Authentication"
+        android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/agent_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="8dp"
-            android:text="Agent framework unavailable on this build" />
+    <TextView
+        android:id="@+id/auth_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Agent auth: probing..." />
 
-        <TextView
-            android:id="@+id/agent_runtime_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:text="Agent runtime: unknown" />
+    <TextView
+        android:id="@+id/agent_runtime_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="Agent runtime: probing..." />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:text="Selected Genie package" />
+    <TextView
+        android:id="@+id/agent_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="Agent framework: probing..." />
 
-        <TextView
-            android:id="@+id/agent_genie_package"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="No GENIE role holder configured" />
+    <Button
+        android:id="@+id/auth_action"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="Start sign-in" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:text="Target package override (optional)" />
+    <Button
+        android:id="@+id/refresh_sessions_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Refresh Sessions" />
 
-        <EditText
-            android:id="@+id/agent_target_package"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="com.android.deskclock"
-            android:inputType="textUri" />
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:text="Sessions"
+        android:textStyle="bold" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:text="Prompt" />
+    <ListView
+        android:id="@+id/session_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="8dp"
+        android:layout_weight="1"
+        android:dividerHeight="1dp" />
 
-        <EditText
-            android:id="@+id/agent_prompt"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="top|start"
-            android:hint="Start a 5-minute timer."
-            android:inputType="textMultiLine|textCapSentences"
-            android:minLines="3"
-            android:text="Start a 5-minute timer." />
-
-        <Button
-            android:id="@+id/agent_start_button"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:onClick="startDirectAgentSession"
-            android:text="Plan And Start Agent Session" />
-
-        <Button
-            android:id="@+id/agent_refresh_button"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:onClick="refreshAgentSessionAction"
-            android:text="Refresh Framework Sessions" />
-
-        <Button
-            android:id="@+id/agent_cancel_all_button"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:onClick="cancelAllAgentSessions"
-            android:text="Cancel All Active Sessions" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="16dp"
-            android:text="Selected session"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/agent_session_focus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="No framework session selected" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="16dp"
-            android:text="Related sessions"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/agent_session_group"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="No framework sessions yet"
-            android:textIsSelectable="true" />
-
-        <TextView
-            android:id="@+id/agent_question_label"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="16dp"
-            android:text="Question"
-            android:textStyle="bold"
-            android:visibility="gone" />
-
-        <TextView
-            android:id="@+id/agent_question"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:visibility="gone" />
-
-        <EditText
-            android:id="@+id/agent_answer_input"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Answer for the waiting Genie session"
-            android:inputType="textCapSentences"
-            android:layout_marginTop="8dp"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/agent_answer_button"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:onClick="answerAgentQuestion"
-            android:text="Answer Question"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/agent_attach_button"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:onClick="attachAgentTarget"
-            android:text="Attach Detached Target"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/agent_cancel_button"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:onClick="cancelAgentSession"
-            android:text="Cancel Selected Flow"
-            android:visibility="gone" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="16dp"
-            android:text="Session timeline"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/agent_timeline"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="No framework events yet."
-            android:textIsSelectable="true" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="24dp"
-            android:background="#33000000" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="24dp"
-            android:text="Agent Authentication"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/auth_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:text="Agent auth: probing..." />
-
-        <Button
-            android:id="@+id/auth_action"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:onClick="authAction"
-            android:text="Start sign-in" />
-    </LinearLayout>
-</ScrollView>
+    <TextView
+        android:id="@+id/session_list_empty"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:paddingTop="12dp"
+        android:text="No sessions yet"
+        android:visibility="gone" />
+</LinearLayout>

@@ -6,6 +6,7 @@ import android.app.agent.AgentSessionInfo
 import android.content.Context
 import android.os.Binder
 import android.os.Process
+import com.openai.codex.bridge.SessionExecutionSettings
 import java.util.concurrent.Executor
 
 class AgentSessionController(context: Context) {
@@ -22,6 +23,7 @@ class AgentSessionController(context: Context) {
 
     private val agentManager = context.getSystemService(AgentManager::class.java)
     private val presentationPolicyStore = SessionPresentationPolicyStore(context)
+    private val executionSettingsStore = SessionExecutionSettingsStore(context)
 
     fun isAvailable(): Boolean = agentManager != null
 
@@ -57,6 +59,7 @@ class AgentSessionController(context: Context) {
         val selectedGeniePackage = selectGeniePackage(roleHolders)
         val sessions = manager.getSessions(currentUserId())
         presentationPolicyStore.prunePolicies(sessions.map { it.sessionId }.toSet())
+        executionSettingsStore.pruneSettings(sessions.map { it.sessionId }.toSet())
         var sessionDetails = sessions.map { session ->
             AgentSessionDetails(
                 sessionId = session.sessionId,
@@ -114,6 +117,7 @@ class AgentSessionController(context: Context) {
     fun startDirectSession(
         plan: AgentDelegationPlan,
         allowDetachedMode: Boolean,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
     ): SessionStartResult {
         val manager = requireAgentManager()
         val detachedPolicyTargets = plan.targets.filter { it.finalPresentationPolicy.requiresDetachedMode() }
@@ -125,6 +129,7 @@ class AgentSessionController(context: Context) {
         val parentSession = manager.createDirectSession(currentUserId())
         val childSessionIds = mutableListOf<String>()
         try {
+            executionSettingsStore.saveSettings(parentSession.sessionId, executionSettings)
             manager.publishTrace(
                 parentSession.sessionId,
                 "Starting Codex direct session for objective: ${plan.originalObjective}",
@@ -136,6 +141,7 @@ class AgentSessionController(context: Context) {
                 val childSession = manager.createChildSession(parentSession.sessionId, target.packageName)
                 childSessionIds += childSession.sessionId
                 presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
+                executionSettingsStore.saveSettings(childSession.sessionId, executionSettings)
                 manager.publishTrace(
                     parentSession.sessionId,
                     "Created child session ${childSession.sessionId} for ${target.packageName} with required final presentation ${target.finalPresentationPolicy.wireValue}.",
@@ -152,15 +158,78 @@ class AgentSessionController(context: Context) {
                 childSessionIds = childSessionIds,
                 plannedTargets = plan.targets.map(AgentDelegationTarget::packageName),
                 geniePackage = geniePackage,
+                anchor = AgentSessionInfo.ANCHOR_AGENT,
             )
         } catch (err: RuntimeException) {
             childSessionIds.forEach { childSessionId ->
                 runCatching { manager.cancelSession(childSessionId) }
                 presentationPolicyStore.removePolicy(childSessionId)
+                executionSettingsStore.removeSettings(childSessionId)
             }
             runCatching { manager.cancelSession(parentSession.sessionId) }
+            executionSettingsStore.removeSettings(parentSession.sessionId)
             throw err
         }
+    }
+
+    fun startHomeSession(
+        targetPackage: String,
+        prompt: String,
+        allowDetachedMode: Boolean,
+        finalPresentationPolicy: SessionFinalPresentationPolicy,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+    ): SessionStartResult {
+        val manager = requireAgentManager()
+        check(canStartSessionForTarget(targetPackage)) {
+            "Target package $targetPackage is not eligible for session start"
+        }
+        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
+            ?: throw IllegalStateException("No GENIE role holder configured")
+        val session = manager.createAppScopedSession(targetPackage, currentUserId())
+        presentationPolicyStore.savePolicy(session.sessionId, finalPresentationPolicy)
+        executionSettingsStore.saveSettings(session.sessionId, executionSettings)
+        try {
+            manager.publishTrace(
+                session.sessionId,
+                "Starting Codex app-scoped session for $targetPackage with required final presentation ${finalPresentationPolicy.wireValue}.",
+            )
+            manager.startGenieSession(
+                session.sessionId,
+                geniePackage,
+                buildDelegatedPrompt(
+                    AgentDelegationTarget(
+                        packageName = targetPackage,
+                        objective = prompt,
+                        finalPresentationPolicy = finalPresentationPolicy,
+                    ),
+                ),
+                allowDetachedMode,
+            )
+            return SessionStartResult(
+                parentSessionId = session.sessionId,
+                childSessionIds = listOf(session.sessionId),
+                plannedTargets = listOf(targetPackage),
+                geniePackage = geniePackage,
+                anchor = AgentSessionInfo.ANCHOR_HOME,
+            )
+        } catch (err: RuntimeException) {
+            presentationPolicyStore.removePolicy(session.sessionId)
+            executionSettingsStore.removeSettings(session.sessionId)
+            runCatching { manager.cancelSession(session.sessionId) }
+            throw err
+        }
+    }
+
+    fun executionSettingsForSession(sessionId: String): SessionExecutionSettings {
+        return executionSettingsStore.getSettings(sessionId)
+    }
+
+    fun consumeCompletedHomeSession(sessionId: String) {
+        requireAgentManager().consumeCompletedHomeSession(sessionId)
+    }
+
+    fun consumeHomeSessionPresentation(sessionId: String) {
+        requireAgentManager().consumeHomeSessionPresentation(sessionId)
     }
 
     fun answerQuestion(sessionId: String, answer: String, parentSessionId: String?) {
@@ -476,6 +545,7 @@ data class SessionStartResult(
     val childSessionIds: List<String>,
     val plannedTargets: List<String>,
     val geniePackage: String,
+    val anchor: Int,
 )
 
 data class CancelActiveSessionsResult(

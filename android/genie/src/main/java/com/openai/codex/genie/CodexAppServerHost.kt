@@ -6,6 +6,7 @@ import android.app.agent.GenieService
 import android.content.Context
 import android.util.Log
 import com.openai.codex.bridge.HostedCodexConfig
+import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.BufferedWriter
 import java.io.Closeable
 import java.io.File
@@ -42,6 +43,7 @@ class CodexAppServerHost(
     private lateinit var process: Process
     private lateinit var writer: BufferedWriter
     private lateinit var codexHome: File
+    private lateinit var executionSettings: SessionExecutionSettings
     private var localProxy: GenieLocalCodexProxy? = null
     private var stdoutThread: Thread? = null
     private var stderrThread: Thread? = null
@@ -50,6 +52,7 @@ class CodexAppServerHost(
     fun run() {
         startProcess()
         initialize()
+        executionSettings = bridgeClient.readSessionExecutionSettings()
         val model = resolveModel()
         val threadId = startThread(model)
         startTurn(threadId, model)
@@ -218,6 +221,11 @@ class CodexAppServerHost(
             params = JSONObject()
                 .put("threadId", threadId)
                 .put("model", model)
+                .apply {
+                    executionSettings.reasoningEffort
+                        ?.takeIf(String::isNotBlank)
+                        ?.let { put("effort", it) }
+                }
                 .put(
                     "input",
                     JSONArray().put(
@@ -229,9 +237,11 @@ class CodexAppServerHost(
         )
     }
 
-    private fun resolveModel(): String = runtimeStatus.effectiveModel
+    private fun resolveModel(): String = executionSettings.model
         ?.takeIf(String::isNotBlank)
         ?: runtimeStatus.configuredModel
+            ?.takeIf(String::isNotBlank)
+        ?: runtimeStatus.effectiveModel
             ?.takeIf(String::isNotBlank)
         ?: DEFAULT_HOSTED_MODEL
 

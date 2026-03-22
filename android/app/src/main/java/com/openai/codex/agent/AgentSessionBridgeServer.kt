@@ -52,12 +52,14 @@ object AgentSessionBridgeServer {
             private const val METHOD_GET_RUNTIME_STATUS = "getRuntimeStatus"
             private const val METHOD_SEND_RESPONSES_REQUEST = "sendResponsesRequest"
             private const val METHOD_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
+            private const val METHOD_READ_SESSION_EXECUTION_SETTINGS = "readSessionExecutionSettings"
         }
 
         private val closed = AtomicBoolean(false)
         private var bridgeFd: ParcelFileDescriptor? = null
         private var input: DataInputStream? = null
         private var output: DataOutputStream? = null
+        private val executionSettingsStore = SessionExecutionSettingsStore(context)
         private val serveThread = thread(
             start = false,
             name = "AgentSessionBridge-$sessionId",
@@ -148,6 +150,12 @@ object AgentSessionBridgeServer {
                             .put("requestId", requestId)
                             .put("ok", true)
                             .put("agentsMarkdown", HostedCodexConfig.readInstalledAgentsMarkdown(codexHome))
+                    }
+                    METHOD_READ_SESSION_EXECUTION_SETTINGS -> {
+                        JSONObject()
+                            .put("requestId", requestId)
+                            .put("ok", true)
+                            .put("executionSettings", executionSettingsStore.toJson(sessionId))
                     }
                     else -> {
                         JSONObject()

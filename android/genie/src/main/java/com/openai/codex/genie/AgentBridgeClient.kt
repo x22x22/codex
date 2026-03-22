@@ -3,6 +3,7 @@ package com.openai.codex.genie
 import android.app.agent.GenieService
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayInputStream
@@ -30,6 +31,7 @@ class AgentBridgeClient(
         private const val OP_GET_RUNTIME_STATUS = "getRuntimeStatus"
         private const val OP_SEND_RESPONSES_REQUEST = "sendResponsesRequest"
         private const val OP_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
+        private const val OP_READ_SESSION_EXECUTION_SETTINGS = "readSessionExecutionSettings"
     }
 
     private val bridgeFd: ParcelFileDescriptor = callback.openSessionBridge(sessionId)
@@ -60,6 +62,16 @@ class AgentBridgeClient(
         return request(
             JSONObject().put("method", OP_READ_INSTALLED_AGENTS_FILE),
         ).getString("agentsMarkdown")
+    }
+
+    fun readSessionExecutionSettings(): SessionExecutionSettings {
+        val settings = request(
+            JSONObject().put("method", OP_READ_SESSION_EXECUTION_SETTINGS),
+        ).getJSONObject("executionSettings")
+        return SessionExecutionSettings(
+            model = settings.optNullableString("model"),
+            reasoningEffort = settings.optNullableString("reasoningEffort"),
+        )
     }
 
     override fun openResponsesStream(body: String): InputStream {
