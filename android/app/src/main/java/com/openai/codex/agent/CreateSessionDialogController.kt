@@ -213,7 +213,7 @@ class CreateSessionDialogController(
                 return row
             }
         }
-        AlertDialog.Builder(activity)
+        val dialog = AlertDialog.Builder(activity)
             .setTitle("Choose app")
             .setAdapter(adapter) { _, which ->
                 val app = apps[which]
@@ -229,7 +229,14 @@ class CreateSessionDialogController(
                 onSelected(app)
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .create()
+        dialog.setOnShowListener {
+            dialog.listView?.isVerticalScrollBarEnabled = true
+            dialog.listView?.isScrollbarFadingEnabled = false
+            dialog.listView?.isFastScrollEnabled = true
+            dialog.listView?.scrollBarStyle = View.SCROLLBARS_INSIDE_INSET
+        }
+        dialog.show()
     }
 
     private fun resizeIcon(icon: Drawable?): Drawable? {
