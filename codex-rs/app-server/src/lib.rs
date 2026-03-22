@@ -75,6 +75,7 @@ pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod responses_proxy_bridge;
 mod server_request_error;
 mod thread_state;
 mod thread_status;

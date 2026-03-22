@@ -90,6 +90,12 @@ impl PendingAppServerRequests {
                         .to_string(),
                 })
             }
+            ServerRequest::ResponseSend { request_id, .. } => Some(UnsupportedAppServerRequest {
+                request_id: request_id.clone(),
+                message:
+                    "Hosted /responses bridge requests are not available in app-server TUI yet."
+                        .to_string(),
+            }),
             ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
             ServerRequest::ApplyPatchApproval { request_id, .. } => {
                 Some(UnsupportedAppServerRequest {

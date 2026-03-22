@@ -18,6 +18,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
+use crate::responses_proxy_bridge::ResponsesProxyBridge;
 use crate::transport::AppServerTransport;
 use async_trait::async_trait;
 use codex_app_server_protocol::AppListUpdatedNotification;
@@ -164,6 +165,7 @@ pub(crate) struct MessageProcessor {
     fs_watch_manager: FsWatchManager,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
+    _responses_bridge_guard: Option<codex_core::http_transport::AppServerResponsesBridgeGuard>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -233,6 +235,7 @@ impl MessageProcessor {
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
             config.analytics_enabled,
         );
+        let responses_bridge_guard = ResponsesProxyBridge::maybe_install(outgoing.clone());
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
@@ -280,6 +283,7 @@ impl MessageProcessor {
             fs_watch_manager,
             config,
             config_warnings: Arc::new(config_warnings),
+            _responses_bridge_guard: responses_bridge_guard,
         }
     }
 

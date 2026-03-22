@@ -168,7 +168,7 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
         requests.len(),
         requests
             .iter()
-            .map(|request| request.path())
+            .map(core_test_support::responses::ResponsesRequest::path)
             .collect::<Vec<_>>(),
     );
 

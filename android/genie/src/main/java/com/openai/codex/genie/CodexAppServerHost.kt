@@ -29,6 +29,7 @@ class CodexAppServerHost(
 ) : Closeable {
     companion object {
         private const val TAG = "CodexAppServerHost"
+        private const val APP_SERVER_BRIDGE_ENV_VAR = "CODEX_OPENAI_APP_SERVER_BRIDGE"
         private const val REQUEST_TIMEOUT_MS = 30_000L
         private const val POLL_TIMEOUT_MS = 250L
         private const val DEFAULT_HOSTED_MODEL = "gpt-5.3-codex"
@@ -44,7 +45,6 @@ class CodexAppServerHost(
     private lateinit var writer: BufferedWriter
     private lateinit var codexHome: File
     private lateinit var executionSettings: SessionExecutionSettings
-    private var localProxy: GenieLocalCodexProxy? = null
     private var stdoutThread: Thread? = null
     private var stderrThread: Thread? = null
     private var finalAgentMessage: String? = null
@@ -66,8 +66,6 @@ class CodexAppServerHost(
         synchronized(writerLock) {
             runCatching { writer.close() }
         }
-        localProxy?.close()
-        localProxy = null
         if (::codexHome.isInitialized) {
             runCatching { codexHome.deleteRecursively() }
         }
@@ -83,13 +81,6 @@ class CodexAppServerHost(
             mkdirs()
         }
         HostedCodexConfig.installAgentsFile(codexHome, bridgeClient.readInstalledAgentsMarkdown())
-        val proxy = GenieLocalCodexProxy(
-            sessionId = request.sessionId,
-            socketDirectory = context.cacheDir,
-            requestForwarder = bridgeClient,
-        )
-        proxy.start()
-        localProxy = proxy
         val processBuilder = ProcessBuilder(
             listOf(
                 CodexBinaryLocator.resolve(context).absolutePath,
@@ -102,7 +93,7 @@ class CodexAppServerHost(
         )
         val env = processBuilder.environment()
         env["CODEX_HOME"] = codexHome.absolutePath
-        env["CODEX_OPENAI_UNIX_SOCKET"] = proxy.socketPath
+        env[APP_SERVER_BRIDGE_ENV_VAR] = "1"
         env["RUST_LOG"] = "warn"
         process = processBuilder.start()
         control.process = process
@@ -273,6 +264,7 @@ class CodexAppServerHost(
         when (method) {
             "item/tool/call" -> handleDynamicToolCall(requestId, params)
             "item/tool/requestUserInput" -> handleRequestUserInput(requestId, params)
+            "response/send" -> handleResponsesBridgeRequest(requestId, params)
             else -> {
                 callback.publishTrace(request.sessionId, "Unsupported codex app-server request: $method")
                 sendError(
@@ -329,6 +321,20 @@ class CodexAppServerHost(
         sendResult(
             requestId = requestId,
             result = JSONObject().put("answers", buildQuestionAnswers(questions, answer)),
+        )
+    }
+
+    private fun handleResponsesBridgeRequest(
+        requestId: Any,
+        params: JSONObject,
+    ) {
+        val requestBody = params.optString("requestBody")
+        val httpResponse = bridgeClient.sendResponsesRequest(requestBody)
+        sendResult(
+            requestId = requestId,
+            result = JSONObject()
+                .put("statusCode", httpResponse.statusCode)
+                .put("body", httpResponse.body),
         )
     }
 

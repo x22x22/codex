@@ -80,6 +80,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_core::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+use codex_core::openai_socket::CODEX_OPENAI_APP_SERVER_BRIDGE_ENV_VAR;
 use codex_core::openai_socket::CODEX_OPENAI_UNIX_SOCKET_ENV_VAR;
 use tokio::process::Command;
 
@@ -137,6 +138,7 @@ impl McpProcess {
         cmd.env("RUST_LOG", "info");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
         cmd.env_remove(CODEX_OPENAI_UNIX_SOCKET_ENV_VAR);
+        cmd.env_remove(CODEX_OPENAI_APP_SERVER_BRIDGE_ENV_VAR);
         cmd.env(MANAGED_PREFERENCES_BASE64_ENV_VAR, "");
         cmd.env(MANAGED_REQUIREMENTS_BASE64_ENV_VAR, "");
         cmd.args(args);

@@ -98,13 +98,18 @@ object AgentSessionBridgeServer {
                     writeMessage(output ?: break, response)
                 }
             } catch (err: Exception) {
-                if (!closed.get()) {
+                if (!closed.get() && !isExpectedSessionShutdown(err)) {
                     Log.w(TAG, "Session bridge failed for $sessionId", err)
                 }
             } finally {
                 runningBridges.remove(sessionId, this)
                 close()
             }
+        }
+
+        private fun isExpectedSessionShutdown(err: Exception): Boolean {
+            return err is IllegalStateException
+                && err.message?.contains("No active Genie runtime for session") == true
         }
 
         private fun handleRequest(request: JSONObject): JSONObject {

@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "body": {
+      "type": "string"
+    },
+    "statusCode": {
+      "format": "uint16",
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "body",
+    "statusCode"
+  ],
+  "title": "ResponseSendResponse",
+  "type": "object"
+}

@@ -776,6 +776,12 @@ server_request_definitions! {
         response: v2::ChatgptAuthTokensRefreshResponse,
     },
 
+    /// Proxy a `/responses` request through the hosting client.
+    ResponseSend => "response/send" {
+        params: v2::ResponseSendParams,
+        response: v2::ResponseSendResponse,
+    },
+
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).

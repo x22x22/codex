@@ -998,6 +998,16 @@ UI guidance for IDEs: surface an approval dialog as soon as the request arrives.
 
 When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
 
+### Hosted `/responses` bridge
+
+Hosted clients can opt into a server-driven `/responses` bridge by setting `CODEX_OPENAI_APP_SERVER_BRIDGE=1` before launching `codex app-server`. When enabled, Codex model traffic is proxied through the hosting client instead of going directly to the network.
+
+Order of messages:
+
+1. The server sends `response/send` with `{ requestBody }`.
+2. The client forwards the serialized `/responses` request to its own transport layer.
+3. The client replies with `{ statusCode, body }`, where `body` is the complete buffered HTTP response body (for SSE streams, that means the full buffered event stream).
+
 ### MCP server elicitations
 
 MCP servers can interrupt a turn and ask the client for structured input via `mcpServer/elicitation/request`.

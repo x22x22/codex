@@ -6,26 +6,20 @@ import android.util.Log
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
-import java.io.ByteArrayInputStream
 import java.io.Closeable
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import org.json.JSONObject
 
-interface CodexResponsesRequestForwarder {
-    fun openResponsesStream(body: String): InputStream
-}
-
 class AgentBridgeClient(
     callback: GenieService.Callback,
     private val sessionId: String,
-) : Closeable, CodexResponsesRequestForwarder {
+) : Closeable {
     companion object {
         private const val TAG = "AgentBridgeClient"
         private const val OP_GET_RUNTIME_STATUS = "getRuntimeStatus"
@@ -74,23 +68,16 @@ class AgentBridgeClient(
         )
     }
 
-    override fun openResponsesStream(body: String): InputStream {
+    fun sendResponsesRequest(body: String): AgentResponsesHttpResponse {
         val response = request(
             JSONObject()
                 .put("method", OP_SEND_RESPONSES_REQUEST)
                 .put("requestBody", body),
         ).getJSONObject("httpResponse")
-        val statusCode = response.getInt("statusCode")
-        val responseBody = response.optString("body")
-        val httpResponse = buildString {
-            append("HTTP/1.1 $statusCode ${reasonPhrase(statusCode)}\r\n")
-            append("Content-Type: text/event-stream; charset=utf-8\r\n")
-            append("Content-Length: ${responseBody.toByteArray(StandardCharsets.UTF_8).size}\r\n")
-            append("Connection: close\r\n")
-            append("\r\n")
-            append(responseBody)
-        }
-        return ByteArrayInputStream(httpResponse.toByteArray(StandardCharsets.UTF_8))
+        return AgentResponsesHttpResponse(
+            statusCode = response.getInt("statusCode"),
+            body = response.optString("body"),
+        )
     }
 
     override fun close() {
@@ -140,17 +127,8 @@ class AgentBridgeClient(
         return optString(key).ifBlank { null }
     }
 
-    private fun reasonPhrase(statusCode: Int): String {
-        return when (statusCode) {
-            200 -> "OK"
-            400 -> "Bad Request"
-            401 -> "Unauthorized"
-            403 -> "Forbidden"
-            404 -> "Not Found"
-            500 -> "Internal Server Error"
-            502 -> "Bad Gateway"
-            503 -> "Service Unavailable"
-            else -> "Response"
-        }
-    }
+    data class AgentResponsesHttpResponse(
+        val statusCode: Int,
+        val body: String,
+    )
 }

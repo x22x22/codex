@@ -1509,6 +1509,17 @@
       },
       "type": "object"
     },
+    "ResponseSendParams": {
+      "properties": {
+        "requestBody": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestBody"
+      ],
+      "type": "object"
+    },
     "ThreadId": {
       "type": "string"
     },
@@ -1767,6 +1778,31 @@
         "params"
       ],
       "title": "Account/chatgptAuthTokens/refreshRequest",
+      "type": "object"
+    },
+    {
+      "description": "Proxy a `/responses` request through the hosting client.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "response/send"
+          ],
+          "title": "Response/sendRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ResponseSendParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Response/sendRequest",
       "type": "object"
     },
     {

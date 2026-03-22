@@ -13,6 +13,7 @@ use http::Method;
 use http::StatusCode;
 use http_body_util::BodyExt;
 use http_body_util::Full;
+use std::sync::Arc;
 use tracing::Level;
 use tracing::enabled;
 use tracing::trace;
@@ -121,11 +122,23 @@ impl ReqwestTransport {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum AnyTransport {
     Reqwest(ReqwestTransport),
+    Custom(Arc<dyn HttpTransport>),
     #[cfg(unix)]
     Uds(UdsTransport),
+}
+
+impl std::fmt::Debug for AnyTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reqwest(_) => f.write_str("Reqwest(..)"),
+            Self::Custom(_) => f.write_str("Custom(..)"),
+            #[cfg(unix)]
+            Self::Uds(_) => f.write_str("Uds(..)"),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -551,6 +564,7 @@ impl HttpTransport for AnyTransport {
     async fn execute(&self, req: Request) -> Result<Response, TransportError> {
         match self {
             AnyTransport::Reqwest(transport) => transport.execute(req).await,
+            AnyTransport::Custom(transport) => transport.execute(req).await,
             #[cfg(unix)]
             AnyTransport::Uds(transport) => transport.execute(req).await,
         }
@@ -559,6 +573,7 @@ impl HttpTransport for AnyTransport {
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError> {
         match self {
             AnyTransport::Reqwest(transport) => transport.stream(req).await,
+            AnyTransport::Custom(transport) => transport.stream(req).await,
             #[cfg(unix)]
             AnyTransport::Uds(transport) => transport.stream(req).await,
         }

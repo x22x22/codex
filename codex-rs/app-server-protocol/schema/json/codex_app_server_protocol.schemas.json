@@ -3411,6 +3411,38 @@
       },
       "type": "object"
     },
+    "ResponseSendParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "requestBody": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestBody"
+      ],
+      "title": "ResponseSendParams",
+      "type": "object"
+    },
+    "ResponseSendResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "statusCode": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "body",
+        "statusCode"
+      ],
+      "title": "ResponseSendResponse",
+      "type": "object"
+    },
     "ReviewDecision": {
       "description": "User's decision in response to an ExecApprovalRequest.",
       "oneOf": [
@@ -4699,6 +4731,31 @@
             "params"
           ],
           "title": "Account/chatgptAuthTokens/refreshRequest",
+          "type": "object"
+        },
+        {
+          "description": "Proxy a `/responses` request through the hosting client.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "response/send"
+              ],
+              "title": "Response/sendRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ResponseSendParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Response/sendRequest",
           "type": "object"
         },
         {

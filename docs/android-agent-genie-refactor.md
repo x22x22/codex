@@ -42,11 +42,11 @@ The current repo now contains these implementation slices:
 - The Genie runtime now relies on the hosted Codex shell/tool path for target
   package inspection, activity launch, input injection, and UI dumping instead
   of host-side Kotlin wrappers for those operations.
-- The hosted `codex app-server` process now talks to a **Genie-local loopback
-  HTTP proxy** inside the Genie app. That proxy forwards HTTP traffic to the
-  Agent over the framework session bridge, keeping network/auth Agent-owned
-  without assuming the live Genie runtime can reach the Agent over direct
-  cross-app bind or raw local sockets.
+- The hosted `codex app-server` process now routes `/v1/responses` traffic over
+  the existing app-server JSON-RPC channel to the Android host, and the Android
+  host forwards that traffic to the Agent over the framework session bridge.
+  This keeps network/auth Agent-owned without depending on target-sandbox local
+  sockets or direct cross-app IPC.
 - The session bridge now exposes a **narrow Responses transport** owned by the
   Agent app itself, so Genie model traffic no longer depends on any separate
   sidecar socket service.
@@ -143,7 +143,7 @@ the Android Agent/Genie flow.
   - Android dynamic tool execution
   - Agent escalation via `request_user_input`
   - runtime bootstrap from the framework session bridge
-  - local proxying of hosted `codex` HTTP traffic onto the framework session bridge
+  - forwarding hosted `codex` `/v1/responses` traffic onto the framework session bridge
 
 ## First Milestone Scope
 
@@ -166,8 +166,8 @@ the Android Agent/Genie flow.
 - Framework session bridge request issuance in `CodexGenieService`
 - Agent-hosted runtime metadata for Genie bootstrap
 - Shell-first Genie execution for package inspection, activity launch, input injection, and UI dumping
-- Hosted `codex app-server` inside Genie, with model traffic routed through a
-  Genie-local proxy backed by the Agent framework session bridge
+- Hosted `codex app-server` inside Genie, with model traffic routed through the
+  app-server request/response channel and then over the Agent framework session bridge
 - Agent-owned `/v1/responses` proxying in
   `android/app/src/main/java/com/openai/codex/agent/AgentResponsesProxy.kt`
 - Framework-only Android dynamic tools registered on the Genie Codex thread with:
@@ -210,10 +210,7 @@ the Android Agent/Genie flow.
   - Genie lifecycle host for the embedded `codex app-server`
 - `android/genie/src/main/java/com/openai/codex/genie/CodexAppServerHost.kt`
   - stdio JSON-RPC host for `codex app-server`, framework-only dynamic tools,
-    and `request_user_input` bridging
-- `android/genie/src/main/java/com/openai/codex/genie/GenieLocalCodexProxy.kt`
-  - Genie-local loopback HTTP proxy that forwards hosted `codex` HTTP traffic to
-    the Agent framework session bridge
+    `request_user_input` bridging, and `/v1/responses` forwarding
 - `android/app/src/main/java/com/openai/codex/agent/AgentSessionBridgeServer.kt`
   - Agent-side server for the framework-managed per-session bridge
 - `android/app/src/main/java/com/openai/codex/agent/AgentResponsesProxy.kt`
