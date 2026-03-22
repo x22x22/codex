@@ -144,7 +144,7 @@ object AgentTaskPlanner {
         }
         Log.i(TAG, "Planning Agent session for objective=${userObjective.take(160)}")
         val isEligibleTargetPackage = { packageName: String ->
-            runCatching { context.packageManager.getApplicationInfo(packageName, 0) }.isSuccess &&
+            sessionController.canStartSessionForTarget(packageName) &&
                 packageName !in setOf(
                     "com.android.shell",
                     "com.android.systemui",

@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.DUMP" />
     <uses-permission android:name="android.permission.MANAGE_AGENTS" />
     <uses-permission android:name="android.permission.START_GENIE_EXECUTION" />
     <uses-permission android:name="android.permission.OBSERVE_AGENT_SESSIONS" />

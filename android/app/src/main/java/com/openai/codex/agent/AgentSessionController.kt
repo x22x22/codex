@@ -25,6 +25,11 @@ class AgentSessionController(context: Context) {
 
     fun isAvailable(): Boolean = agentManager != null
 
+    fun canStartSessionForTarget(packageName: String): Boolean {
+        val manager = agentManager ?: return false
+        return manager.canStartSessionForTarget(packageName, currentUserId())
+    }
+
     fun registerSessionListener(
         executor: Executor,
         listener: AgentManager.SessionListener,

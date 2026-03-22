@@ -316,9 +316,7 @@ class AgentFrameworkToolBridge(
         if (packageName in DISALLOWED_TARGET_PACKAGES) {
             return false
         }
-        return runCatching {
-            context.packageManager.getApplicationInfo(packageName, 0)
-        }.isSuccess
+        return sessionController.canStartSessionForTarget(packageName)
     }
 
     private fun requireString(arguments: JSONObject, fieldName: String): String {
