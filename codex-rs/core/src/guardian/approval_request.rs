@@ -264,7 +264,7 @@ pub(crate) fn guardian_approval_request_to_json(
                 ("host".to_string(), Value::String(host.clone())),
                 (
                     "protocol".to_string(),
-                    network_approval_protocol_value(protocol),
+                    network_approval_protocol_value(*protocol),
                 ),
                 ("port".to_string(), Value::from(*port)),
             ]);
@@ -352,7 +352,7 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
                 ("host".to_string(), Value::String(host.clone())),
                 (
                     "protocol".to_string(),
-                    network_approval_protocol_value(protocol),
+                    network_approval_protocol_value(*protocol),
                 ),
                 ("port".to_string(), Value::from(*port)),
             ]);
@@ -374,7 +374,7 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
     }
 }
 
-fn network_approval_protocol_value(protocol: &NetworkApprovalProtocol) -> Value {
+fn network_approval_protocol_value(protocol: NetworkApprovalProtocol) -> Value {
     Value::String(
         match protocol {
             NetworkApprovalProtocol::Http => "http",
