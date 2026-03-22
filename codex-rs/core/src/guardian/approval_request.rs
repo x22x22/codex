@@ -264,15 +264,7 @@ pub(crate) fn guardian_approval_request_to_json(
                 ("host".to_string(), Value::String(host.clone())),
                 (
                     "protocol".to_string(),
-                    Value::String(
-                        match protocol {
-                            NetworkApprovalProtocol::Http => "Http",
-                            NetworkApprovalProtocol::Https => "Https",
-                            NetworkApprovalProtocol::Socks5Tcp => "Socks5Tcp",
-                            NetworkApprovalProtocol::Socks5Udp => "Socks5Udp",
-                        }
-                        .to_string(),
-                    ),
+                    network_approval_protocol_value(protocol),
                 ),
                 ("port".to_string(), Value::from(*port)),
             ]);
@@ -360,15 +352,7 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
                 ("host".to_string(), Value::String(host.clone())),
                 (
                     "protocol".to_string(),
-                    Value::String(
-                        match protocol {
-                            NetworkApprovalProtocol::Http => "Http",
-                            NetworkApprovalProtocol::Https => "Https",
-                            NetworkApprovalProtocol::Socks5Tcp => "Socks5Tcp",
-                            NetworkApprovalProtocol::Socks5Udp => "Socks5Udp",
-                        }
-                        .to_string(),
-                    ),
+                    network_approval_protocol_value(protocol),
                 ),
                 ("port".to_string(), Value::from(*port)),
             ]);
@@ -388,6 +372,18 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
             "tool_name": tool_name,
         }),
     }
+}
+
+fn network_approval_protocol_value(protocol: &NetworkApprovalProtocol) -> Value {
+    Value::String(
+        match protocol {
+            NetworkApprovalProtocol::Http => "http",
+            NetworkApprovalProtocol::Https => "https",
+            NetworkApprovalProtocol::Socks5Tcp => "socks5_tcp",
+            NetworkApprovalProtocol::Socks5Udp => "socks5_udp",
+        }
+        .to_string(),
+    )
 }
 
 pub(crate) fn guardian_request_id(request: &GuardianApprovalRequest) -> &str {
