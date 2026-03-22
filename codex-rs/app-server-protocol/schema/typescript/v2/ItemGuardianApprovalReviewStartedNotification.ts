@@ -12,4 +12,4 @@ import type { GuardianApprovalReview } from "./GuardianApprovalReview";
  * lifecycle instead of sending separate standalone review notifications so the
  * app-server API can persist and replay review state via `thread/read`.
  */
-export type ItemGuardianApprovalReviewStartedNotification = { threadId: string, turnId: string, targetItemId: string, review: GuardianApprovalReview, action: JsonValue | null, };
+export type ItemGuardianApprovalReviewStartedNotification = { threadId: string, turnId: string, targetItemId: string, parentToolItemId: string | null, review: GuardianApprovalReview, action: JsonValue | null, };

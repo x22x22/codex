@@ -249,6 +249,7 @@ pub(crate) fn guardian_approval_request_to_json(
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
+            parent_tool_item_id: _,
             target,
             host,
             protocol,
@@ -331,7 +332,7 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
             "tool": "network_access",
             "target": target,
             "host": host,
-            "protocol": protocol,
+            "protocol": network_approval_protocol_value(*protocol),
             "port": port,
         }),
         GuardianApprovalRequest::McpToolCall {
@@ -368,6 +369,23 @@ pub(crate) fn guardian_request_turn_id<'a>(
         | GuardianApprovalRequest::McpToolCall { .. } => default_turn_id,
         #[cfg(unix)]
         GuardianApprovalRequest::Execve { .. } => default_turn_id,
+    }
+}
+
+pub(crate) fn guardian_request_parent_tool_item_id(
+    request: &GuardianApprovalRequest,
+) -> Option<&str> {
+    match request {
+        GuardianApprovalRequest::NetworkAccess {
+            parent_tool_item_id,
+            ..
+        } => parent_tool_item_id.as_deref(),
+        GuardianApprovalRequest::Shell { .. }
+        | GuardianApprovalRequest::ExecCommand { .. }
+        | GuardianApprovalRequest::ApplyPatch { .. }
+        | GuardianApprovalRequest::McpToolCall { .. } => None,
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve { .. } => None,
     }
 }
 
