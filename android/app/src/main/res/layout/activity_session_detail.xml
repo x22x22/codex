@@ -9,6 +9,12 @@
         android:padding="16dp">
 
         <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Top-Level Session"
+            android:textStyle="bold" />
+
+        <TextView
             android:id="@+id/session_detail_summary"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -34,6 +40,73 @@
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
                 android:text="Delete Session" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/session_detail_top_level_action_note"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/session_detail_children_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Child Sessions"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/session_detail_children_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical" />
+
+        <TextView
+            android:id="@+id/session_detail_children_empty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="No child sessions"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/session_detail_child_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Selected Child Session"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/session_detail_child_summary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Select a child session to inspect it." />
+
+        <LinearLayout
+            android:id="@+id/session_detail_child_actions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/session_detail_child_cancel_button"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Cancel Child" />
+
+            <Button
+                android:id="@+id/session_detail_child_delete_button"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="Delete Child" />
         </LinearLayout>
 
         <Button
@@ -105,28 +178,6 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:text="In-place continuation is currently available only for direct Agent sessions. App-scoped HOME sessions must start a new session."
-            android:visibility="gone" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Related Sessions"
-            android:textStyle="bold" />
-
-        <LinearLayout
-            android:id="@+id/session_detail_related_sessions_container"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="vertical" />
-
-        <TextView
-            android:id="@+id/session_detail_related_sessions_empty"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="No related sessions"
             android:visibility="gone" />
 
         <TextView
