@@ -156,7 +156,11 @@ fn store_callback_inner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments,
 ) -> CallbackResult<'s> {
-    let key = coerced_string_arg(scope, &args, 0, "store key must be a string")?;
+    let key = args
+        .get(0)
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope))
+        .ok_or_else(|| "store key must be a string".to_string())?;
     let serialized = match v8_value_to_json(scope, args.get(1))? {
         Some(value) => value,
         None => {
@@ -183,7 +187,11 @@ fn load_callback_inner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments,
 ) -> CallbackResult<'s, Option<v8::Local<'s, v8::Value>>> {
-    let key = coerced_string_arg(scope, &args, 0, "load key must be a string")?;
+    let key = args
+        .get(0)
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope))
+        .ok_or_else(|| "load key must be a string".to_string())?;
     let value = scope
         .get_slot::<RuntimeState>()
         .and_then(|state| state.stored_values.get(&key))
@@ -262,16 +270,4 @@ fn exit_callback_inner<'s>(
     let error = v8::String::new(scope, EXIT_SENTINEL)
         .ok_or_else(|| "failed to allocate exit sentinel".to_string())?;
     Ok(CallbackThrow(error.into()))
-}
-
-fn coerced_string_arg(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-    index: i32,
-    error_text: &str,
-) -> Result<String, String> {
-    args.get(index)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .ok_or_else(|| error_text.to_string())
 }
