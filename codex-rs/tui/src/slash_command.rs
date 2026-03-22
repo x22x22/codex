@@ -1091,10 +1091,393 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::user_input::ByteRange;
+    use codex_protocol::user_input::TextElement;
     use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
+    use proptest::sample::select;
+    use proptest::test_runner::Config as ProptestConfig;
+    use proptest::test_runner::TestCaseError;
+    use proptest::test_runner::TestRunner;
     use std::str::FromStr;
 
     use super::*;
+
+    fn placeholder_text_arg(placeholder: &str) -> SlashTextArg {
+        SlashTextArg::new(
+            placeholder.to_string(),
+            vec![TextElement::new(
+                (0..placeholder.len()).into(),
+                Some(placeholder.to_string()),
+            )],
+        )
+    }
+
+    fn shift_text_element_left(element: &TextElement, offset: usize) -> Option<TextElement> {
+        if element.byte_range.end <= offset {
+            return None;
+        }
+        let start = element.byte_range.start.saturating_sub(offset);
+        let end = element.byte_range.end.saturating_sub(offset);
+        (start < end).then(|| element.map_range(|_| ByteRange { start, end }))
+    }
+
+    fn serialized_args(
+        invocation: &SlashCommandInvocation,
+    ) -> (String, Vec<codex_protocol::user_input::TextElement>) {
+        let serialized = invocation.serialize();
+        let prefix = format!("/{}", invocation.command().command());
+        let args = serialized
+            .text
+            .strip_prefix(&prefix)
+            .expect("serialized invocation should start with command prefix");
+        let Some(args) = args.strip_prefix(' ') else {
+            return (String::new(), Vec::new());
+        };
+        let offset = prefix.len() + 1;
+        let elements = serialized
+            .text_elements
+            .iter()
+            .filter_map(|element| shift_text_element_left(element, offset))
+            .collect();
+        (args.to_string(), elements)
+    }
+
+    fn token_text_strategy() -> BoxedStrategy<String> {
+        prop_oneof![
+            proptest::string::string_regex("[A-Za-z0-9._/-]{1,16}").unwrap(),
+            (
+                proptest::string::string_regex("[A-Za-z0-9._/-]{1,8}").unwrap(),
+                proptest::string::string_regex("[A-Za-z0-9._/-]{1,8}").unwrap(),
+            )
+                .prop_map(|(lhs, rhs)| format!("{lhs} {rhs}")),
+            proptest::string::string_regex("[A-Za-z0-9._/-]{1,8}[\"'][A-Za-z0-9._/-]{1,8}")
+                .unwrap(),
+        ]
+        .boxed()
+    }
+
+    fn plain_text_arg_strategy() -> BoxedStrategy<SlashTextArg> {
+        proptest::string::string_regex(
+            "[A-Za-z0-9][A-Za-z0-9._/'\"-]{0,10}( [A-Za-z0-9][A-Za-z0-9._/'\"-]{0,10}){0,3}",
+        )
+        .unwrap()
+        .prop_map(|text| SlashTextArg::new(text, Vec::new()))
+        .boxed()
+    }
+
+    fn placeholder_text_arg_strategy() -> BoxedStrategy<SlashTextArg> {
+        (
+            proptest::string::string_regex("[A-Za-z]{0,6}").unwrap(),
+            select(vec!["[Image #1]".to_string(), "[Image #12]".to_string()]),
+            proptest::string::string_regex("[A-Za-z]{0,6}").unwrap(),
+        )
+            .prop_map(|(prefix, placeholder, suffix)| {
+                let mut text = String::new();
+                if !prefix.is_empty() {
+                    text.push_str(&prefix);
+                    text.push(' ');
+                }
+                let start = text.len();
+                text.push_str(&placeholder);
+                let end = text.len();
+                if !suffix.is_empty() {
+                    text.push(' ');
+                    text.push_str(&suffix);
+                }
+                SlashTextArg::new(
+                    text,
+                    vec![TextElement::new((start..end).into(), Some(placeholder))],
+                )
+            })
+            .boxed()
+    }
+
+    fn text_arg_strategy() -> BoxedStrategy<SlashTextArg> {
+        prop_oneof![plain_text_arg_strategy(), placeholder_text_arg_strategy(),].boxed()
+    }
+
+    fn token_arg_strategy() -> BoxedStrategy<SlashTokenArg> {
+        token_text_strategy()
+            .prop_map(|text| SlashTokenArg::new(text, Vec::new()))
+            .boxed()
+    }
+
+    impl SlashCommand {
+        fn roundtrip_test_invocations(self) -> Vec<SlashCommandInvocation> {
+            let bare = SlashCommandInvocation::Bare(self);
+            match self {
+                SlashCommand::Fast => vec![
+                    bare,
+                    SlashCommandInvocation::Fast(FastArgs {
+                        mode: FastSlashCommandArgs::On,
+                    }),
+                    SlashCommandInvocation::Fast(FastArgs {
+                        mode: FastSlashCommandArgs::Off,
+                    }),
+                    SlashCommandInvocation::Fast(FastArgs {
+                        mode: FastSlashCommandArgs::Status,
+                    }),
+                ],
+                SlashCommand::SandboxReadRoot => vec![
+                    bare,
+                    SlashCommandInvocation::SandboxReadRoot(SandboxReadRootArgs {
+                        path: SlashTokenArg::new("/tmp/test-dir".to_string(), Vec::new()),
+                    }),
+                ],
+                SlashCommand::Review => vec![
+                    bare,
+                    SlashCommandInvocation::Review(ReviewArgs {
+                        instructions: placeholder_text_arg("[Image #1]"),
+                    }),
+                ],
+                SlashCommand::Rename => vec![
+                    bare,
+                    SlashCommandInvocation::Rename(RenameArgs {
+                        title: SlashTextArg::new("ship it".to_string(), Vec::new()),
+                    }),
+                ],
+                SlashCommand::Plan => vec![
+                    bare,
+                    SlashCommandInvocation::Plan(PlanArgs {
+                        prompt: SlashTextArg::new("investigate flaky test".to_string(), Vec::new()),
+                    }),
+                ],
+                SlashCommand::Statusline => vec![
+                    bare,
+                    SlashCommandInvocation::Statusline(StatuslineArgs {
+                        items: vec![StatusLineItem::ModelName, StatusLineItem::CurrentDir],
+                    }),
+                ],
+                SlashCommand::Feedback => vec![
+                    bare,
+                    SlashCommandInvocation::Feedback(FeedbackArgs {
+                        category: FeedbackCategory::BadResult,
+                    }),
+                    SlashCommandInvocation::Feedback(FeedbackArgs {
+                        category: FeedbackCategory::GoodResult,
+                    }),
+                    SlashCommandInvocation::Feedback(FeedbackArgs {
+                        category: FeedbackCategory::Bug,
+                    }),
+                    SlashCommandInvocation::Feedback(FeedbackArgs {
+                        category: FeedbackCategory::SafetyCheck,
+                    }),
+                    SlashCommandInvocation::Feedback(FeedbackArgs {
+                        category: FeedbackCategory::Other,
+                    }),
+                ],
+                SlashCommand::Model
+                | SlashCommand::Approvals
+                | SlashCommand::Permissions
+                | SlashCommand::ElevateSandbox
+                | SlashCommand::Experimental
+                | SlashCommand::Skills
+                | SlashCommand::New
+                | SlashCommand::Resume
+                | SlashCommand::Fork
+                | SlashCommand::Init
+                | SlashCommand::Compact
+                | SlashCommand::Collab
+                | SlashCommand::Agent
+                | SlashCommand::Diff
+                | SlashCommand::Copy
+                | SlashCommand::Mention
+                | SlashCommand::Status
+                | SlashCommand::DebugConfig
+                | SlashCommand::Title
+                | SlashCommand::Theme
+                | SlashCommand::Mcp
+                | SlashCommand::Apps
+                | SlashCommand::Plugins
+                | SlashCommand::Logout
+                | SlashCommand::Quit
+                | SlashCommand::Exit
+                | SlashCommand::Rollout
+                | SlashCommand::Ps
+                | SlashCommand::Stop
+                | SlashCommand::Clear
+                | SlashCommand::Personality
+                | SlashCommand::Realtime
+                | SlashCommand::Settings
+                | SlashCommand::TestApproval
+                | SlashCommand::MultiAgents
+                | SlashCommand::MemoryDrop
+                | SlashCommand::MemoryUpdate => vec![bare],
+            }
+        }
+
+        fn roundtrip_strategy(self) -> BoxedStrategy<SlashCommandInvocation> {
+            let bare = Just(SlashCommandInvocation::Bare(self));
+            match self {
+                SlashCommand::Fast => prop_oneof![
+                    bare,
+                    select(vec![
+                        FastSlashCommandArgs::On,
+                        FastSlashCommandArgs::Off,
+                        FastSlashCommandArgs::Status,
+                    ])
+                    .prop_map(|mode| SlashCommandInvocation::Fast(FastArgs { mode })),
+                ]
+                .boxed(),
+                SlashCommand::SandboxReadRoot => prop_oneof![
+                    bare,
+                    token_arg_strategy().prop_map(|path| {
+                        SlashCommandInvocation::SandboxReadRoot(SandboxReadRootArgs { path })
+                    }),
+                ]
+                .boxed(),
+                SlashCommand::Review => prop_oneof![
+                    bare,
+                    text_arg_strategy().prop_map(|instructions| {
+                        SlashCommandInvocation::Review(ReviewArgs { instructions })
+                    }),
+                ]
+                .boxed(),
+                SlashCommand::Rename => prop_oneof![
+                    bare,
+                    plain_text_arg_strategy()
+                        .prop_map(|title| { SlashCommandInvocation::Rename(RenameArgs { title }) }),
+                ]
+                .boxed(),
+                SlashCommand::Plan => prop_oneof![
+                    bare,
+                    text_arg_strategy()
+                        .prop_map(|prompt| { SlashCommandInvocation::Plan(PlanArgs { prompt }) }),
+                ]
+                .boxed(),
+                SlashCommand::Statusline => {
+                    let items = vec![
+                        StatusLineItem::ModelName,
+                        StatusLineItem::ModelWithReasoning,
+                        StatusLineItem::CurrentDir,
+                        StatusLineItem::ProjectRoot,
+                        StatusLineItem::GitBranch,
+                        StatusLineItem::ContextRemaining,
+                        StatusLineItem::ContextUsed,
+                        StatusLineItem::FiveHourLimit,
+                        StatusLineItem::WeeklyLimit,
+                        StatusLineItem::CodexVersion,
+                        StatusLineItem::ContextWindowSize,
+                        StatusLineItem::UsedTokens,
+                        StatusLineItem::TotalInputTokens,
+                        StatusLineItem::TotalOutputTokens,
+                        StatusLineItem::SessionId,
+                        StatusLineItem::FastMode,
+                    ];
+                    prop_oneof![
+                        bare,
+                        proptest::collection::vec(select(items), 1..5).prop_map(|items| {
+                            SlashCommandInvocation::Statusline(StatuslineArgs { items })
+                        }),
+                    ]
+                    .boxed()
+                }
+                SlashCommand::Feedback => prop_oneof![
+                    bare,
+                    select(vec![
+                        FeedbackCategory::BadResult,
+                        FeedbackCategory::GoodResult,
+                        FeedbackCategory::Bug,
+                        FeedbackCategory::SafetyCheck,
+                        FeedbackCategory::Other,
+                    ])
+                    .prop_map(|category| {
+                        SlashCommandInvocation::Feedback(FeedbackArgs { category })
+                    }),
+                ]
+                .boxed(),
+                SlashCommand::Model
+                | SlashCommand::Approvals
+                | SlashCommand::Permissions
+                | SlashCommand::ElevateSandbox
+                | SlashCommand::Experimental
+                | SlashCommand::Skills
+                | SlashCommand::New
+                | SlashCommand::Resume
+                | SlashCommand::Fork
+                | SlashCommand::Init
+                | SlashCommand::Compact
+                | SlashCommand::Collab
+                | SlashCommand::Agent
+                | SlashCommand::Diff
+                | SlashCommand::Copy
+                | SlashCommand::Mention
+                | SlashCommand::Status
+                | SlashCommand::DebugConfig
+                | SlashCommand::Title
+                | SlashCommand::Theme
+                | SlashCommand::Mcp
+                | SlashCommand::Apps
+                | SlashCommand::Plugins
+                | SlashCommand::Logout
+                | SlashCommand::Quit
+                | SlashCommand::Exit
+                | SlashCommand::Rollout
+                | SlashCommand::Ps
+                | SlashCommand::Stop
+                | SlashCommand::Clear
+                | SlashCommand::Personality
+                | SlashCommand::Realtime
+                | SlashCommand::Settings
+                | SlashCommand::TestApproval
+                | SlashCommand::MultiAgents
+                | SlashCommand::MemoryDrop
+                | SlashCommand::MemoryUpdate => bare.boxed(),
+            }
+        }
+    }
+
+    #[test]
+    fn all_registered_commands_roundtrip_from_serialized_text() {
+        for spec in SLASH_COMMAND_SPECS {
+            for invocation in spec.command.roundtrip_test_invocations() {
+                let (args, text_elements) = serialized_args(&invocation);
+                assert_eq!(
+                    spec.command.parse_invocation(&args, &text_elements),
+                    Ok(invocation.clone()),
+                    "roundtrip failed for /{} with serialized {:?}",
+                    spec.command.command(),
+                    invocation.serialize().text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_registered_commands_proptest_roundtrip_from_serialized_text() {
+        for spec in SLASH_COMMAND_SPECS {
+            let command = spec.command;
+            let mut runner = TestRunner::new(ProptestConfig {
+                cases: 24,
+                failure_persistence: None,
+                ..ProptestConfig::default()
+            });
+            runner
+                .run(&command.roundtrip_strategy(), |invocation| {
+                    let serialized = invocation.serialize();
+                    let (args, text_elements) = serialized_args(&invocation);
+                    let reparsed =
+                        command
+                            .parse_invocation(&args, &text_elements)
+                            .map_err(|err| {
+                                TestCaseError::fail(format!(
+                                    "roundtrip parse failed for /{} from {:?}: {err:?}",
+                                    command.command(),
+                                    serialized.text
+                                ))
+                            })?;
+                    prop_assert_eq!(reparsed, invocation);
+                    Ok(())
+                })
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "property roundtrip failed for /{}: {err}",
+                        command.command()
+                    )
+                });
+        }
+    }
 
     #[test]
     fn approvals_alias_is_hidden_from_command_popup() {

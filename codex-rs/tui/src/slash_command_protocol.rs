@@ -210,7 +210,7 @@ impl<'a> SlashArgsParser<'a> {
     }
 
     pub(crate) fn remainder(&self) -> Option<SlashTextArg> {
-        trim_text_arg(self.input.args, self.input.text_elements)
+        parse_remainder_text_arg(self.input.args, self.input.text_elements)
     }
 
     pub(crate) fn required_remainder(&self) -> Result<SlashTextArg, SlashCommandUsageErrorKind> {
@@ -265,10 +265,17 @@ impl SlashArgsSerializer {
     }
 
     pub(crate) fn remainder(&mut self, value: &SlashTextArg) {
-        self.fragments.push(SlashSerializedText {
-            text: value.text.clone(),
-            text_elements: value.text_elements.clone(),
-        });
+        if remainder_can_roundtrip_raw(value) {
+            self.fragments.push(SlashSerializedText {
+                text: value.text.clone(),
+                text_elements: value.text_elements.clone(),
+            });
+        } else {
+            self.fragments.push(serialize_token(&SlashTokenArg::new(
+                value.text.clone(),
+                value.text_elements.clone(),
+            )));
+        }
     }
 
     pub(crate) fn finish(self) -> SlashSerializedText {
@@ -297,6 +304,30 @@ fn trim_text_arg(text: &str, text_elements: &[TextElement]) -> Option<SlashTextA
     }
 
     Some(SlashTextArg::new(trimmed.to_string(), elements))
+}
+
+fn parse_remainder_text_arg(text: &str, text_elements: &[TextElement]) -> Option<SlashTextArg> {
+    let trimmed = trim_text_arg(text, text_elements)?;
+    match tokenize_with_elements(&trimmed.text, &trimmed.text_elements) {
+        Ok(tokens) => match tokens.as_slice() {
+            [token] => Some(SlashTextArg::new(
+                token.text.clone(),
+                token.text_elements.clone(),
+            )),
+            _ => Some(trimmed),
+        },
+        _ => Some(trimmed),
+    }
+}
+
+fn remainder_can_roundtrip_raw(value: &SlashTextArg) -> bool {
+    match tokenize_with_elements(&value.text, &value.text_elements) {
+        Ok(tokens) if tokens.len() == 1 => {
+            tokens[0] == SlashTokenArg::new(value.text.clone(), value.text_elements.clone())
+        }
+        Ok(_) => true,
+        Err(_) => false,
+    }
 }
 
 fn split_named_arg(token: &SlashTokenArg) -> Option<(String, SlashTokenArg)> {
@@ -345,8 +376,26 @@ fn serialize_token(token: &SlashTokenArg) -> SlashSerializedText {
 
     let (token_for_shlex, replacements) =
         replace_text_elements_with_sentinels(&token.text, &token.text_elements);
-    let quoted = try_join([token_for_shlex.as_str()]).unwrap_or_else(|_| token_for_shlex.clone());
+    let quoted = try_join([token_for_shlex.as_str()])
+        .unwrap_or_else(|_| shell_quote_token(&token_for_shlex));
     restore_sentinels_in_fragment(quoted, &replacements)
+}
+
+fn shell_quote_token(token: &str) -> String {
+    if token.is_empty() {
+        return "''".to_string();
+    }
+
+    let mut quoted = String::from("'");
+    for ch in token.chars() {
+        if ch == '\'' {
+            quoted.push_str("'\"'\"'");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 fn join_serialized_fragments(fragments: Vec<SlashSerializedText>) -> SlashSerializedText {
@@ -588,6 +637,30 @@ mod tests {
                 text: format!("review {placeholder}"),
                 text_elements: vec![TextElement::new((7..18).into(), Some(placeholder))],
             }
+        );
+    }
+
+    #[test]
+    fn remainder_quotes_shell_sensitive_text_when_needed() {
+        let prompt = SlashTextArg::new("a\"\" a\"".to_string(), Vec::new());
+        let mut serializer = SlashArgsSerializer::default();
+        serializer.remainder(&prompt);
+
+        assert_eq!(
+            serializer.finish(),
+            SlashSerializedText {
+                text: "'a\"\" a\"'".to_string(),
+                text_elements: Vec::new(),
+            }
+        );
+        assert_eq!(
+            SlashArgsParser::new(SlashCommandParseInput {
+                args: "'a\"\" a\"'",
+                text_elements: &[],
+            })
+            .unwrap()
+            .required_remainder(),
+            Ok(prompt)
         );
     }
 }
