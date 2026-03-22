@@ -5020,7 +5020,7 @@ impl ChatWidget {
                 };
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
-                        path: prepared_args.path.text,
+                        path: prepared_args.path,
                     });
                 self.bottom_pane.drain_pending_submission_state();
             }

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::str::FromStr;
 
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -89,28 +91,153 @@ impl SlashTextArg {
     }
 }
 
-pub(crate) trait SlashTokenValue: Sized {
-    fn parse_token(token: SlashTokenArg) -> Result<Self, SlashCommandUsageErrorKind>;
-    fn serialize_token(&self) -> SlashTokenArg;
+pub(crate) trait SlashTokenValueSpec<T> {
+    fn parse_token(&self, token: SlashTokenArg) -> Result<T, SlashCommandUsageErrorKind>;
+    fn serialize_token(&self, value: &T) -> SlashTokenArg;
 }
 
-impl SlashTokenValue for SlashTokenArg {
-    fn parse_token(token: SlashTokenArg) -> Result<Self, SlashCommandUsageErrorKind> {
+pub(crate) trait SlashTextValueSpec<T> {
+    fn parse_text(&self, text: SlashTextArg) -> Result<T, SlashCommandUsageErrorKind>;
+    fn serialize_text(&self, value: &T) -> SlashTextArg;
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SlashTokenSpec;
+
+#[allow(dead_code)]
+pub(crate) fn token() -> SlashTokenSpec {
+    SlashTokenSpec
+}
+
+impl SlashTokenValueSpec<SlashTokenArg> for SlashTokenSpec {
+    fn parse_token(
+        &self,
+        token: SlashTokenArg,
+    ) -> Result<SlashTokenArg, SlashCommandUsageErrorKind> {
         Ok(token)
     }
 
-    fn serialize_token(&self) -> SlashTokenArg {
-        self.clone()
+    fn serialize_token(&self, value: &SlashTokenArg) -> SlashTokenArg {
+        value.clone()
     }
 }
 
-impl SlashTokenValue for String {
-    fn parse_token(token: SlashTokenArg) -> Result<Self, SlashCommandUsageErrorKind> {
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SlashStringSpec;
+
+pub(crate) fn string() -> SlashStringSpec {
+    SlashStringSpec
+}
+
+impl SlashTokenValueSpec<String> for SlashStringSpec {
+    fn parse_token(&self, token: SlashTokenArg) -> Result<String, SlashCommandUsageErrorKind> {
         Ok(token.text)
     }
 
-    fn serialize_token(&self) -> SlashTokenArg {
-        SlashTokenArg::new(self.clone(), Vec::new())
+    fn serialize_token(&self, value: &String) -> SlashTokenArg {
+        SlashTokenArg::new(value.clone(), Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SlashTextSpec;
+
+pub(crate) fn text() -> SlashTextSpec {
+    SlashTextSpec
+}
+
+impl SlashTextValueSpec<SlashTextArg> for SlashTextSpec {
+    fn parse_text(&self, text: SlashTextArg) -> Result<SlashTextArg, SlashCommandUsageErrorKind> {
+        Ok(text)
+    }
+
+    fn serialize_text(&self, value: &SlashTextArg) -> SlashTextArg {
+        value.clone()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SlashEnumChoiceSpec<T: 'static> {
+    choices: &'static [(&'static str, T)],
+    ascii_case_insensitive: bool,
+}
+
+pub(crate) fn enum_choice<T>(choices: &'static [(&'static str, T)]) -> SlashEnumChoiceSpec<T>
+where
+    T: Clone + PartialEq + 'static,
+{
+    SlashEnumChoiceSpec {
+        choices,
+        ascii_case_insensitive: false,
+    }
+}
+
+impl<T> SlashEnumChoiceSpec<T> {
+    pub(crate) fn ascii_case_insensitive(mut self) -> Self {
+        self.ascii_case_insensitive = true;
+        self
+    }
+}
+
+impl<T> SlashTokenValueSpec<T> for SlashEnumChoiceSpec<T>
+where
+    T: Clone + PartialEq + 'static,
+{
+    fn parse_token(&self, token: SlashTokenArg) -> Result<T, SlashCommandUsageErrorKind> {
+        self.choices
+            .iter()
+            .find_map(|(literal, value)| {
+                let matches = if self.ascii_case_insensitive {
+                    token.text.eq_ignore_ascii_case(literal)
+                } else {
+                    token.text == *literal
+                };
+                matches.then(|| value.clone())
+            })
+            .ok_or(SlashCommandUsageErrorKind::InvalidInlineArgs)
+    }
+
+    fn serialize_token(&self, value: &T) -> SlashTokenArg {
+        let literal = match self
+            .choices
+            .iter()
+            .find_map(|(literal, choice)| (choice == value).then_some(*literal))
+        {
+            Some(literal) => literal,
+            None => panic!("missing enum choice serializer mapping"),
+        };
+        SlashTokenArg::new(literal.to_string(), Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SlashFromStrSpec<T> {
+    _phantom: PhantomData<T>,
+}
+
+pub(crate) fn from_str_value<T>() -> SlashFromStrSpec<T>
+where
+    T: FromStr + ToString,
+{
+    SlashFromStrSpec {
+        _phantom: PhantomData,
+    }
+}
+
+impl<T> SlashTokenValueSpec<T> for SlashFromStrSpec<T>
+where
+    T: FromStr + ToString,
+{
+    fn parse_token(&self, token: SlashTokenArg) -> Result<T, SlashCommandUsageErrorKind> {
+        token
+            .text
+            .parse()
+            .map_err(|_| SlashCommandUsageErrorKind::InvalidInlineArgs)
+    }
+
+    fn serialize_token(&self, value: &T) -> SlashTokenArg {
+        SlashTokenArg::new(value.to_string(), Vec::new())
     }
 }
 
@@ -157,48 +284,55 @@ impl<'a> SlashArgsParser<'a> {
         })
     }
 
-    pub(crate) fn positional<T>(&mut self) -> Result<T, SlashCommandUsageErrorKind>
+    pub(crate) fn positional<T, S>(&mut self, spec: &S) -> Result<T, SlashCommandUsageErrorKind>
     where
-        T: SlashTokenValue,
+        S: SlashTokenValueSpec<T>,
     {
         let Some(token) = self.positionals.get(self.next_positional).cloned() else {
             return Err(SlashCommandUsageErrorKind::InvalidInlineArgs);
         };
         self.next_positional += 1;
-        T::parse_token(token)
+        spec.parse_token(token)
     }
 
     #[allow(dead_code)]
-    pub(crate) fn optional_positional<T>(&mut self) -> Result<Option<T>, SlashCommandUsageErrorKind>
+    pub(crate) fn optional_positional<T, S>(
+        &mut self,
+        spec: &S,
+    ) -> Result<Option<T>, SlashCommandUsageErrorKind>
     where
-        T: SlashTokenValue,
+        S: SlashTokenValueSpec<T>,
     {
         if self.next_positional >= self.positionals.len() {
             Ok(None)
         } else {
-            self.positional().map(Some)
+            self.positional(spec).map(Some)
         }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn positional_list<T>(&mut self) -> Result<Vec<T>, SlashCommandUsageErrorKind>
+    pub(crate) fn positional_list<T, S>(
+        &mut self,
+        spec: &S,
+    ) -> Result<Vec<T>, SlashCommandUsageErrorKind>
     where
-        T: SlashTokenValue,
+        S: SlashTokenValueSpec<T>,
     {
         let mut values = Vec::new();
         while self.next_positional < self.positionals.len() {
-            values.push(self.positional()?);
+            values.push(self.positional(spec)?);
         }
         Ok(values)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn named<T>(
+    pub(crate) fn named<T, S>(
         &mut self,
         key: &'static str,
+        spec: &S,
     ) -> Result<Option<T>, SlashCommandUsageErrorKind>
     where
-        T: SlashTokenValue,
+        S: SlashTokenValueSpec<T>,
     {
         if self.duplicates.contains_key(key) {
             return Err(SlashCommandUsageErrorKind::InvalidInlineArgs);
@@ -206,15 +340,23 @@ impl<'a> SlashArgsParser<'a> {
         let Some(value) = self.named.remove(key) else {
             return Ok(None);
         };
-        T::parse_token(value).map(Some)
+        spec.parse_token(value).map(Some)
     }
 
-    pub(crate) fn remainder(&self) -> Option<SlashTextArg> {
+    pub(crate) fn remainder<T, S>(&self, spec: &S) -> Result<Option<T>, SlashCommandUsageErrorKind>
+    where
+        S: SlashTextValueSpec<T>,
+    {
         parse_remainder_text_arg(self.input.args, self.input.text_elements)
+            .map(|value| spec.parse_text(value))
+            .transpose()
     }
 
-    pub(crate) fn required_remainder(&self) -> Result<SlashTextArg, SlashCommandUsageErrorKind> {
-        self.remainder()
+    pub(crate) fn required_remainder<T, S>(&self, spec: &S) -> Result<T, SlashCommandUsageErrorKind>
+    where
+        S: SlashTextValueSpec<T>,
+    {
+        self.remainder(spec)?
             .ok_or(SlashCommandUsageErrorKind::InvalidInlineArgs)
     }
 
@@ -235,45 +377,49 @@ pub(crate) struct SlashArgsSerializer {
 }
 
 impl SlashArgsSerializer {
-    pub(crate) fn positional<T>(&mut self, value: &T)
+    pub(crate) fn positional<T, S>(&mut self, value: &T, spec: &S)
     where
-        T: SlashTokenValue,
+        S: SlashTokenValueSpec<T>,
     {
         self.fragments
-            .push(serialize_token(&value.serialize_token()));
+            .push(serialize_token(&spec.serialize_token(value)));
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn list<T, I>(&mut self, values: I)
+    pub(crate) fn list<T, I, S>(&mut self, values: I, spec: &S)
     where
-        T: SlashTokenValue,
         I: IntoIterator<Item = T>,
+        S: SlashTokenValueSpec<T>,
     {
         for value in values {
-            self.positional(&value);
+            self.positional(&value, spec);
         }
     }
 
     #[allow(dead_code)]
-    pub(crate) fn named<T>(&mut self, key: &'static str, value: &T)
+    pub(crate) fn named<T, S>(&mut self, key: &'static str, value: &T, spec: &S)
     where
-        T: SlashTokenValue,
+        S: SlashTokenValueSpec<T>,
     {
-        let serialized_value = serialize_token(&value.serialize_token());
+        let serialized_value = serialize_token(&spec.serialize_token(value));
         self.fragments
             .push(serialized_value.prepend_inline(&format!("--{key}=")));
     }
 
-    pub(crate) fn remainder(&mut self, value: &SlashTextArg) {
-        if remainder_can_roundtrip_raw(value) {
+    pub(crate) fn remainder<T, S>(&mut self, value: &T, spec: &S)
+    where
+        S: SlashTextValueSpec<T>,
+    {
+        let serialized = spec.serialize_text(value);
+        if remainder_can_roundtrip_raw(&serialized) {
             self.fragments.push(SlashSerializedText {
-                text: value.text.clone(),
-                text_elements: value.text_elements.clone(),
+                text: serialized.text.clone(),
+                text_elements: serialized.text_elements,
             });
         } else {
             self.fragments.push(serialize_token(&SlashTokenArg::new(
-                value.text.clone(),
-                value.text_elements.clone(),
+                serialized.text.clone(),
+                serialized.text_elements,
             )));
         }
     }
@@ -554,23 +700,7 @@ mod tests {
         Off,
     }
 
-    impl SlashTokenValue for Switch {
-        fn parse_token(token: SlashTokenArg) -> Result<Self, SlashCommandUsageErrorKind> {
-            match token.text.as_str() {
-                "on" => Ok(Self::On),
-                "off" => Ok(Self::Off),
-                _ => Err(SlashCommandUsageErrorKind::InvalidInlineArgs),
-            }
-        }
-
-        fn serialize_token(&self) -> SlashTokenArg {
-            let text = match self {
-                Self::On => "on",
-                Self::Off => "off",
-            };
-            SlashTokenArg::new(text.to_string(), Vec::new())
-        }
-    }
+    const SWITCH_CHOICES: &[(&str, Switch)] = &[("on", Switch::On), ("off", Switch::Off)];
 
     #[test]
     fn parser_supports_positional_list_and_named_args() {
@@ -580,13 +710,16 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(parser.positional::<Switch>(), Ok(Switch::On));
         assert_eq!(
-            parser.positional_list::<String>(),
+            parser.positional(&enum_choice(SWITCH_CHOICES)),
+            Ok(Switch::On)
+        );
+        assert_eq!(
+            parser.positional_list(&string()),
             Ok(vec!["first".to_string(), "second".to_string()])
         );
         assert_eq!(
-            parser.named::<String>("path"),
+            parser.named("path", &string()),
             Ok(Some("some dir".to_string()))
         );
         assert_eq!(parser.finish(), Ok(()));
@@ -600,17 +733,20 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(parser.positional::<Switch>(), Ok(Switch::On));
-        assert_eq!(parser.optional_positional::<String>(), Ok(None));
+        assert_eq!(
+            parser.positional(&enum_choice(SWITCH_CHOICES)),
+            Ok(Switch::On)
+        );
+        assert_eq!(parser.optional_positional(&string()), Ok(None));
         assert_eq!(parser.finish(), Ok(()));
     }
 
     #[test]
     fn serializer_stably_formats_named_args_after_positionals() {
         let mut serializer = SlashArgsSerializer::default();
-        serializer.positional(&Switch::On);
-        serializer.list::<String, _>(["first".to_string(), "second".to_string()]);
-        serializer.named("path", &"some dir".to_string());
+        serializer.positional(&Switch::On, &enum_choice(SWITCH_CHOICES));
+        serializer.list(["first".to_string(), "second".to_string()], &string());
+        serializer.named("path", &"some dir".to_string(), &string());
 
         assert_eq!(
             serializer.finish(),
@@ -629,7 +765,7 @@ mod tests {
             vec![TextElement::new((7..18).into(), Some(placeholder.clone()))],
         );
         let mut serializer = SlashArgsSerializer::default();
-        serializer.remainder(&prompt);
+        serializer.remainder(&prompt, &text());
 
         assert_eq!(
             serializer.finish(),
@@ -644,7 +780,7 @@ mod tests {
     fn remainder_quotes_shell_sensitive_text_when_needed() {
         let prompt = SlashTextArg::new("a\"\" a\"".to_string(), Vec::new());
         let mut serializer = SlashArgsSerializer::default();
-        serializer.remainder(&prompt);
+        serializer.remainder(&prompt, &text());
 
         assert_eq!(
             serializer.finish(),
@@ -659,7 +795,7 @@ mod tests {
                 text_elements: &[],
             })
             .unwrap()
-            .required_remainder(),
+            .required_remainder(&text()),
             Ok(prompt)
         );
     }
