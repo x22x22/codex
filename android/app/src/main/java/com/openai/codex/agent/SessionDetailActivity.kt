@@ -413,14 +413,20 @@ class SessionDetailActivity : Activity() {
     private fun deleteSession() {
         val topLevelSession = topLevelSession(latestSnapshot) ?: return
         thread {
-            runCatching {
-                if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_HOME) {
+            var frameworkDeleteFailure: Throwable? = null
+            if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_HOME) {
+                runCatching {
                     if (topLevelSession.state == AgentSessionInfo.STATE_COMPLETED) {
                         sessionController.consumeCompletedHomeSession(topLevelSession.sessionId)
                     } else {
                         sessionController.consumeHomeSessionPresentation(topLevelSession.sessionId)
                     }
+                }.onFailure { err ->
+                    frameworkDeleteFailure = err
+                    Log.w(TAG, "Failed to consume HOME session ${topLevelSession.sessionId} during delete", err)
                 }
+            }
+            runCatching {
                 dismissedSessionStore.dismiss(topLevelSession.sessionId)
                 childSessions(latestSnapshot).forEach { childSession ->
                     dismissedSessionStore.dismiss(childSession.sessionId)
@@ -428,7 +434,13 @@ class SessionDetailActivity : Activity() {
             }.onFailure { err ->
                 showToast("Failed to delete session: ${err.message}")
             }.onSuccess {
-                showToast("Deleted session")
+                showToast(
+                    if (frameworkDeleteFailure == null) {
+                        "Deleted session"
+                    } else {
+                        "Deleted session from Agent UI; framework consume failed"
+                    },
+                )
                 finish()
             }
         }
