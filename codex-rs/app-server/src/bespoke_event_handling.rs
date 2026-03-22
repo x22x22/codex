@@ -225,7 +225,8 @@ fn guardian_auto_approval_review_notification(
         rationale: assessment.rationale.clone(),
     };
     let parent_tool_item_id = assessment.parent_tool_item_id.clone();
-    let target_item_id = assessment.id.clone();
+    let review_id = assessment.id.clone();
+    let target_item_id = review_id.clone();
     match assessment.status {
         codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
             ServerNotification::ItemGuardianApprovalReviewStarted(
@@ -233,6 +234,7 @@ fn guardian_auto_approval_review_notification(
                     thread_id: conversation_id.to_string(),
                     turn_id,
                     target_item_id,
+                    review_id: Some(review_id),
                     parent_tool_item_id,
                     review,
                     action: assessment.action.clone(),
@@ -247,6 +249,7 @@ fn guardian_auto_approval_review_notification(
                     thread_id: conversation_id.to_string(),
                     turn_id,
                     target_item_id,
+                    review_id: Some(review_id),
                     parent_tool_item_id,
                     review,
                     action: assessment.action.clone(),
@@ -2937,6 +2940,7 @@ mod tests {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-event");
                 assert_eq!(payload.target_item_id, "item-1");
+                assert_eq!(payload.review_id.as_deref(), Some("item-1"));
                 assert_eq!(payload.parent_tool_item_id, None);
                 assert_eq!(
                     payload.review.status,
@@ -2978,6 +2982,7 @@ mod tests {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-2");
+                assert_eq!(payload.review_id.as_deref(), Some("item-2"));
                 assert_eq!(payload.parent_tool_item_id, None);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(payload.review.risk_score, Some(91));
@@ -3019,6 +3024,7 @@ mod tests {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "guardian-3");
+                assert_eq!(payload.review_id.as_deref(), Some("guardian-3"));
                 assert_eq!(payload.parent_tool_item_id.as_deref(), Some("command-3"));
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_score, None);
@@ -3057,6 +3063,7 @@ mod tests {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "guardian-4");
+                assert_eq!(payload.review_id.as_deref(), Some("guardian-4"));
                 assert_eq!(payload.parent_tool_item_id, None);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_score, None);
