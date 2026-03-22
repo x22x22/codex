@@ -77,7 +77,7 @@ impl SessionState {
             Some(turn_context_item) => self
                 .history
                 .note_model_visible_turn_context(turn_context_item),
-            None => self.history.set_reference_context_item(None),
+            None => self.history.set_reference_context_item(/*item*/ None),
         }
     }
 
