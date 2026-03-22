@@ -192,7 +192,7 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
-use crate::slash_command_invocation::SlashCommandInvocation;
+use crate::slash_command::SlashCommandInvocation;
 use crate::style::user_message_style;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
