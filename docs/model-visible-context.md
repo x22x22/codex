@@ -26,7 +26,7 @@ its role with `type Role`.
 Use:
 
 - `DeveloperContextRole` for developer guidance and policy text
-- `ContextualUserContextRole` for contextual user-role state that should be
+- `UserContextRole` for contextual user-role state that should be
   parsed as context rather than literal user intent
 
 Choosing the right role is part of the fragment contract, not a later callsite
@@ -89,7 +89,7 @@ The foundation module currently provides:
 
 - `ModelVisibleContextRole`
 - `DeveloperContextRole`
-- `ContextualUserContextRole`
+- `UserContextRole`
 - `ContextualUserFragmentMarkers`
 - `TurnContextDiffParams`
 - `DeveloperTextFragment`

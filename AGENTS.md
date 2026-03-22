@@ -47,7 +47,7 @@ In the codex-rs folder where the rust code lives:
 - Every named fragment type should implement `ModelVisibleContextFragment` and set `type Role`.
 - If a fragment represents durable turn/session state that should be rebuilt correctly across resume/fork/compaction/backtracking, implement `ModelVisibleContextFragment::build(...)`.
 - If a fragment is contextual-user, it must provide stable detection: prefer `contextual_user_markers()` when fixed markers are sufficient, and override `matches_contextual_user_text()` only for genuinely custom matching (for example AGENTS.md).
-- Choose the role intentionally: developer guidance belongs in `DeveloperContextRole`; contextual user-role state belongs in `ContextualUserContextRole`.
+- Choose the role intentionally: developer guidance belongs in `DeveloperContextRole`; contextual user-role state belongs in `UserContextRole`.
 - Use contextual-user fragments for contextual user-role state that must be parsed as context rather than literal user intent.
 - Runtime/session-prefix fragments that are not turn-state diffs should usually leave `ModelVisibleContextFragment::build(...)` as `None`.
 - Prefer dedicated typed fragments over plain strings. Developer-only one-off text is acceptable only when it is truly isolated, does not need contextual-user detection, and does not participate in turn-state diff reconstruction.

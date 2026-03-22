@@ -13,7 +13,7 @@
 //!   `ModelVisibleContextFragment`.
 //! - Choose the role intentionally:
 //!   - `DeveloperContextRole` for developer guidance/policy
-//!   - `ContextualUserContextRole` for contextual user-role state that must be
+//!   - `UserContextRole` for contextual user-role state that must be
 //!     parsed as context rather than literal user intent
 //! - If the fragment is durable turn/session state that should rebuild across
 //!   resume, compaction, backtracking, or fork, implement `build(...)`.
@@ -81,9 +81,9 @@ impl ModelVisibleContextRole for DeveloperContextRole {
     const MESSAGE_ROLE: ModelVisibleMessageRole = ModelVisibleMessageRole::Developer;
 }
 
-pub(crate) struct ContextualUserContextRole;
+pub(crate) struct UserContextRole;
 
-impl ModelVisibleContextRole for ContextualUserContextRole {
+impl ModelVisibleContextRole for UserContextRole {
     const MESSAGE_ROLE: ModelVisibleMessageRole = ModelVisibleMessageRole::User;
 }
 
@@ -250,7 +250,7 @@ impl ModelVisibleContextFragment for DeveloperTextFragment {
 }
 
 impl ModelVisibleContextFragment for ContextualUserTextFragment {
-    type Role = ContextualUserContextRole;
+    type Role = UserContextRole;
 
     fn render_text(&self) -> String {
         self.text.clone()
