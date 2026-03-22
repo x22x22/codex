@@ -347,6 +347,7 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
     let network_access = GuardianApprovalRequest::NetworkAccess {
         id: "network-1".to_string(),
         turn_id: "owner-turn".to_string(),
+        parent_tool_item_id: Some("command-1".to_string()),
         target: "https://example.com:443".to_string(),
         host: "example.com".to_string(),
         protocol: NetworkApprovalProtocol::Https,
@@ -368,6 +369,31 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
     assert_eq!(
         guardian_request_turn_id(&apply_patch, "fallback-turn"),
         "fallback-turn"
+    );
+}
+
+#[test]
+fn guardian_assessment_action_value_includes_network_access_parent_tool_item_id() {
+    let network_access = GuardianApprovalRequest::NetworkAccess {
+        id: "network-1".to_string(),
+        turn_id: "owner-turn".to_string(),
+        parent_tool_item_id: Some("command-1".to_string()),
+        target: "https://example.com:443".to_string(),
+        host: "example.com".to_string(),
+        protocol: NetworkApprovalProtocol::Https,
+        port: 443,
+    };
+
+    assert_eq!(
+        guardian_assessment_action_value(&network_access),
+        serde_json::json!({
+            "tool": "network_access",
+            "target": "https://example.com:443",
+            "host": "example.com",
+            "protocol": "https",
+            "port": 443,
+            "parent_tool_item_id": "command-1",
+        })
     );
 }
 

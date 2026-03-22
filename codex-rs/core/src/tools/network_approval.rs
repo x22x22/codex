@@ -162,6 +162,7 @@ impl PendingHostApproval {
 struct ActiveNetworkApprovalCall {
     registration_id: String,
     turn_id: String,
+    parent_tool_item_id: String,
 }
 
 pub(crate) struct NetworkApprovalService {
@@ -194,7 +195,12 @@ impl NetworkApprovalService {
         other_approved_hosts.extend(approved_hosts.iter().cloned());
     }
 
-    async fn register_call(&self, registration_id: String, turn_id: String) {
+    async fn register_call(
+        &self,
+        registration_id: String,
+        turn_id: String,
+        parent_tool_item_id: String,
+    ) {
         let mut active_calls = self.active_calls.lock().await;
         let key = registration_id.clone();
         active_calls.insert(
@@ -202,6 +208,7 @@ impl NetworkApprovalService {
             Arc::new(ActiveNetworkApprovalCall {
                 registration_id,
                 turn_id,
+                parent_tool_item_id,
             }),
         );
     }
@@ -361,6 +368,9 @@ impl NetworkApprovalService {
                     turn_id: owner_call
                         .as_ref()
                         .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
+                    parent_tool_item_id: owner_call
+                        .as_ref()
+                        .map(|call| call.parent_tool_item_id.clone()),
                     target,
                     host: request.host,
                     protocol,
@@ -548,6 +558,7 @@ pub(crate) fn build_network_policy_decider(
 pub(crate) async fn begin_network_approval(
     session: &Session,
     turn_id: &str,
+    parent_tool_item_id: &str,
     has_managed_network_requirements: bool,
     spec: Option<NetworkApprovalSpec>,
 ) -> Option<ActiveNetworkApproval> {
@@ -560,7 +571,11 @@ pub(crate) async fn begin_network_approval(
     session
         .services
         .network_approval
-        .register_call(registration_id.clone(), turn_id.to_string())
+        .register_call(
+            registration_id.clone(),
+            turn_id.to_string(),
+            parent_tool_item_id.to_string(),
+        )
         .await;
 
     Some(ActiveNetworkApproval {

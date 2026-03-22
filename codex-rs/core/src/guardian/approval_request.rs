@@ -47,6 +47,7 @@ pub(crate) enum GuardianApprovalRequest {
     NetworkAccess {
         id: String,
         turn_id: String,
+        parent_tool_item_id: Option<String>,
         target: String,
         host: String,
         protocol: NetworkApprovalProtocol,
@@ -248,17 +249,36 @@ pub(crate) fn guardian_approval_request_to_json(
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
+            parent_tool_item_id,
             target,
             host,
             protocol,
             port,
-        } => Ok(serde_json::json!({
-            "tool": "network_access",
-            "target": target,
-            "host": host,
-            "protocol": protocol,
-            "port": port,
-        })),
+        } => {
+            let mut action = serde_json::Map::from_iter([
+                (
+                    "tool".to_string(),
+                    Value::String("network_access".to_string()),
+                ),
+                ("target".to_string(), Value::String(target.clone())),
+                ("host".to_string(), Value::String(host.clone())),
+                (
+                    "protocol".to_string(),
+                    serde_json::to_value(protocol).expect("protocol serializes"),
+                ),
+                (
+                    "port".to_string(),
+                    serde_json::to_value(port).expect("port serializes"),
+                ),
+            ]);
+            if let Some(parent_tool_item_id) = parent_tool_item_id {
+                action.insert(
+                    "parent_tool_item_id".to_string(),
+                    Value::String(parent_tool_item_id.clone()),
+                );
+            }
+            Ok(Value::Object(action))
+        }
         GuardianApprovalRequest::McpToolCall {
             id: _,
             server,
@@ -320,17 +340,36 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
+            parent_tool_item_id,
             target,
             host,
             protocol,
             port,
-        } => serde_json::json!({
-            "tool": "network_access",
-            "target": target,
-            "host": host,
-            "protocol": protocol,
-            "port": port,
-        }),
+        } => {
+            let mut action = serde_json::Map::from_iter([
+                (
+                    "tool".to_string(),
+                    Value::String("network_access".to_string()),
+                ),
+                ("target".to_string(), Value::String(target.clone())),
+                ("host".to_string(), Value::String(host.clone())),
+                (
+                    "protocol".to_string(),
+                    serde_json::to_value(protocol).expect("protocol serializes"),
+                ),
+                (
+                    "port".to_string(),
+                    serde_json::to_value(port).expect("port serializes"),
+                ),
+            ]);
+            if let Some(parent_tool_item_id) = parent_tool_item_id {
+                action.insert(
+                    "parent_tool_item_id".to_string(),
+                    Value::String(parent_tool_item_id.clone()),
+                );
+            }
+            Value::Object(action)
+        }
         GuardianApprovalRequest::McpToolCall {
             server, tool_name, ..
         } => serde_json::json!({
