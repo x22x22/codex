@@ -32,6 +32,10 @@ impl SessionTask for GhostSnapshotTask {
         TaskKind::Regular
     }
 
+    fn span_name(&self) -> &'static str {
+        "session_task.ghost_snapshot"
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -41,31 +45,36 @@ impl SessionTask for GhostSnapshotTask {
     ) -> Option<String> {
         tokio::task::spawn(async move {
             let token = self.token;
+            let warnings_enabled = !ctx.ghost_snapshot.disable_warnings;
             // Channel used to signal when the snapshot work has finished so the
             // timeout warning task can exit early without sending a warning.
             let (snapshot_done_tx, snapshot_done_rx) = oneshot::channel::<()>();
-            let ctx_for_warning = ctx.clone();
-            let cancellation_token_for_warning = cancellation_token.clone();
-            let session_for_warning = session.clone();
-            // Fire a generic warning if the snapshot is still running after
-            // three minutes; this helps users discover large untracked files
-            // that might need to be added to .gitignore.
-            tokio::task::spawn(async move {
-                tokio::select! {
-                    _ = tokio::time::sleep(SNAPSHOT_WARNING_THRESHOLD) => {
-                        session_for_warning.session
-                            .send_event(
-                                &ctx_for_warning,
-                                EventMsg::Warning(WarningEvent {
-                                    message: "Repository snapshot is taking longer than expected. Large untracked or ignored files can slow snapshots; consider adding large files or directories to .gitignore or disabling `undo` in your config.".to_string()
-                                }),
-                            )
-                            .await;
+            if warnings_enabled {
+                let ctx_for_warning = ctx.clone();
+                let cancellation_token_for_warning = cancellation_token.clone();
+                let session_for_warning = session.clone();
+                // Fire a generic warning if the snapshot is still running after
+                // three minutes; this helps users discover large untracked files
+                // that might need to be added to .gitignore.
+                tokio::task::spawn(async move {
+                    tokio::select! {
+                        _ = tokio::time::sleep(SNAPSHOT_WARNING_THRESHOLD) => {
+                            session_for_warning.session
+                                .send_event(
+                                    &ctx_for_warning,
+                                    EventMsg::Warning(WarningEvent {
+                                        message: "Repository snapshot is taking longer than expected. Large untracked or ignored files can slow snapshots; consider adding large files or directories to .gitignore or disabling `undo` in your config.".to_string()
+                                    }),
+                                )
+                                .await;
+                        }
+                        _ = snapshot_done_rx => {}
+                        _ = cancellation_token_for_warning.cancelled() => {}
                     }
-                    _ = snapshot_done_rx => {}
-                    _ = cancellation_token_for_warning.cancelled() => {}
-                }
-            });
+                });
+            } else {
+                drop(snapshot_done_rx);
+            }
 
             let ctx_for_task = ctx.clone();
             let cancelled = tokio::select! {
@@ -84,18 +93,20 @@ impl SessionTask for GhostSnapshotTask {
                     {
                         Ok(Ok((ghost_commit, report))) => {
                             info!("ghost snapshot blocking task finished");
-                            for message in format_snapshot_warnings(
-                                ghost_snapshot.ignore_large_untracked_files,
-                                ghost_snapshot.ignore_large_untracked_dirs,
-                                &report,
-                            ) {
-                                session
-                                    .session
-                                    .send_event(
-                                        &ctx_for_task,
-                                        EventMsg::Warning(WarningEvent { message }),
-                                    )
-                                    .await;
+                            if warnings_enabled {
+                                for message in format_snapshot_warnings(
+                                    ghost_snapshot.ignore_large_untracked_files,
+                                    ghost_snapshot.ignore_large_untracked_dirs,
+                                    &report,
+                                ) {
+                                    session
+                                        .session
+                                        .send_event(
+                                            &ctx_for_task,
+                                            EventMsg::Warning(WarningEvent { message }),
+                                        )
+                                        .await;
+                                }
                             }
                             session
                                 .session
@@ -239,36 +250,5 @@ fn format_bytes(bytes: i64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_git::LargeUntrackedDir;
-    use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
-
-    #[test]
-    fn large_untracked_warning_includes_threshold() {
-        let report = GhostSnapshotReport {
-            large_untracked_dirs: vec![LargeUntrackedDir {
-                path: PathBuf::from("models"),
-                file_count: 250,
-            }],
-            ignored_untracked_files: Vec::new(),
-        };
-
-        let message = format_large_untracked_warning(Some(200), &report).unwrap();
-        assert!(message.contains(">= 200 files"));
-    }
-
-    #[test]
-    fn large_untracked_warning_disabled_when_threshold_disabled() {
-        let report = GhostSnapshotReport {
-            large_untracked_dirs: vec![LargeUntrackedDir {
-                path: PathBuf::from("models"),
-                file_count: 250,
-            }],
-            ignored_untracked_files: Vec::new(),
-        };
-
-        assert_eq!(format_large_untracked_warning(None, &report), None);
-    }
-}
+#[path = "ghost_snapshot_tests.rs"]
+mod tests;

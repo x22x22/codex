@@ -65,6 +65,7 @@ pub struct RestoreGhostCommitOptions<'a> {
 pub struct GhostSnapshotConfig {
     pub ignore_large_untracked_files: Option<i64>,
     pub ignore_large_untracked_dirs: Option<i64>,
+    pub disable_warnings: bool,
 }
 
 impl Default for GhostSnapshotConfig {
@@ -72,6 +73,7 @@ impl Default for GhostSnapshotConfig {
         Self {
             ignore_large_untracked_files: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_FILES),
             ignore_large_untracked_dirs: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS),
+            disable_warnings: false,
         }
     }
 }
@@ -467,15 +469,18 @@ fn restore_to_commit_inner(
     repo_prefix: Option<&Path>,
     commit_id: &str,
 ) -> Result<(), GitToolingError> {
-    // `git restore` resets both the index and working tree to the snapshot commit.
+    // `git restore` resets the working tree to the snapshot commit.
+    // We intentionally avoid --staged to preserve user's staged changes.
+    // While this might leave some Codex-staged changes in the index (if Codex ran `git add`),
+    // it prevents data loss for users who use the index as a save point.
+    // Data safety > cleanliness.
     // Example:
-    //   git restore --source <commit> --worktree --staged -- <prefix>
+    //   git restore --source <commit> --worktree -- <prefix>
     let mut restore_args = vec![
         OsString::from("restore"),
         OsString::from("--source"),
         OsString::from(commit_id),
         OsString::from("--worktree"),
-        OsString::from("--staged"),
         OsString::from("--"),
     ];
     if let Some(prefix) = repo_prefix {
@@ -484,7 +489,7 @@ fn restore_to_commit_inner(
         restore_args.push(OsString::from("."));
     }
 
-    run_git_for_status(repo_root, restore_args, None)?;
+    run_git_for_status(repo_root, restore_args, /*env*/ None)?;
     Ok(())
 }
 
@@ -527,7 +532,7 @@ fn capture_status_snapshot(
         args.push(prefix.as_os_str().to_os_string());
     }
 
-    let output = run_git_for_stdout_all(repo_root, args, None)?;
+    let output = run_git_for_stdout_all(repo_root, args, /*env*/ None)?;
     if output.is_empty() {
         return Ok(StatusSnapshot::default());
     }
@@ -594,20 +599,26 @@ fn capture_status_snapshot(
                 }
             }
             b'1' => {
-                if let Some(path) = extract_status_path_after_fields(entry, 8) {
+                if let Some(path) =
+                    extract_status_path_after_fields(entry, /*fields_before_path*/ 8)
+                {
                     let normalized = normalize_relative_path(Path::new(path))?;
                     snapshot.tracked_paths.push(normalized);
                 }
             }
             b'2' => {
-                if let Some(path) = extract_status_path_after_fields(entry, 9) {
+                if let Some(path) =
+                    extract_status_path_after_fields(entry, /*fields_before_path*/ 9)
+                {
                     let normalized = normalize_relative_path(Path::new(path))?;
                     snapshot.tracked_paths.push(normalized);
                 }
                 expect_rename_source = true;
             }
             b'u' => {
-                if let Some(path) = extract_status_path_after_fields(entry, 10) {
+                if let Some(path) =
+                    extract_status_path_after_fields(entry, /*fields_before_path*/ 10)
+                {
                     let normalized = normalize_relative_path(Path::new(path))?;
                     snapshot.tracked_paths.push(normalized);
                 }
@@ -1164,6 +1175,7 @@ mod tests {
         let snapshot_config = GhostSnapshotConfig {
             ignore_large_untracked_files: Some(DEFAULT_IGNORE_LARGE_UNTRACKED_FILES),
             ignore_large_untracked_dirs: Some(threshold),
+            disable_warnings: false,
         };
         let (ghost, _report) = create_ghost_commit_with_report(
             &CreateGhostCommitOptions::new(repo).ghost_snapshot(snapshot_config),

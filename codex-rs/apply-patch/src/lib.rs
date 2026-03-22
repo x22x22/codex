@@ -25,6 +25,15 @@ use crate::invocation::ExtractHeredocError;
 /// Detailed instructions for gpt-4.1 on how to use the `apply_patch` tool.
 pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_tool_instructions.md");
 
+/// Special argv[1] flag used when the Codex executable self-invokes to run the
+/// internal `apply_patch` path.
+///
+/// Although this constant lives in `codex-apply-patch` (to avoid forcing
+/// `codex-arg0` to depend on `codex-core`), it is part of the "codex core"
+/// process-invocation contract between the apply-patch runtime and the arg0
+/// dispatcher.
+pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
+
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
     #[error(transparent)]
@@ -390,7 +399,7 @@ fn compute_replacements(
                 original_lines,
                 std::slice::from_ref(ctx_line),
                 line_index,
-                false,
+                /*eof*/ false,
             ) {
                 line_index = idx + 1;
             } else {
@@ -503,7 +512,7 @@ pub fn unified_diff_from_chunks(
     path: &Path,
     chunks: &[UpdateFileChunk],
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
-    unified_diff_from_chunks_with_context(path, chunks, 1)
+    unified_diff_from_chunks_with_context(path, chunks, /*context*/ 1)
 }
 
 pub fn unified_diff_from_chunks_with_context(

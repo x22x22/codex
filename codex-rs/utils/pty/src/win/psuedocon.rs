@@ -42,6 +42,8 @@ use std::path::Path;
 use std::ptr;
 use std::sync::Mutex;
 use winapi::shared::minwindef::DWORD;
+use winapi::shared::ntdef::NTSTATUS;
+use winapi::shared::ntstatus::STATUS_SUCCESS;
 use winapi::shared::winerror::HRESULT;
 use winapi::shared::winerror::S_OK;
 use winapi::um::handleapi::*;
@@ -52,12 +54,17 @@ use winapi::um::winbase::STARTF_USESTDHANDLES;
 use winapi::um::winbase::STARTUPINFOEXW;
 use winapi::um::wincon::COORD;
 use winapi::um::winnt::HANDLE;
+use winapi::um::winnt::OSVERSIONINFOW;
 
 pub type HPCON = HANDLE;
 
 pub const PSEUDOCONSOLE_RESIZE_QUIRK: DWORD = 0x2;
 #[allow(dead_code)]
 pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x8;
+
+// https://learn.microsoft.com/en-gb/windows/console/createpseudoconsole
+// https://learn.microsoft.com/en-gb/windows/release-health/release-information
+const MIN_CONPTY_BUILD: u32 = 17_763;
 
 shared_library!(ConPtyFuncs,
     pub fn CreatePseudoConsole(
@@ -69,6 +76,12 @@ shared_library!(ConPtyFuncs,
     ) -> HRESULT,
     pub fn ResizePseudoConsole(hpc: HPCON, size: COORD) -> HRESULT,
     pub fn ClosePseudoConsole(hpc: HPCON),
+);
+
+shared_library!(Ntdll,
+    pub fn RtlGetVersion(
+        version_info: *mut OSVERSIONINFOW
+    ) -> NTSTATUS,
 );
 
 fn load_conpty() -> ConPtyFuncs {
@@ -87,6 +100,22 @@ lazy_static! {
     static ref CONPTY: ConPtyFuncs = load_conpty();
 }
 
+pub fn conpty_supported() -> bool {
+    windows_build_number().is_some_and(|build| build >= MIN_CONPTY_BUILD)
+}
+
+fn windows_build_number() -> Option<u32> {
+    let ntdll = Ntdll::open(Path::new("ntdll.dll")).ok()?;
+    let mut info: OSVERSIONINFOW = unsafe { mem::zeroed() };
+    info.dwOSVersionInfoSize = mem::size_of::<OSVERSIONINFOW>() as u32;
+    let status = unsafe { (ntdll.RtlGetVersion)(&mut info) };
+    if status == STATUS_SUCCESS {
+        Some(info.dwBuildNumber)
+    } else {
+        None
+    }
+}
+
 pub struct PsuedoCon {
     con: HPCON,
 }
@@ -101,6 +130,10 @@ impl Drop for PsuedoCon {
 }
 
 impl PsuedoCon {
+    pub fn raw_handle(&self) -> HPCON {
+        self.con
+    }
+
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
         let result = unsafe {
@@ -139,7 +172,7 @@ impl PsuedoCon {
         si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
         si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
 
-        let mut attrs = ProcThreadAttributeList::with_capacity(1)?;
+        let mut attrs = ProcThreadAttributeList::with_capacity(/*num_attributes*/ 1)?;
         attrs.set_pty(self.con)?;
         si.lpAttributeList = attrs.as_mut_ptr();
 
@@ -319,4 +352,18 @@ fn append_quoted(arg: &OsStr, cmdline: &mut Vec<u16>) {
         i += 1;
     }
     cmdline.push('"' as u16);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::windows_build_number;
+    use super::MIN_CONPTY_BUILD;
+
+    #[test]
+    fn windows_build_number_returns_value() {
+        // We can't stably check the version of the GH workers, but we can
+        // at least check that this.
+        let version = windows_build_number().unwrap();
+        assert!(version > MIN_CONPTY_BUILD);
+    }
 }

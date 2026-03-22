@@ -9,9 +9,11 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
+use crate::protocol::ExecCommandStatus;
 use crate::protocol::FileChange;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
+use crate::protocol::PatchApplyStatus;
 use crate::protocol::TurnDiffEvent;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::sandboxing::ToolError;
@@ -56,6 +58,7 @@ pub(crate) enum ToolEventStage {
 pub(crate) enum ToolEventFailure {
     Output(ExecToolCallOutput),
     Message(String),
+    Rejected(String),
 }
 
 pub(crate) async fn emit_exec_command_begin(
@@ -100,7 +103,6 @@ pub(crate) enum ToolEmitter {
         command: Vec<String>,
         cwd: PathBuf,
         source: ExecCommandSource,
-        interaction_input: Option<String>,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
     },
@@ -141,7 +143,6 @@ impl ToolEmitter {
             command: command.to_vec(),
             cwd,
             source,
-            interaction_input: None, // TODO(jif) drop this field in the protocol.
             parsed_cmd,
             process_id,
         }
@@ -161,7 +162,14 @@ impl ToolEmitter {
             ) => {
                 emit_exec_stage(
                     ctx,
-                    ExecCommandInput::new(command, cwd.as_path(), parsed_cmd, *source, None, None),
+                    ExecCommandInput::new(
+                        command,
+                        cwd.as_path(),
+                        parsed_cmd,
+                        *source,
+                        /*interaction_input*/ None,
+                        /*process_id*/ None,
+                    ),
                     stage,
                 )
                 .await;
@@ -197,6 +205,11 @@ impl ToolEmitter {
                     output.stdout.text.clone(),
                     output.stderr.text.clone(),
                     output.exit_code == 0,
+                    if output.exit_code == 0 {
+                        PatchApplyStatus::Completed
+                    } else {
+                        PatchApplyStatus::Failed
+                    },
                 )
                 .await;
             }
@@ -210,6 +223,11 @@ impl ToolEmitter {
                     output.stdout.text.clone(),
                     output.stderr.text.clone(),
                     output.exit_code == 0,
+                    if output.exit_code == 0 {
+                        PatchApplyStatus::Completed
+                    } else {
+                        PatchApplyStatus::Failed
+                    },
                 )
                 .await;
             }
@@ -222,7 +240,22 @@ impl ToolEmitter {
                     changes.clone(),
                     String::new(),
                     (*message).to_string(),
-                    false,
+                    /*success*/ false,
+                    PatchApplyStatus::Failed,
+                )
+                .await;
+            }
+            (
+                Self::ApplyPatch { changes, .. },
+                ToolEventStage::Failure(ToolEventFailure::Rejected(message)),
+            ) => {
+                emit_patch_end(
+                    ctx,
+                    changes.clone(),
+                    String::new(),
+                    (*message).to_string(),
+                    /*success*/ false,
+                    PatchApplyStatus::Declined,
                 )
                 .await;
             }
@@ -231,7 +264,6 @@ impl ToolEmitter {
                     command,
                     cwd,
                     source,
-                    interaction_input,
                     parsed_cmd,
                     process_id,
                 },
@@ -244,7 +276,7 @@ impl ToolEmitter {
                         cwd.as_path(),
                         parsed_cmd,
                         *source,
-                        interaction_input.as_deref(),
+                        /*interaction_input*/ None,
                         process_id.as_deref(),
                     ),
                     stage,
@@ -289,7 +321,7 @@ impl ToolEmitter {
                 (event, result)
             }
             Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Timeout { output })))
-            | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output }))) => {
+            | Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. }))) => {
                 let response = self.format_exec_output_for_model(&output, ctx);
                 let event = ToolEventStage::Failure(ToolEventFailure::Output(*output));
                 let result = Err(FunctionCallError::RespondToModel(response));
@@ -304,12 +336,24 @@ impl ToolEmitter {
             Err(ToolError::Rejected(msg)) => {
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.
+                //
+                // NOTE: ToolError::Rejected is currently used for both user-declined approvals
+                // and some operational/runtime rejection paths (for example setup failures).
+                // We intentionally map all of them through the "rejected" event path for now,
+                // which means a subset of non-user failures may be reported as Declined.
+                //
+                // TODO: We should add a new ToolError variant for user-declined approvals.
                 let normalized = if msg == "rejected by user" {
-                    "exec command rejected by user".to_string()
+                    match self {
+                        Self::Shell { .. } | Self::UnifiedExec { .. } => {
+                            "exec command rejected by user".to_string()
+                        }
+                        Self::ApplyPatch { .. } => "patch rejected by user".to_string(),
+                    }
                 } else {
                     msg
                 };
-                let event = ToolEventStage::Failure(ToolEventFailure::Message(normalized.clone()));
+                let event = ToolEventStage::Failure(ToolEventFailure::Rejected(normalized.clone()));
                 let result = Err(FunctionCallError::RespondToModel(normalized));
                 (event, result)
             }
@@ -355,6 +399,7 @@ struct ExecCommandResult {
     exit_code: i32,
     duration: Duration,
     formatted_output: String,
+    status: ExecCommandStatus,
 }
 
 async fn emit_exec_stage(
@@ -384,6 +429,11 @@ async fn emit_exec_stage(
                 exit_code: output.exit_code,
                 duration: output.duration,
                 formatted_output: format_exec_output_str(&output, ctx.turn.truncation_policy),
+                status: if output.exit_code == 0 {
+                    ExecCommandStatus::Completed
+                } else {
+                    ExecCommandStatus::Failed
+                },
             };
             emit_exec_end(ctx, exec_input, exec_result).await;
         }
@@ -396,6 +446,20 @@ async fn emit_exec_stage(
                 exit_code: -1,
                 duration: Duration::ZERO,
                 formatted_output: text,
+                status: ExecCommandStatus::Failed,
+            };
+            emit_exec_end(ctx, exec_input, exec_result).await;
+        }
+        ToolEventStage::Failure(ToolEventFailure::Rejected(message)) => {
+            let text = message.to_string();
+            let exec_result = ExecCommandResult {
+                stdout: String::new(),
+                stderr: text.clone(),
+                aggregated_output: text.clone(),
+                exit_code: -1,
+                duration: Duration::ZERO,
+                formatted_output: text,
+                status: ExecCommandStatus::Declined,
             };
             emit_exec_end(ctx, exec_input, exec_result).await;
         }
@@ -425,6 +489,7 @@ async fn emit_exec_end(
                 exit_code: exec_result.exit_code,
                 duration: exec_result.duration,
                 formatted_output: exec_result.formatted_output,
+                status: exec_result.status,
             }),
         )
         .await;
@@ -436,6 +501,7 @@ async fn emit_patch_end(
     stdout: String,
     stderr: String,
     success: bool,
+    status: PatchApplyStatus,
 ) {
     ctx.session
         .send_event(
@@ -447,6 +513,7 @@ async fn emit_patch_end(
                 stderr,
                 success,
                 changes,
+                status,
             }),
         )
         .await;

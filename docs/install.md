@@ -1,4 +1,4 @@
-## Install & build
+## Installing & building
 
 ### System requirements
 
@@ -26,8 +26,8 @@ rustup component add rustfmt
 rustup component add clippy
 # Install helper tools used by the workspace justfile:
 cargo install just
-# Optional: install nextest for the `just test` helper (or use `cargo test --all-features` as a fallback)
-cargo install cargo-nextest
+# Optional: install nextest for the `just test` helper
+cargo install --locked cargo-nextest
 
 # Build Codex.
 cargo build
@@ -41,8 +41,24 @@ just fix -p <crate-you-touched>
 
 # Run the relevant tests (project-specific is fastest), for example:
 cargo test -p codex-tui
-# If you have cargo-nextest installed, `just test` runs the full suite:
+# If you have cargo-nextest installed, `just test` runs the test suite via nextest:
 just test
-# Otherwise, fall back to:
+# Avoid `--all-features` for routine local runs because it increases build
+# time and `target/` disk usage by compiling additional feature combinations.
+# If you specifically want full feature coverage, use:
 cargo test --all-features
 ```
+
+## Tracing / verbose logging
+
+Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.
+
+The TUI defaults to `RUST_LOG=codex_core=info,codex_tui=info,codex_rmcp_client=info` and log messages are written to `~/.codex/log/codex-tui.log` by default. For a single run, you can override the log directory with `-c log_dir=...` (for example, `-c log_dir=./.codex-log`).
+
+```bash
+tail -F ~/.codex/log/codex-tui.log
+```
+
+By comparison, the non-interactive mode (`codex exec`) defaults to `RUST_LOG=error`, but messages are printed inline, so there is no need to monitor a separate file.
+
+See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.

@@ -1,28 +1,53 @@
-//! A live status indicator that shows the *latest* log line emitted by the
-//! application while the agent is processing a long‑running task.
+//! A live task status row rendered above the composer while the agent is busy.
+//!
+//! The row owns spinner timing, the optional interrupt hint, and short inline
+//! context (for example, the unified-exec background-process summary). Keeping
+//! these pieces on one line avoids vertical layout churn in the bottom pane.
 
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_core::protocol::Op;
+use codex_protocol::protocol::Op;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::text::Text;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
+use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
 
+pub(crate) const STATUS_DETAILS_DEFAULT_MAX_LINES: usize = 3;
+const DETAILS_PREFIX: &str = "  └ ";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusDetailsCapitalization {
+    CapitalizeFirst,
+    Preserve,
+}
+
+/// Displays a single-line in-progress status with optional wrapped details.
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
     header: String,
+    details: Option<String>,
+    details_max_lines: usize,
+    /// Optional suffix rendered after the elapsed/interrupt segment.
+    inline_message: Option<String>,
     show_interrupt_hint: bool,
 
     elapsed_running: Duration,
@@ -58,6 +83,9 @@ impl StatusIndicatorWidget {
     ) -> Self {
         Self {
             header: String::from("Working"),
+            details: None,
+            details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+            inline_message: None,
             show_interrupt_hint: true,
             elapsed_running: Duration::ZERO,
             last_resume_at: Instant::now(),
@@ -78,9 +106,44 @@ impl StatusIndicatorWidget {
         self.header = header;
     }
 
+    /// Update the details text shown below the header.
+    pub(crate) fn update_details(
+        &mut self,
+        details: Option<String>,
+        capitalization: StatusDetailsCapitalization,
+        max_lines: usize,
+    ) {
+        self.details_max_lines = max_lines.max(1);
+        self.details = details
+            .filter(|details| !details.is_empty())
+            .map(|details| {
+                let trimmed = details.trim_start();
+                match capitalization {
+                    StatusDetailsCapitalization::CapitalizeFirst => capitalize_first(trimmed),
+                    StatusDetailsCapitalization::Preserve => trimmed.to_string(),
+                }
+            });
+    }
+
+    /// Update the inline suffix text shown after `({elapsed} • esc to interrupt)`.
+    ///
+    /// Callers should provide plain, already-contextualized text. Passing
+    /// verbose status prose here can cause frequent width truncation and hide
+    /// the more important elapsed/interrupt hint.
+    pub(crate) fn update_inline_message(&mut self, message: Option<String>) {
+        self.inline_message = message
+            .map(|message| message.trim().to_string())
+            .filter(|message| !message.is_empty());
+    }
+
     #[cfg(test)]
     pub(crate) fn header(&self) -> &str {
         &self.header
+    }
+
+    #[cfg(test)]
+    pub(crate) fn details(&self) -> Option<&str> {
+        self.details.as_deref()
     }
 
     pub(crate) fn set_interrupt_hint_visible(&mut self, visible: bool) {
@@ -132,11 +195,43 @@ impl StatusIndicatorWidget {
     pub fn elapsed_seconds(&self) -> u64 {
         self.elapsed_seconds_at(Instant::now())
     }
+
+    /// Wrap the details text into a fixed width and return the lines, truncating if necessary.
+    fn wrapped_details_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let Some(details) = self.details.as_deref() else {
+            return Vec::new();
+        };
+        if width == 0 {
+            return Vec::new();
+        }
+
+        let prefix_width = UnicodeWidthStr::width(DETAILS_PREFIX);
+        let opts = RtOptions::new(usize::from(width))
+            .initial_indent(Line::from(DETAILS_PREFIX.dim()))
+            .subsequent_indent(Line::from(Span::from(" ".repeat(prefix_width)).dim()))
+            .break_words(/*break_words*/ true);
+
+        let mut out = word_wrap_lines(details.lines().map(|line| vec![line.dim()]), opts);
+
+        if out.len() > self.details_max_lines {
+            out.truncate(self.details_max_lines);
+            let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
+            let max_base_len = content_width.saturating_sub(1);
+            if let Some(last) = out.last_mut()
+                && let Some(span) = last.spans.last_mut()
+            {
+                let trimmed: String = span.content.as_ref().chars().take(max_base_len).collect();
+                *span = format!("{trimmed}…").dim();
+            }
+        }
+
+        out
+    }
 }
 
 impl Renderable for StatusIndicatorWidget {
-    fn desired_height(&self, _width: u16) -> u16 {
-        1
+    fn desired_height(&self, width: u16) -> u16 {
+        1 + u16::try_from(self.wrapped_details_lines(width).len()).unwrap_or(0)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -144,9 +239,11 @@ impl Renderable for StatusIndicatorWidget {
             return;
         }
 
-        // Schedule next animation frame.
-        self.frame_requester
-            .schedule_frame_in(Duration::from_millis(32));
+        if self.animations_enabled {
+            // Schedule next animation frame.
+            self.frame_requester
+                .schedule_frame_in(Duration::from_millis(32));
+        }
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
@@ -169,8 +266,26 @@ impl Renderable for StatusIndicatorWidget {
         } else {
             spans.push(format!("({pretty_elapsed})").dim());
         }
+        if let Some(message) = &self.inline_message {
+            // Keep optional context after elapsed/interrupt text so that core
+            // interrupt affordances stay in a fixed visual location.
+            spans.push(" · ".dim());
+            spans.push(message.clone().dim());
+        }
 
-        Line::from(spans).render_ref(area, buf);
+        let mut lines = Vec::new();
+        lines.push(truncate_line_with_ellipsis_if_overflow(
+            Line::from(spans),
+            usize::from(area.width),
+        ));
+        if area.height > 1 {
+            // If there is enough space, add the details lines below the header.
+            let details = self.wrapped_details_lines(area.width);
+            let max_details = usize::from(area.height.saturating_sub(1));
+            lines.extend(details.into_iter().take(max_details));
+        }
+
+        Paragraph::new(Text::from(lines)).render_ref(area, buf);
     }
 }
 
@@ -230,6 +345,31 @@ mod tests {
     }
 
     #[test]
+    fn renders_wrapped_details_panama_two_lines() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), false);
+        w.update_details(
+            Some("A man a plan a canal panama".to_string()),
+            StatusDetailsCapitalization::CapitalizeFirst,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
+        );
+        w.set_interrupt_hint_visible(/*visible*/ false);
+
+        // Freeze time-dependent rendering (elapsed + spinner) to keep the snapshot stable.
+        w.is_paused = true;
+        w.elapsed_running = Duration::ZERO;
+
+        // Prefix is 4 columns, so a width of 30 yields a content width of 26: one column
+        // short of fitting the whole phrase (27 cols), forcing exactly one wrap without ellipsis.
+        let mut terminal = Terminal::new(TestBackend::new(30, 3)).expect("terminal");
+        terminal
+            .draw(|f| w.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
     fn timer_pauses_when_requested() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -249,5 +389,52 @@ mod tests {
         widget.resume_timer_at(baseline + Duration::from_secs(10));
         let after_resume = widget.elapsed_seconds_at(baseline + Duration::from_secs(13));
         assert_eq!(after_resume, before_pause + 3);
+    }
+
+    #[test]
+    fn details_overflow_adds_ellipsis() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        w.update_details(
+            Some("abcd abcd abcd abcd".to_string()),
+            StatusDetailsCapitalization::CapitalizeFirst,
+            STATUS_DETAILS_DEFAULT_MAX_LINES,
+        );
+
+        let lines = w.wrapped_details_lines(6);
+        assert_eq!(lines.len(), STATUS_DETAILS_DEFAULT_MAX_LINES);
+        let last = lines.last().expect("expected last details line");
+        assert!(
+            last.spans[1].content.as_ref().ends_with("…"),
+            "expected ellipsis in last line: {last:?}"
+        );
+    }
+
+    #[test]
+    fn details_args_can_disable_capitalization_and_limit_lines() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        w.update_details(
+            Some("cargo test -p codex-core and then cargo test -p codex-tui".to_string()),
+            StatusDetailsCapitalization::Preserve,
+            1,
+        );
+
+        assert_eq!(
+            w.details(),
+            Some("cargo test -p codex-core and then cargo test -p codex-tui")
+        );
+
+        let lines = w.wrapped_details_lines(24);
+        assert_eq!(lines.len(), 1);
+        let last = lines.last().expect("expected one details line");
+        assert!(
+            last.spans
+                .last()
+                .is_some_and(|span| span.content.as_ref().contains('…')),
+            "expected one-line details to be ellipsized, got {last:?}"
+        );
     }
 }

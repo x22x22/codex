@@ -1,8 +1,11 @@
 use crate::config::types::EnvironmentVariablePattern;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyInherit;
+use codex_protocol::ThreadId;
 use std::collections::HashMap;
 use std::collections::HashSet;
+
+pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
@@ -11,11 +14,21 @@ use std::collections::HashSet;
 ///
 /// The derivation follows the algorithm documented in the struct-level comment
 /// for [`ShellEnvironmentPolicy`].
-pub fn create_env(policy: &ShellEnvironmentPolicy) -> HashMap<String, String> {
-    populate_env(std::env::vars(), policy)
+///
+/// `CODEX_THREAD_ID` is injected when a thread id is provided, even when
+/// `include_only` is set.
+pub fn create_env(
+    policy: &ShellEnvironmentPolicy,
+    thread_id: Option<ThreadId>,
+) -> HashMap<String, String> {
+    populate_env(std::env::vars(), policy, thread_id)
 }
 
-fn populate_env<I>(vars: I, policy: &ShellEnvironmentPolicy) -> HashMap<String, String>
+fn populate_env<I>(
+    vars: I,
+    policy: &ShellEnvironmentPolicy,
+    thread_id: Option<ThreadId>,
+) -> HashMap<String, String>
 where
     I: IntoIterator<Item = (String, String)>,
 {
@@ -29,9 +42,16 @@ where
                 "HOME", "LOGNAME", "PATH", "SHELL", "USER", "USERNAME", "TMPDIR", "TEMP", "TMP",
             ];
             let allow: HashSet<&str> = CORE_VARS.iter().copied().collect();
-            vars.into_iter()
-                .filter(|(k, _)| allow.contains(k.as_str()))
-                .collect()
+            let is_core_var = |name: &str| {
+                if cfg!(target_os = "windows") {
+                    CORE_VARS
+                        .iter()
+                        .any(|allowed| allowed.eq_ignore_ascii_case(name))
+                } else {
+                    allow.contains(name)
+                }
+            };
+            vars.into_iter().filter(|(k, _)| is_core_var(k)).collect()
         }
     };
 
@@ -65,130 +85,14 @@ where
         env_map.retain(|k, _| matches_any(k, &policy.include_only));
     }
 
+    // Step 6 – Populate the thread ID environment variable when provided.
+    if let Some(thread_id) = thread_id {
+        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    }
+
     env_map
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::types::ShellEnvironmentPolicyInherit;
-    use maplit::hashmap;
-
-    fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn test_core_inherit_and_default_excludes() {
-        let vars = make_vars(&[
-            ("PATH", "/usr/bin"),
-            ("HOME", "/home/user"),
-            ("API_KEY", "secret"),
-            ("SECRET_TOKEN", "t"),
-        ]);
-
-        let policy = ShellEnvironmentPolicy::default(); // inherit Core, default excludes on
-        let result = populate_env(vars, &policy);
-
-        let expected: HashMap<String, String> = hashmap! {
-            "PATH".to_string() => "/usr/bin".to_string(),
-            "HOME".to_string() => "/home/user".to_string(),
-        };
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_include_only() {
-        let vars = make_vars(&[("PATH", "/usr/bin"), ("FOO", "bar")]);
-
-        let policy = ShellEnvironmentPolicy {
-            // skip default excludes so nothing is removed prematurely
-            ignore_default_excludes: true,
-            include_only: vec![EnvironmentVariablePattern::new_case_insensitive("*PATH")],
-            ..Default::default()
-        };
-
-        let result = populate_env(vars, &policy);
-
-        let expected: HashMap<String, String> = hashmap! {
-            "PATH".to_string() => "/usr/bin".to_string(),
-        };
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_set_overrides() {
-        let vars = make_vars(&[("PATH", "/usr/bin")]);
-
-        let mut policy = ShellEnvironmentPolicy {
-            ignore_default_excludes: true,
-            ..Default::default()
-        };
-        policy.r#set.insert("NEW_VAR".to_string(), "42".to_string());
-
-        let result = populate_env(vars, &policy);
-
-        let expected: HashMap<String, String> = hashmap! {
-            "PATH".to_string() => "/usr/bin".to_string(),
-            "NEW_VAR".to_string() => "42".to_string(),
-        };
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_inherit_all() {
-        let vars = make_vars(&[("PATH", "/usr/bin"), ("FOO", "bar")]);
-
-        let policy = ShellEnvironmentPolicy {
-            inherit: ShellEnvironmentPolicyInherit::All,
-            ignore_default_excludes: true, // keep everything
-            ..Default::default()
-        };
-
-        let result = populate_env(vars.clone(), &policy);
-        let expected: HashMap<String, String> = vars.into_iter().collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_inherit_all_with_default_excludes() {
-        let vars = make_vars(&[("PATH", "/usr/bin"), ("API_KEY", "secret")]);
-
-        let policy = ShellEnvironmentPolicy {
-            inherit: ShellEnvironmentPolicyInherit::All,
-            ..Default::default()
-        };
-
-        let result = populate_env(vars, &policy);
-        let expected: HashMap<String, String> = hashmap! {
-            "PATH".to_string() => "/usr/bin".to_string(),
-        };
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_inherit_none() {
-        let vars = make_vars(&[("PATH", "/usr/bin"), ("HOME", "/home")]);
-
-        let mut policy = ShellEnvironmentPolicy {
-            inherit: ShellEnvironmentPolicyInherit::None,
-            ignore_default_excludes: true,
-            ..Default::default()
-        };
-        policy
-            .r#set
-            .insert("ONLY_VAR".to_string(), "yes".to_string());
-
-        let result = populate_env(vars, &policy);
-        let expected: HashMap<String, String> = hashmap! {
-            "ONLY_VAR".to_string() => "yes".to_string(),
-        };
-        assert_eq!(result, expected);
-    }
-}
+#[path = "exec_env_tests.rs"]
+mod tests;

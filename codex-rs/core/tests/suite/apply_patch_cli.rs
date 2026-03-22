@@ -1,18 +1,23 @@
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_test_macros::large_stack_test;
 use core_test_support::responses::ev_apply_patch_call;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::Ordering;
 
-use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
+use codex_features::Feature;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_apply_patch_function_call;
@@ -20,6 +25,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
@@ -29,6 +35,11 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use serde_json::json;
 use test_case::test_case;
+use wiremock::Mock;
+use wiremock::Respond;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 pub async fn apply_patch_harness() -> Result<TestCodexHarness> {
     apply_patch_harness_with(|builder| builder).await
@@ -76,7 +87,7 @@ fn apply_patch_responses(
     ]
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -123,7 +134,7 @@ D delete.txt
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -150,7 +161,7 @@ async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) ->
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -179,7 +190,7 @@ async fn apply_patch_cli_moves_file_to_new_directory(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -207,7 +218,7 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -233,7 +244,7 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -264,7 +275,7 @@ async fn apply_patch_cli_move_overwrites_existing_destination(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -294,6 +305,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "rename without content change".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -301,7 +313,10 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -311,7 +326,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
             saw_turn_diff = true;
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -322,7 +337,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -348,7 +363,7 @@ async fn apply_patch_cli_add_overwrites_existing_file(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -380,7 +395,7 @@ async fn apply_patch_cli_rejects_invalid_hunk_header(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -414,7 +429,7 @@ async fn apply_patch_cli_reports_missing_context(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -450,7 +465,7 @@ async fn apply_patch_cli_reports_missing_target_file(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -487,7 +502,7 @@ async fn apply_patch_cli_delete_missing_file_reports_error(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -512,7 +527,7 @@ async fn apply_patch_cli_rejects_empty_patch(model_output: ApplyPatchModelOutput
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -539,7 +554,7 @@ async fn apply_patch_cli_delete_directory_reports_verification_error(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -567,6 +582,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -592,7 +608,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -623,6 +639,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -646,7 +663,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -659,7 +676,10 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 
     let harness = apply_patch_harness_with(|builder| {
         builder.with_config(|config| {
-            config.features.enable(Feature::ApplyPatchFreeform);
+            config
+                .features
+                .enable(Feature::ApplyPatchFreeform)
+                .expect("test config should allow feature update");
         })
     })
     .await?;
@@ -680,7 +700,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -718,7 +738,147 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
+async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness =
+        apply_patch_harness_with(|builder| builder.with_model("gpt-5.1").with_windows_cmd_shell())
+            .await?;
+
+    let source_contents = "line1\nnaïve café\nline3\n";
+    let source_path = harness.path("source.txt");
+    fs::write(&source_path, source_contents)?;
+
+    let read_call_id = "read-source";
+    let apply_call_id = "apply-from-read";
+
+    fn stdout_from_shell_output(output: &str) -> String {
+        let normalized = output.replace("\r\n", "\n").replace('\r', "\n");
+        normalized
+            .split_once("Output:\n")
+            .map(|x| x.1)
+            .unwrap_or("")
+            .trim_end_matches('\n')
+            .to_string()
+    }
+
+    fn function_call_output_text(body: &serde_json::Value, call_id: &str) -> String {
+        body.get("input")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("type").and_then(serde_json::Value::as_str)
+                        == Some("function_call_output")
+                        && item.get("call_id").and_then(serde_json::Value::as_str) == Some(call_id)
+                })
+            })
+            .and_then(|item| item.get("output").and_then(serde_json::Value::as_str))
+            .expect("function_call_output output string")
+            .to_string()
+    }
+
+    struct DynamicApplyFromRead {
+        num_calls: AtomicI32,
+        read_call_id: String,
+        apply_call_id: String,
+    }
+
+    impl Respond for DynamicApplyFromRead {
+        fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            match call_num {
+                0 => {
+                    let command = if cfg!(windows) {
+                        // Encode the nested PowerShell script so `cmd.exe /c` does not leave the
+                        // read command wrapped in quotes, and suppress progress records so the
+                        // shell tool only returns the file contents back to apply_patch.
+                        let script = "$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [System.IO.File]::ReadAllText('source.txt', [System.Text.UTF8Encoding]::new($false))";
+                        let encoded = BASE64_STANDARD.encode(
+                            script
+                                .encode_utf16()
+                                .flat_map(u16::to_le_bytes)
+                                .collect::<Vec<u8>>(),
+                        );
+                        format!(
+                            "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}"
+                        )
+                    } else {
+                        "cat source.txt".to_string()
+                    };
+                    let args = json!({
+                        "command": command,
+                        "login": false,
+                    });
+                    let body = sse(vec![
+                        ev_response_created("resp-1"),
+                        ev_shell_command_call_with_args(&self.read_call_id, &args),
+                        ev_completed("resp-1"),
+                    ]);
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(body)
+                }
+                1 => {
+                    let body_json: serde_json::Value =
+                        request.body_json().expect("request body should be json");
+                    let read_output = function_call_output_text(&body_json, &self.read_call_id);
+                    let stdout = stdout_from_shell_output(&read_output);
+                    let patch_lines = stdout
+                        .lines()
+                        .map(|line| format!("+{line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let patch = format!(
+                        "*** Begin Patch\n*** Add File: target.txt\n{patch_lines}\n*** End Patch"
+                    );
+
+                    let body = sse(vec![
+                        ev_response_created("resp-2"),
+                        ev_apply_patch_custom_tool_call(&self.apply_call_id, &patch),
+                        ev_completed("resp-2"),
+                    ]);
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(body)
+                }
+                2 => {
+                    let body = sse(vec![
+                        ev_assistant_message("msg-1", "ok"),
+                        ev_completed("resp-3"),
+                    ]);
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(body)
+                }
+                _ => panic!("no response for call {call_num}"),
+            }
+        }
+    }
+
+    let responder = DynamicApplyFromRead {
+        num_calls: AtomicI32::new(0),
+        read_call_id: read_call_id.to_string(),
+        apply_call_id: apply_call_id.to_string(),
+    };
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(responder)
+        .expect(3)
+        .mount(harness.server())
+        .await;
+
+    harness
+        .submit("read source.txt, then apply it to target.txt")
+        .await?;
+
+    let target_contents = fs::read_to_string(harness.path("target.txt"))?;
+    assert_eq!(target_contents, source_contents);
+
+    Ok(())
+}
+
+#[large_stack_test]
 async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -754,6 +914,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "apply via shell heredoc with cd".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -761,7 +922,10 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -783,7 +947,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
             saw_turn_diff = Some(ev.unified_diff.clone());
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -798,7 +962,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -831,6 +995,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "apply patch via shell".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -838,7 +1003,10 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -848,7 +1016,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
             saw_turn_diff = true;
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -871,7 +1039,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch(
@@ -894,7 +1062,7 @@ async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -917,7 +1085,7 @@ async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput)
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -952,7 +1120,7 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -978,6 +1146,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "emit diff".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -985,7 +1154,10 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -995,7 +1167,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
             saw_turn_diff = Some(ev.unified_diff.clone());
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -1008,7 +1180,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -1038,6 +1210,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "rename with change".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1045,7 +1218,10 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1055,7 +1231,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
             last_diff = Some(ev.unified_diff.clone());
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -1071,7 +1247,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1106,6 +1282,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "aggregate diffs".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1113,7 +1290,10 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1123,7 +1303,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
             last_diff = Some(ev.unified_diff.clone());
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -1136,7 +1316,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1174,6 +1354,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "apply patch twice with failure".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -1181,7 +1362,10 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1191,7 +1375,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
             last_diff = Some(ev.unified_diff.clone());
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -1223,7 +1407,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]

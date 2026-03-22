@@ -3,13 +3,12 @@
 use std::fs;
 
 use assert_matches::assert_matches;
-use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
+use codex_features::Feature;
 use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
@@ -28,7 +27,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
-
 fn call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) {
     let raw = req.function_call_output(call_id);
     assert_eq!(
@@ -82,6 +80,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please run the shell command".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -89,11 +88,14 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = second_mock.single_request();
     let (output_text, _) = call_output(&req, call_id);
@@ -148,6 +150,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -155,7 +158,10 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -171,7 +177,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             assert_matches!(update.plan[1].status, StepStatus::Pending);
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -224,6 +230,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -231,7 +238,10 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -241,7 +251,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
             saw_plan_update = true;
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -274,7 +284,10 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::ApplyPatchFreeform);
+        config
+            .features
+            .enable(Feature::ApplyPatchFreeform)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -312,6 +325,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -319,7 +333,10 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -336,7 +353,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
             patch_end_success = Some(end.success);
             false
         }
-        EventMsg::TaskComplete(_) => true,
+        EventMsg::TurnComplete(_) => true,
         _ => false,
     })
     .await;
@@ -375,7 +392,10 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::ApplyPatchFreeform);
+        config
+            .features
+            .enable(Feature::ApplyPatchFreeform)
+            .expect("test config should allow feature update");
     });
     let TestCodex {
         codex,
@@ -408,6 +428,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -415,11 +436,14 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = second_mock.single_request();
     let (output_text, success_flag) = call_output(&req, call_id);

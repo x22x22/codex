@@ -1,4 +1,6 @@
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::collections::btree_map::Entry;
 use std::fs;
 use std::io::Write;
 use std::io::{self};
@@ -9,14 +11,26 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
+use feedback_diagnostics::FeedbackDiagnostics;
+use tracing::Event;
+use tracing::Level;
+use tracing::field::Visit;
+use tracing_subscriber::Layer;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::writer::MakeWriter;
+use tracing_subscriber::registry::LookupSpan;
+
+pub mod feedback_diagnostics;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const SENTRY_DSN: &str =
     "https://ae32ed50620d7a7792c1ce5df38b3e3e@o33249.ingest.us.sentry.io/4510195390611458";
 const UPLOAD_TIMEOUT_SECS: u64 = 10;
+const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
+const MAX_FEEDBACK_TAGS: usize = 64;
 
 #[derive(Clone)]
 pub struct CodexFeedback {
@@ -46,28 +60,69 @@ impl CodexFeedback {
         }
     }
 
-    pub fn snapshot(&self, session_id: Option<ConversationId>) -> CodexLogSnapshot {
+    /// Returns a [`tracing_subscriber`] layer that captures full-fidelity logs into this feedback
+    /// ring buffer.
+    ///
+    /// This is intended for initialization code so call sites don't have to duplicate the exact
+    /// `fmt::layer()` configuration and filter logic.
+    pub fn logger_layer<S>(&self) -> impl Layer<S> + Send + Sync + 'static
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        tracing_subscriber::fmt::layer()
+            .with_writer(self.make_writer())
+            .with_timer(tracing_subscriber::fmt::time::SystemTime)
+            .with_ansi(false)
+            .with_target(false)
+            // Capture everything, regardless of the caller's `RUST_LOG`, so feedback includes the
+            // full trace when the user uploads a report.
+            .with_filter(Targets::new().with_default(Level::TRACE))
+    }
+
+    /// Returns a [`tracing_subscriber`] layer that collects structured metadata for feedback.
+    ///
+    /// Events with `target: "feedback_tags"` are treated as key/value tags to attach to feedback
+    /// uploads later.
+    pub fn metadata_layer<S>(&self) -> impl Layer<S> + Send + Sync + 'static
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        FeedbackMetadataLayer {
+            inner: self.inner.clone(),
+        }
+        .with_filter(Targets::new().with_target(FEEDBACK_TAGS_TARGET, Level::TRACE))
+    }
+
+    pub fn snapshot(&self, session_id: Option<ThreadId>) -> FeedbackSnapshot {
         let bytes = {
             let guard = self.inner.ring.lock().expect("mutex poisoned");
             guard.snapshot_bytes()
         };
-        CodexLogSnapshot {
+        let tags = {
+            let guard = self.inner.tags.lock().expect("mutex poisoned");
+            guard.clone()
+        };
+        FeedbackSnapshot {
             bytes,
+            tags,
+            feedback_diagnostics: FeedbackDiagnostics::collect_from_env(),
             thread_id: session_id
                 .map(|id| id.to_string())
-                .unwrap_or("no-active-thread-".to_string() + &ConversationId::new().to_string()),
+                .unwrap_or("no-active-thread-".to_string() + &ThreadId::new().to_string()),
         }
     }
 }
 
 struct FeedbackInner {
     ring: Mutex<RingBuffer>,
+    tags: Mutex<BTreeMap<String, String>>,
 }
 
 impl FeedbackInner {
     fn new(max_bytes: usize) -> Self {
         Self {
             ring: Mutex::new(RingBuffer::new(max_bytes)),
+            tags: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -150,14 +205,33 @@ impl RingBuffer {
     }
 }
 
-pub struct CodexLogSnapshot {
+pub struct FeedbackSnapshot {
     bytes: Vec<u8>,
+    tags: BTreeMap<String, String>,
+    feedback_diagnostics: FeedbackDiagnostics,
     pub thread_id: String,
 }
 
-impl CodexLogSnapshot {
+impl FeedbackSnapshot {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub fn feedback_diagnostics(&self) -> &FeedbackDiagnostics {
+        &self.feedback_diagnostics
+    }
+
+    pub fn with_feedback_diagnostics(mut self, feedback_diagnostics: FeedbackDiagnostics) -> Self {
+        self.feedback_diagnostics = feedback_diagnostics;
+        self
+    }
+
+    pub fn feedback_diagnostics_attachment_text(&self, include_logs: bool) -> Option<String> {
+        if !include_logs {
+            return None;
+        }
+
+        self.feedback_diagnostics.attachment_text()
     }
 
     pub fn save_to_temp_file(&self) -> io::Result<PathBuf> {
@@ -174,17 +248,16 @@ impl CodexLogSnapshot {
         classification: &str,
         reason: Option<&str>,
         include_logs: bool,
-        rollout_path: Option<&std::path::Path>,
+        extra_attachment_paths: &[PathBuf],
         session_source: Option<SessionSource>,
+        logs_override: Option<Vec<u8>>,
     ) -> Result<()> {
         use std::collections::BTreeMap;
-        use std::fs;
         use std::str::FromStr;
         use std::sync::Arc;
 
         use sentry::Client;
         use sentry::ClientOptions;
-        use sentry::protocol::Attachment;
         use sentry::protocol::Envelope;
         use sentry::protocol::EnvelopeItem;
         use sentry::protocol::Event;
@@ -212,8 +285,24 @@ impl CodexLogSnapshot {
             tags.insert(String::from("reason"), r.to_string());
         }
 
+        let reserved = [
+            "thread_id",
+            "classification",
+            "cli_version",
+            "session_source",
+            "reason",
+        ];
+        for (key, value) in &self.tags {
+            if reserved.contains(&key.as_str()) {
+                continue;
+            }
+            if let Entry::Vacant(entry) = tags.entry(key.clone()) {
+                entry.insert(value.clone());
+            }
+        }
+
         let level = match classification {
-            "bug" | "bad_result" => Level::Error,
+            "bug" | "bad_result" | "safety_check" => Level::Error,
             _ => Level::Info,
         };
 
@@ -242,32 +331,70 @@ impl CodexLogSnapshot {
         }
         envelope.add_item(EnvelopeItem::Event(event));
 
-        if include_logs {
-            envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: self.bytes.clone(),
-                filename: String::from("codex-logs.log"),
-                content_type: Some("text/plain".to_string()),
-                ty: None,
-            }));
-        }
-
-        if let Some((path, data)) = rollout_path.and_then(|p| fs::read(p).ok().map(|d| (p, d))) {
-            let fname = path
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "rollout.jsonl".to_string());
-            let content_type = "text/plain".to_string();
-            envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: data,
-                filename: fname,
-                content_type: Some(content_type),
-                ty: None,
-            }));
+        for attachment in
+            self.feedback_attachments(include_logs, extra_attachment_paths, logs_override)
+        {
+            envelope.add_item(EnvelopeItem::Attachment(attachment));
         }
 
         client.send_envelope(envelope);
         client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
         Ok(())
+    }
+
+    fn feedback_attachments(
+        &self,
+        include_logs: bool,
+        extra_attachment_paths: &[PathBuf],
+        logs_override: Option<Vec<u8>>,
+    ) -> Vec<sentry::protocol::Attachment> {
+        use sentry::protocol::Attachment;
+
+        let mut attachments = Vec::new();
+
+        if include_logs {
+            attachments.push(Attachment {
+                buffer: logs_override.unwrap_or_else(|| self.bytes.clone()),
+                filename: String::from("codex-logs.log"),
+                content_type: Some("text/plain".to_string()),
+                ty: None,
+            });
+        }
+
+        if let Some(text) = self.feedback_diagnostics_attachment_text(include_logs) {
+            attachments.push(Attachment {
+                buffer: text.into_bytes(),
+                filename: FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.to_string(),
+                content_type: Some("text/plain".to_string()),
+                ty: None,
+            });
+        }
+
+        for path in extra_attachment_paths {
+            let data = match fs::read(path) {
+                Ok(data) => data,
+                Err(err) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "failed to read log attachment; skipping"
+                    );
+                    continue;
+                }
+            };
+            let filename = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "extra-log.log".to_string());
+            attachments.push(Attachment {
+                buffer: data,
+                filename,
+                content_type: Some("text/plain".to_string()),
+                ty: None,
+            });
+        }
+
+        attachments
     }
 }
 
@@ -276,13 +403,90 @@ fn display_classification(classification: &str) -> String {
         "bug" => "Bug".to_string(),
         "bad_result" => "Bad result".to_string(),
         "good_result" => "Good result".to_string(),
+        "safety_check" => "Safety check".to_string(),
         _ => "Other".to_string(),
+    }
+}
+
+#[derive(Clone)]
+struct FeedbackMetadataLayer {
+    inner: Arc<FeedbackInner>,
+}
+
+impl<S> Layer<S> for FeedbackMetadataLayer
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        // This layer is filtered by `Targets`, but keep the guard anyway in case it is used without
+        // the filter.
+        if event.metadata().target() != FEEDBACK_TAGS_TARGET {
+            return;
+        }
+
+        let mut visitor = FeedbackTagsVisitor::default();
+        event.record(&mut visitor);
+        if visitor.tags.is_empty() {
+            return;
+        }
+
+        let mut guard = self.inner.tags.lock().expect("mutex poisoned");
+        for (key, value) in visitor.tags {
+            if guard.len() >= MAX_FEEDBACK_TAGS && !guard.contains_key(&key) {
+                continue;
+            }
+            guard.insert(key, value);
+        }
+    }
+}
+
+#[derive(Default)]
+struct FeedbackTagsVisitor {
+    tags: BTreeMap<String, String>,
+}
+
+impl Visit for FeedbackTagsVisitor {
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.tags
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.tags
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.tags
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+        self.tags
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.tags
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.tags
+            .insert(field.name().to_string(), format!("{value:?}"));
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+    use std::fs;
+
     use super::*;
+    use feedback_diagnostics::FeedbackDiagnostic;
+    use pretty_assertions::assert_eq;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
 
     #[test]
     fn ring_buffer_drops_front_when_full() {
@@ -295,5 +499,74 @@ mod tests {
         let snap = fb.snapshot(None);
         // Capacity 8: after writing 10 bytes, we should keep the last 8.
         pretty_assertions::assert_eq!(std::str::from_utf8(snap.as_bytes()).unwrap(), "cdefghij");
+    }
+
+    #[test]
+    fn metadata_layer_records_tags_from_feedback_target() {
+        let fb = CodexFeedback::new();
+        let _guard = tracing_subscriber::registry()
+            .with(fb.metadata_layer())
+            .set_default();
+
+        tracing::info!(target: FEEDBACK_TAGS_TARGET, model = "gpt-5", cached = true, "tags");
+
+        let snap = fb.snapshot(None);
+        pretty_assertions::assert_eq!(snap.tags.get("model").map(String::as_str), Some("gpt-5"));
+        pretty_assertions::assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn feedback_attachments_gate_connectivity_diagnostics() {
+        let extra_filename = format!("codex-feedback-extra-{}.jsonl", ThreadId::new());
+        let extra_path = std::env::temp_dir().join(&extra_filename);
+        fs::write(&extra_path, "rollout").expect("extra attachment should be written");
+
+        let snapshot_with_diagnostics = CodexFeedback::new()
+            .snapshot(None)
+            .with_feedback_diagnostics(FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
+                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
+            }]));
+
+        let attachments_with_diagnostics = snapshot_with_diagnostics.feedback_attachments(
+            true,
+            std::slice::from_ref(&extra_path),
+            Some(vec![1]),
+        );
+
+        assert_eq!(
+            attachments_with_diagnostics
+                .iter()
+                .map(|attachment| attachment.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "codex-logs.log",
+                FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME,
+                extra_filename.as_str()
+            ]
+        );
+        assert_eq!(attachments_with_diagnostics[0].buffer, vec![1]);
+        assert_eq!(
+            attachments_with_diagnostics[1].buffer,
+            b"Connectivity diagnostics\n\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1".to_vec()
+        );
+        assert_eq!(attachments_with_diagnostics[2].buffer, b"rollout".to_vec());
+        assert_eq!(
+            OsStr::new(attachments_with_diagnostics[2].filename.as_str()),
+            OsStr::new(extra_filename.as_str())
+        );
+        let attachments_without_diagnostics = CodexFeedback::new()
+            .snapshot(None)
+            .feedback_attachments(true, &[], Some(vec![1]));
+
+        assert_eq!(
+            attachments_without_diagnostics
+                .iter()
+                .map(|attachment| attachment.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["codex-logs.log"]
+        );
+        assert_eq!(attachments_without_diagnostics[0].buffer, vec![1]);
+        fs::remove_file(extra_path).expect("extra attachment should be removed");
     }
 }

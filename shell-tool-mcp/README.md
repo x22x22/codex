@@ -65,10 +65,11 @@ This MCP server is designed to be used with [Codex](https://developers.openai.co
 }
 ```
 
-This capability means the MCP server honors notifications like the following to update the sandbox policy the MCP server uses when spawning Bash:
+This capability means the MCP server honors requests like the following to update the sandbox policy the MCP server uses when spawning Bash:
 
 ```json
 {
+  "id": "req-42",
   "method": "codex/sandbox-state/update",
   "params": {
     "sandboxPolicy": {
@@ -82,14 +83,24 @@ This capability means the MCP server honors notifications like the following to 
 }
 ```
 
-The Codex harness (used by the CLI and the VS Code extension) sends such notifications to MCP servers that declare the `codex/sandbox-state` capability.
+Once the server has processed the update, it sends an empty response to acknowledge the request:
+
+```json
+{
+  "id": "req-42",
+  "result": {}
+}
+```
+
+The Codex harness (used by the CLI and the VS Code extension) sends such requests to MCP servers that declare the `codex/sandbox-state` capability.
 
 ## Package Contents
 
-This package wraps the `codex-exec-mcp-server` binary and its helpers so that the shell MCP can be invoked via `npx -y @openai/codex-shell-tool-mcp`. It bundles:
+This package currently publishes shell binaries only. It bundles:
 
-- `codex-exec-mcp-server` and `codex-execve-wrapper` built for macOS (arm64, x64) and Linux (musl arm64, musl x64).
-- A patched Bash that honors `BASH_EXEC_WRAPPER`, built for multiple glibc baselines (Ubuntu 24.04/22.04/20.04, Debian 12/11, CentOS-like 9) and macOS (15/14/13).
-- A launcher (`bin/mcp-server.js`) that picks the correct binaries for the current `process.platform` / `process.arch`, specifying `--execve` and `--bash` for the MCP, as appropriate.
+- A patched Bash that honors `EXEC_WRAPPER`, built for multiple glibc baselines (Ubuntu 24.04/22.04/20.04, Debian 12/11, CentOS-like 9) and macOS (15/14/13).
+- A patched zsh with `EXEC_WRAPPER` support for the same supported target triples.
 
-See [the README in the Codex repo](https://github.com/openai/codex/blob/main/codex-rs/exec-server/README.md) for details.
+It does not currently include the Rust MCP server binaries.
+
+See [the README in the Codex repo](https://github.com/openai/codex/blob/main/codex-rs/shell-escalation/README.md) for details.

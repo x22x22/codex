@@ -2,25 +2,33 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::mcp_connection_manager::ToolInfo;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::discoverable::DiscoverableTool;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
-use crate::tools::spec::build_specs;
+use crate::tools::spec::build_specs_with_discoverable_tools;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
+use rmcp::model::Tool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::instrument;
 
+pub use crate::tools::context::ToolCallSource;
+
 #[derive(Clone, Debug)]
 pub struct ToolCall {
     pub tool_name: String,
+    pub tool_namespace: Option<String>,
     pub call_id: String,
     pub payload: ToolPayload,
 }
@@ -28,17 +36,55 @@ pub struct ToolCall {
 pub struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ConfiguredToolSpec>,
+    model_visible_specs: Vec<ToolSpec>,
+}
+
+pub(crate) struct ToolRouterParams<'a> {
+    pub(crate) mcp_tools: Option<HashMap<String, Tool>>,
+    pub(crate) app_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
+    pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
 impl ToolRouter {
-    pub fn from_config(
-        config: &ToolsConfig,
-        mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
-    ) -> Self {
-        let builder = build_specs(config, mcp_tools);
+    pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
+        let ToolRouterParams {
+            mcp_tools,
+            app_tools,
+            discoverable_tools,
+            dynamic_tools,
+        } = params;
+        let builder = build_specs_with_discoverable_tools(
+            config,
+            mcp_tools,
+            app_tools,
+            discoverable_tools,
+            dynamic_tools,
+        );
         let (specs, registry) = builder.build();
+        let model_visible_specs = if config.code_mode_only_enabled {
+            specs
+                .iter()
+                .filter_map(|configured_tool| {
+                    if !codex_code_mode::is_code_mode_nested_tool(configured_tool.spec.name()) {
+                        Some(configured_tool.spec.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            specs
+                .iter()
+                .map(|configured_tool| configured_tool.spec.clone())
+                .collect()
+        };
 
-        Self { registry, specs }
+        Self {
+            registry,
+            specs,
+            model_visible_specs,
+        }
     }
 
     pub fn specs(&self) -> Vec<ToolSpec> {
@@ -46,6 +92,17 @@ impl ToolRouter {
             .iter()
             .map(|config| config.spec.clone())
             .collect()
+    }
+
+    pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
+        self.model_visible_specs.clone()
+    }
+
+    pub fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
+        self.specs
+            .iter()
+            .find(|config| config.spec.name() == tool_name)
+            .map(|config| config.spec.clone())
     }
 
     pub fn tool_supports_parallel(&self, tool_name: &str) -> bool {
@@ -63,13 +120,15 @@ impl ToolRouter {
         match item {
             ResponseItem::FunctionCall {
                 name,
+                namespace,
                 arguments,
                 call_id,
                 ..
             } => {
-                if let Some((server, tool)) = session.parse_mcp_tool_name(&name).await {
+                if let Some((server, tool)) = session.parse_mcp_tool_name(&name, &namespace).await {
                     Ok(Some(ToolCall {
                         tool_name: name,
+                        tool_namespace: namespace,
                         call_id,
                         payload: ToolPayload::Mcp {
                             server,
@@ -78,18 +137,34 @@ impl ToolRouter {
                         },
                     }))
                 } else {
-                    let payload = if name == "unified_exec" {
-                        ToolPayload::UnifiedExec { arguments }
-                    } else {
-                        ToolPayload::Function { arguments }
-                    };
                     Ok(Some(ToolCall {
                         tool_name: name,
+                        tool_namespace: namespace,
                         call_id,
-                        payload,
+                        payload: ToolPayload::Function { arguments },
                     }))
                 }
             }
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                execution,
+                arguments,
+                ..
+            } if execution == "client" => {
+                let arguments: SearchToolCallParams =
+                    serde_json::from_value(arguments).map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to parse tool_search arguments: {err}"
+                        ))
+                    })?;
+                Ok(Some(ToolCall {
+                    tool_name: "tool_search".to_string(),
+                    tool_namespace: None,
+                    call_id,
+                    payload: ToolPayload::ToolSearch { arguments },
+                }))
+            }
+            ResponseItem::ToolSearchCall { .. } => Ok(None),
             ResponseItem::CustomToolCall {
                 name,
                 input,
@@ -97,6 +172,7 @@ impl ToolRouter {
                 ..
             } => Ok(Some(ToolCall {
                 tool_name: name,
+                tool_namespace: None,
                 call_id,
                 payload: ToolPayload::Custom { input },
             })),
@@ -117,10 +193,13 @@ impl ToolRouter {
                             workdir: exec.working_directory,
                             timeout_ms: exec.timeout_ms,
                             sandbox_permissions: Some(SandboxPermissions::UseDefault),
+                            additional_permissions: None,
+                            prefix_rule: None,
                             justification: None,
                         };
                         Ok(Some(ToolCall {
                             tool_name: "local_shell".to_string(),
+                            tool_namespace: None,
                             call_id,
                             payload: ToolPayload::LocalShell { params },
                         }))
@@ -132,20 +211,30 @@ impl ToolRouter {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub async fn dispatch_tool_call(
+    pub async fn dispatch_tool_call_with_code_mode_result(
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
-    ) -> Result<ResponseInputItem, FunctionCallError> {
+        source: ToolCallSource,
+    ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
+            tool_namespace,
             call_id,
             payload,
         } = call;
-        let payload_outputs_custom = matches!(payload, ToolPayload::Custom { .. });
-        let failure_call_id = call_id.clone();
+
+        if source == ToolCallSource::Direct
+            && turn.tools_config.js_repl_tools_only
+            && !matches!(tool_name.as_str(), "js_repl" | "js_repl_reset")
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "direct tool calls are disabled; use js_repl and codex.tool(...) instead"
+                    .to_string(),
+            ));
+        }
 
         let invocation = ToolInvocation {
             session,
@@ -153,40 +242,13 @@ impl ToolRouter {
             tracker,
             call_id,
             tool_name,
+            tool_namespace,
             payload,
         };
 
-        match self.registry.dispatch(invocation).await {
-            Ok(response) => Ok(response),
-            Err(FunctionCallError::Fatal(message)) => Err(FunctionCallError::Fatal(message)),
-            Err(err) => Ok(Self::failure_response(
-                failure_call_id,
-                payload_outputs_custom,
-                err,
-            )),
-        }
-    }
-
-    fn failure_response(
-        call_id: String,
-        payload_outputs_custom: bool,
-        err: FunctionCallError,
-    ) -> ResponseInputItem {
-        let message = err.to_string();
-        if payload_outputs_custom {
-            ResponseInputItem::CustomToolCallOutput {
-                call_id,
-                output: message,
-            }
-        } else {
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: codex_protocol::models::FunctionCallOutputPayload {
-                    content: message,
-                    success: Some(false),
-                    ..Default::default()
-                },
-            }
-        }
+        self.registry.dispatch_any(invocation).await
     }
 }
+#[cfg(test)]
+#[path = "router_tests.rs"]
+mod tests;
