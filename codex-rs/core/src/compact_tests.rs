@@ -11,7 +11,7 @@ async fn process_compacted_history_with_test_session(
         previous_turn_context_item.model = previous_turn_settings.model.clone();
         previous_turn_context_item.realtime_active = previous_turn_settings.realtime_active;
         session
-            .record_regular_turn_context(previous_turn_context_item)
+            .note_model_visible_turn_context(previous_turn_context_item)
             .await;
         session.replace_history(Vec::new(), None).await;
     }

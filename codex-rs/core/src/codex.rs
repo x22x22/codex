@@ -2220,7 +2220,7 @@ impl Session {
                     .await;
                 {
                     let mut state = self.state.lock().await;
-                    state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+                    state.note_model_visible_turn_context(turn_context.to_turn_context_item());
                 }
 
                 // Forked threads should remain file-backed immediately after startup.
@@ -2261,9 +2261,9 @@ impl Session {
         state.previous_turn_settings()
     }
 
-    pub(crate) async fn record_regular_turn_context(&self, turn_context_item: TurnContextItem) {
+    pub(crate) async fn note_model_visible_turn_context(&self, turn_context_item: TurnContextItem) {
         let mut state = self.state.lock().await;
-        state.record_regular_turn_context(turn_context_item);
+        state.note_model_visible_turn_context(turn_context_item);
     }
 
     async fn reset_reference_turn_context_state(&self) {
@@ -3667,7 +3667,8 @@ impl Session {
         // Advance the stored turn-context snapshot even when this turn emitted no model-visible
         // context items. Regular turns become both the `previous_turn_settings()` source and the
         // active model-visible reference baseline for subsequent diffing.
-        self.record_regular_turn_context(turn_context_item).await;
+        self.note_model_visible_turn_context(turn_context_item)
+            .await;
     }
 
     pub(crate) async fn update_token_usage_info(

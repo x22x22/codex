@@ -73,8 +73,12 @@ impl SessionState {
         reference_context_item: Option<TurnContextItem>,
     ) {
         self.history.replace(items);
-        self.history
-            .set_reference_context_item(reference_context_item);
+        match reference_context_item {
+            Some(turn_context_item) => self
+                .history
+                .note_model_visible_turn_context(turn_context_item),
+            None => self.history.set_reference_context_item(None),
+        }
     }
 
     pub(crate) fn replace_history_with_reference_turn_context_state(
@@ -95,12 +99,9 @@ impl SessionState {
         self.history.set_token_info(info);
     }
 
-    pub(crate) fn record_regular_turn_context(&mut self, turn_context_item: TurnContextItem) {
-        self.history.record_regular_turn_context(turn_context_item);
-    }
-
-    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.history.set_reference_context_item(item);
+    pub(crate) fn note_model_visible_turn_context(&mut self, turn_context_item: TurnContextItem) {
+        self.history
+            .note_model_visible_turn_context(turn_context_item);
     }
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {

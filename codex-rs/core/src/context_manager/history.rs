@@ -87,15 +87,14 @@ impl ReferenceTurnContextState {
         }
     }
 
-    pub(crate) fn record_regular_turn_context(&mut self, turn_context_item: TurnContextItem) {
+    pub(crate) fn note_model_visible_turn_context(&mut self, turn_context_item: TurnContextItem) {
         self.turn_context_item = Some(turn_context_item);
         self.compacted_since_model_saw_reference_turn_context = false;
     }
 
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
         if let Some(item) = item {
-            self.turn_context_item = Some(item);
-            self.compacted_since_model_saw_reference_turn_context = false;
+            self.note_model_visible_turn_context(item);
         } else {
             self.note_compaction();
         }
@@ -163,9 +162,9 @@ impl ContextManager {
         self.reference_turn_context_state.reset();
     }
 
-    pub(crate) fn record_regular_turn_context(&mut self, turn_context_item: TurnContextItem) {
+    pub(crate) fn note_model_visible_turn_context(&mut self, turn_context_item: TurnContextItem) {
         self.reference_turn_context_state
-            .record_regular_turn_context(turn_context_item);
+            .note_model_visible_turn_context(turn_context_item);
     }
 
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
