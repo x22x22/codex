@@ -2,10 +2,14 @@ package com.openai.codex.agent
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.graphics.drawable.Drawable
 import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.Spinner
 import android.widget.TextView
 import com.openai.codex.bridge.SessionExecutionSettings
@@ -83,9 +87,21 @@ class CreateSessionDialogController(
         }
 
         fun updatePackageSummary() {
-            packageSummary.text = selectedPackage?.let { app ->
-                "${app.label} (${app.packageName})"
-            } ?: "No target app selected. This will start an Agent-anchored session."
+            val app = selectedPackage
+            if (app == null) {
+                packageSummary.text = "No target app selected. This will start an Agent-anchored session."
+                packageSummary.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, null, null)
+                return
+            }
+            packageSummary.text = "${app.label} (${app.packageName})"
+            packageSummary.setCompoundDrawablesRelativeWithIntrinsicBounds(
+                resizeIcon(app.icon),
+                null,
+                null,
+                null,
+            )
+            packageSummary.compoundDrawablePadding =
+                activity.resources.getDimensionPixelSize(android.R.dimen.app_icon_size) / 4
         }
 
         fun updateEffortOptions(requestedEffort: String?) {
@@ -157,25 +173,49 @@ class CreateSessionDialogController(
         val apps = InstalledAppCatalog.listInstalledApps(activity, sessionController)
         if (apps.isEmpty()) {
             AlertDialog.Builder(activity)
-                .setMessage("No installed target packages are available.")
+                .setMessage("No launchable target apps are available.")
                 .setPositiveButton(android.R.string.ok, null)
                 .show()
             return
         }
-        val labels = apps.map { app ->
-            buildString {
-                append(app.label)
-                append(" (")
-                append(app.packageName)
-                append(")")
-                if (!app.eligibleTarget) {
-                    append(" — unavailable")
-                }
+        val adapter = object : ArrayAdapter<InstalledApp>(
+            activity,
+            R.layout.list_item_installed_app,
+            apps,
+        ) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                return bindAppRow(position, convertView, parent)
             }
-        }.toTypedArray()
+
+            override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
+                return bindAppRow(position, convertView, parent)
+            }
+
+            private fun bindAppRow(position: Int, convertView: View?, parent: ViewGroup): View {
+                val row = convertView ?: LayoutInflater.from(context)
+                    .inflate(R.layout.list_item_installed_app, parent, false)
+                val app = getItem(position) ?: return row
+                val iconView = row.findViewById<ImageView>(R.id.installed_app_icon)
+                val titleView = row.findViewById<TextView>(R.id.installed_app_title)
+                val subtitleView = row.findViewById<TextView>(R.id.installed_app_subtitle)
+                iconView.setImageDrawable(app.icon ?: activity.getDrawable(android.R.drawable.sym_def_app_icon))
+                titleView.text = app.label
+                subtitleView.text = if (app.eligibleTarget) {
+                    app.packageName
+                } else {
+                    "${app.packageName} — unavailable"
+                }
+                row.isEnabled = app.eligibleTarget
+                titleView.isEnabled = app.eligibleTarget
+                subtitleView.isEnabled = app.eligibleTarget
+                iconView.alpha = if (app.eligibleTarget) 1f else 0.5f
+                row.alpha = if (app.eligibleTarget) 1f else 0.6f
+                return row
+            }
+        }
         AlertDialog.Builder(activity)
-            .setTitle("Choose package")
-            .setItems(labels) { _, which ->
+            .setTitle("Choose app")
+            .setAdapter(adapter) { _, which ->
                 val app = apps[which]
                 if (!app.eligibleTarget) {
                     AlertDialog.Builder(activity)
@@ -184,11 +224,18 @@ class CreateSessionDialogController(
                         )
                         .setPositiveButton(android.R.string.ok, null)
                         .show()
-                    return@setItems
+                    return@setAdapter
                 }
                 onSelected(app)
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    private fun resizeIcon(icon: Drawable?): Drawable? {
+        val sizedIcon = icon?.constantState?.newDrawable()?.mutate() ?: return null
+        val iconSize = activity.resources.getDimensionPixelSize(android.R.dimen.app_icon_size)
+        sizedIcon.setBounds(0, 0, iconSize, iconSize)
+        return sizedIcon
     }
 }
