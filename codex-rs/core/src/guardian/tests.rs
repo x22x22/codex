@@ -96,6 +96,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                     namespace: None,
                     arguments: "{\"repo\":\"openai/codex\"}".to_string(),
                     call_id: "call-1".to_string(),
+                    metadata: None,
                 },
                 ResponseItem::FunctionCallOutput {
                     call_id: "call-1".to_string(),

@@ -4420,7 +4420,7 @@ async fn tool_call_metadata_stamps_sandbox_policy_when_feature_enabled() {
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
-        .enable(crate::features::Feature::ItemMetadata)
+        .enable(Feature::ItemMetadata)
         .expect("feature flag should be enabled for this test");
 
     sess.spawn_task(
