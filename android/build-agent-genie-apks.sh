@@ -53,11 +53,18 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-[[ -n "$stub_sdk_zip" ]] || fail "set ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP or pass --stub-sdk-zip"
+[[ -n "$stub_sdk_zip" ]] || fail "set ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP or pass --agent-sdk-zip"
 [[ -f "$stub_sdk_zip" ]] || fail "stub SDK zip not found: $stub_sdk_zip"
 [[ "$variant" == "debug" || "$variant" == "release" ]] || fail "--variant must be debug or release"
 
-gradle_task_variant="${variant^}"
+case "$variant" in
+  debug)
+    gradle_task_variant="Debug"
+    ;;
+  release)
+    gradle_task_variant="Release"
+    ;;
+esac
 agent_apk="$script_dir/app/build/outputs/apk/$variant/app-$variant.apk"
 genie_apk="$script_dir/genie/build/outputs/apk/$variant/genie-$variant.apk"
 if [[ "$variant" == "release" ]]; then
