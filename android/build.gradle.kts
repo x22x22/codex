@@ -21,28 +21,8 @@ val codexTargets = mapOf(
 tasks.register<Exec>("buildCodexCliNative") {
     group = "build"
     description = "Build the Android codex binary packaged into the Agent and Genie APKs."
-    workingDir = repoRoot.resolve("codex-rs")
-    environment("CARGO_TARGET_DIR", "target/android")
-    val cargoArgs = mutableListOf(
-        "cargo",
-        "ndk",
-        "--platform",
-        "26",
-        "-t",
-        "arm64-v8a",
-        "-t",
-        "x86_64",
-        "build",
-        "-p",
-        "codex-cli",
-    )
-    if (skipAndroidLto) {
-        cargoArgs += listOf("--profile", "android-release-no-lto")
-    } else {
-        cargoArgs += "--release"
-    }
-    cargoArgs += listOf("--bin", "codex")
-    commandLine(cargoArgs)
+    workingDir = repoRoot
+    commandLine("just", "android-build")
     if (skipAndroidLto) {
         environment("CODEX_ANDROID_SKIP_LTO", "1")
     }
@@ -51,6 +31,8 @@ tasks.register<Exec>("buildCodexCliNative") {
             exclude("target/**")
         },
     ).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(repoRoot.resolve("justfile"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     outputs.files(
         codexTargets.values.map { triple ->
             repoRoot.resolve("codex-rs/target/android/${triple}/${codexCargoProfileDir}/codex")

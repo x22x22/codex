@@ -60,10 +60,10 @@ If you prefer the system Gradle install, use `gradle :app:assembleDebug` from
 The Agent/Genie prototype modules also require
 `ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP` (or `-PagentPlatformStubSdkZip=...`) so
 Gradle can compile against the stub SDK jar. The Agent APK and Genie APK both
-package the Android `codex` binary as `libcodex.so`. Gradle now runs the
-equivalent of `cargo ndk ... build -p codex-cli --bin codex` automatically
-before `:app:assembleDebug` and `:genie:assembleDebug`, so plain APK builds no
-longer silently package a stale `libcodex.so`.
+package the Android `codex` binary as `libcodex.so`. Gradle now rebuilds that
+native binary automatically before `:app:assembleDebug` and
+`:genie:assembleDebug`, so plain APK builds no longer silently package a stale
+`libcodex.so`.
 
 To install both APKs, assign the AGENT/GENIE roles, grant notifications, and
 optionally seed `auth.json` into the Agent sandbox:
