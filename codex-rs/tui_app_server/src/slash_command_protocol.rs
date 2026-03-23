@@ -241,11 +241,6 @@ where
     }
 }
 
-pub(crate) trait SlashCommandArgs: Sized {
-    fn parse(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind>;
-    fn serialize(&self) -> SlashSerializedText;
-}
-
 #[derive(Debug)]
 pub(crate) struct SlashArgsParser<'a> {
     input: SlashCommandParseInput<'a>,
@@ -426,6 +421,187 @@ impl SlashArgsSerializer {
 
     pub(crate) fn finish(self) -> SlashSerializedText {
         join_serialized_fragments(self.fragments)
+    }
+}
+
+pub(crate) trait SlashArgsCodec<T> {
+    fn parse<'a>(&self, parser: &mut SlashArgsParser<'a>) -> Result<T, SlashCommandUsageErrorKind>;
+
+    fn serialize(&self, value: &T, serializer: &mut SlashArgsSerializer);
+
+    fn finish<'a>(&self, parser: SlashArgsParser<'a>) -> Result<(), SlashCommandUsageErrorKind> {
+        parser.finish()
+    }
+
+    fn map_result<U, P, S>(
+        self,
+        parse_map: P,
+        serialize_map: S,
+    ) -> SlashMapResultCodec<Self, P, S, T, U>
+    where
+        Self: Sized,
+        P: Fn(T) -> Result<U, SlashCommandUsageErrorKind>,
+        S: Fn(&U) -> T,
+    {
+        SlashMapResultCodec {
+            inner: self,
+            parse_map,
+            serialize_map,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+pub(crate) struct SlashMapResultCodec<C, P, S, T, U> {
+    inner: C,
+    parse_map: P,
+    serialize_map: S,
+    _phantom: PhantomData<fn(T) -> U>,
+}
+
+impl<C, P, S, T, U> SlashArgsCodec<U> for SlashMapResultCodec<C, P, S, T, U>
+where
+    C: SlashArgsCodec<T>,
+    P: Fn(T) -> Result<U, SlashCommandUsageErrorKind>,
+    S: Fn(&U) -> T,
+{
+    fn parse<'a>(&self, parser: &mut SlashArgsParser<'a>) -> Result<U, SlashCommandUsageErrorKind> {
+        let parsed = self.inner.parse(parser)?;
+        (self.parse_map)(parsed)
+    }
+
+    fn serialize(&self, value: &U, serializer: &mut SlashArgsSerializer) {
+        let mapped = (self.serialize_map)(value);
+        self.inner.serialize(&mapped, serializer);
+    }
+
+    fn finish<'a>(&self, parser: SlashArgsParser<'a>) -> Result<(), SlashCommandUsageErrorKind> {
+        self.inner.finish(parser)
+    }
+}
+
+pub(crate) struct SlashPositionalCodec<S> {
+    spec: S,
+}
+
+pub(crate) fn positional<S>(spec: S) -> SlashPositionalCodec<S> {
+    SlashPositionalCodec { spec }
+}
+
+impl<T, S> SlashArgsCodec<T> for SlashPositionalCodec<S>
+where
+    S: SlashTokenValueSpec<T>,
+{
+    fn parse<'a>(&self, parser: &mut SlashArgsParser<'a>) -> Result<T, SlashCommandUsageErrorKind> {
+        parser.positional(&self.spec)
+    }
+
+    fn serialize(&self, value: &T, serializer: &mut SlashArgsSerializer) {
+        serializer.positional(value, &self.spec);
+    }
+}
+
+pub(crate) struct SlashListCodec<S> {
+    spec: S,
+}
+
+pub(crate) fn list<S>(spec: S) -> SlashListCodec<S> {
+    SlashListCodec { spec }
+}
+
+impl<T, S> SlashArgsCodec<Vec<T>> for SlashListCodec<S>
+where
+    T: Clone,
+    S: SlashTokenValueSpec<T>,
+{
+    fn parse<'a>(
+        &self,
+        parser: &mut SlashArgsParser<'a>,
+    ) -> Result<Vec<T>, SlashCommandUsageErrorKind> {
+        parser.positional_list(&self.spec)
+    }
+
+    fn serialize(&self, value: &Vec<T>, serializer: &mut SlashArgsSerializer) {
+        serializer.list(value.iter().cloned(), &self.spec);
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) struct SlashNamedCodec<S> {
+    key: &'static str,
+    spec: S,
+}
+
+#[allow(dead_code)]
+pub(crate) fn named<S>(key: &'static str, spec: S) -> SlashNamedCodec<S> {
+    SlashNamedCodec { key, spec }
+}
+
+impl<T, S> SlashArgsCodec<Option<T>> for SlashNamedCodec<S>
+where
+    S: SlashTokenValueSpec<T>,
+{
+    fn parse<'a>(
+        &self,
+        parser: &mut SlashArgsParser<'a>,
+    ) -> Result<Option<T>, SlashCommandUsageErrorKind> {
+        parser.named(self.key, &self.spec)
+    }
+
+    fn serialize(&self, value: &Option<T>, serializer: &mut SlashArgsSerializer) {
+        if let Some(value) = value {
+            serializer.named(self.key, value, &self.spec);
+        }
+    }
+}
+
+pub(crate) struct SlashNamedOrPositionalCodec<S> {
+    key: &'static str,
+    spec: S,
+}
+
+pub(crate) fn named_or_positional<S>(key: &'static str, spec: S) -> SlashNamedOrPositionalCodec<S> {
+    SlashNamedOrPositionalCodec { key, spec }
+}
+
+impl<T, S> SlashArgsCodec<T> for SlashNamedOrPositionalCodec<S>
+where
+    S: SlashTokenValueSpec<T>,
+{
+    fn parse<'a>(&self, parser: &mut SlashArgsParser<'a>) -> Result<T, SlashCommandUsageErrorKind> {
+        match parser.named(self.key, &self.spec)? {
+            Some(value) => Ok(value),
+            None => parser.positional(&self.spec),
+        }
+    }
+
+    fn serialize(&self, value: &T, serializer: &mut SlashArgsSerializer) {
+        serializer.positional(value, &self.spec);
+    }
+}
+
+pub(crate) struct SlashRemainderCodec<S> {
+    spec: S,
+}
+
+pub(crate) fn remainder<S>(spec: S) -> SlashRemainderCodec<S> {
+    SlashRemainderCodec { spec }
+}
+
+impl<T, S> SlashArgsCodec<T> for SlashRemainderCodec<S>
+where
+    S: SlashTextValueSpec<T>,
+{
+    fn parse<'a>(&self, parser: &mut SlashArgsParser<'a>) -> Result<T, SlashCommandUsageErrorKind> {
+        parser.required_remainder(&self.spec)
+    }
+
+    fn serialize(&self, value: &T, serializer: &mut SlashArgsSerializer) {
+        serializer.remainder(value, &self.spec);
+    }
+
+    fn finish<'a>(&self, _parser: SlashArgsParser<'a>) -> Result<(), SlashCommandUsageErrorKind> {
+        Ok(())
     }
 }
 

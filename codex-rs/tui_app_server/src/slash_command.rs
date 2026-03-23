@@ -4,15 +4,17 @@ use strum_macros::IntoStaticStr;
 
 use crate::app_event::FeedbackCategory;
 use crate::bottom_pane::StatusLineItem;
-use crate::slash_command_protocol::SlashArgsParser;
-use crate::slash_command_protocol::SlashArgsSerializer;
-use crate::slash_command_protocol::SlashCommandArgs;
+use crate::slash_command_protocol::SlashArgsCodec;
 use crate::slash_command_protocol::SlashCommandParseInput;
 use crate::slash_command_protocol::SlashCommandUsageErrorKind;
 use crate::slash_command_protocol::SlashSerializedText;
 pub(crate) use crate::slash_command_protocol::SlashTextArg;
 use crate::slash_command_protocol::enum_choice;
 use crate::slash_command_protocol::from_str_value;
+use crate::slash_command_protocol::list;
+use crate::slash_command_protocol::named_or_positional;
+use crate::slash_command_protocol::positional;
+use crate::slash_command_protocol::remainder;
 use crate::slash_command_protocol::string;
 use crate::slash_command_protocol::text;
 
@@ -119,10 +121,26 @@ const FEEDBACK_CATEGORY_CHOICES: &[(&str, FeedbackCategory)] = &[
     ("other", FeedbackCategory::Other),
 ];
 
-pub(crate) trait SlashCommandInlineArgs: SlashCommandArgs + Sized {
+pub(crate) trait SlashCommandInlineArgs: Sized {
     const USAGE_LINES: &'static [&'static str];
+    fn codec() -> Box<dyn SlashArgsCodec<Self>>;
 
     fn into_invocation(self) -> SlashCommandInvocation;
+
+    fn parse_inline(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind> {
+        let codec = Self::codec();
+        let mut parser = crate::slash_command_protocol::SlashArgsParser::new(input)?;
+        let value = codec.parse(&mut parser)?;
+        codec.finish(parser)?;
+        Ok(value)
+    }
+
+    fn serialize_inline(&self) -> SlashSerializedText {
+        let codec = Self::codec();
+        let mut serializer = crate::slash_command_protocol::SlashArgsSerializer::default();
+        codec.serialize(self, &mut serializer);
+        serializer.finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,23 +148,15 @@ pub(crate) struct FastArgs {
     pub(crate) mode: FastSlashCommandArgs,
 }
 
-impl SlashCommandArgs for FastArgs {
-    fn parse(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind> {
-        let mut parser = SlashArgsParser::new(input)?;
-        let mode = parser.positional(&enum_choice(FAST_MODE_CHOICES).ascii_case_insensitive())?;
-        parser.finish()?;
-        Ok(Self { mode })
-    }
-
-    fn serialize(&self) -> SlashSerializedText {
-        let mut serializer = SlashArgsSerializer::default();
-        serializer.positional(&self.mode, &enum_choice(FAST_MODE_CHOICES));
-        serializer.finish()
-    }
-}
-
 impl SlashCommandInlineArgs for FastArgs {
     const USAGE_LINES: &'static [&'static str] = &["/fast", "/fast [on|off|status]"];
+
+    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+        Box::new(
+            positional(enum_choice(FAST_MODE_CHOICES).ascii_case_insensitive())
+                .map_result(|mode| Ok(Self { mode }), |args| args.mode),
+        )
+    }
 
     fn into_invocation(self) -> SlashCommandInvocation {
         SlashCommandInvocation::Fast(self)
@@ -158,22 +168,14 @@ pub(crate) struct RenameArgs {
     pub(crate) title: SlashTextArg,
 }
 
-impl SlashCommandArgs for RenameArgs {
-    fn parse(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind> {
-        let parser = SlashArgsParser::new(input)?;
-        let title = parser.required_remainder(&text())?;
-        Ok(Self { title })
-    }
-
-    fn serialize(&self) -> SlashSerializedText {
-        let mut serializer = SlashArgsSerializer::default();
-        serializer.remainder(&self.title, &text());
-        serializer.finish()
-    }
-}
-
 impl SlashCommandInlineArgs for RenameArgs {
     const USAGE_LINES: &'static [&'static str] = &["/rename", "/rename <title>"];
+
+    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+        Box::new(
+            remainder(text()).map_result(|title| Ok(Self { title }), |args| args.title.clone()),
+        )
+    }
 
     fn into_invocation(self) -> SlashCommandInvocation {
         SlashCommandInvocation::Rename(self)
@@ -185,22 +187,14 @@ pub(crate) struct PlanArgs {
     pub(crate) prompt: SlashTextArg,
 }
 
-impl SlashCommandArgs for PlanArgs {
-    fn parse(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind> {
-        let parser = SlashArgsParser::new(input)?;
-        let prompt = parser.required_remainder(&text())?;
-        Ok(Self { prompt })
-    }
-
-    fn serialize(&self) -> SlashSerializedText {
-        let mut serializer = SlashArgsSerializer::default();
-        serializer.remainder(&self.prompt, &text());
-        serializer.finish()
-    }
-}
-
 impl SlashCommandInlineArgs for PlanArgs {
     const USAGE_LINES: &'static [&'static str] = &["/plan", "/plan <prompt>"];
+
+    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+        Box::new(
+            remainder(text()).map_result(|prompt| Ok(Self { prompt }), |args| args.prompt.clone()),
+        )
+    }
 
     fn into_invocation(self) -> SlashCommandInvocation {
         SlashCommandInvocation::Plan(self)
@@ -212,22 +206,15 @@ pub(crate) struct ReviewArgs {
     pub(crate) instructions: SlashTextArg,
 }
 
-impl SlashCommandArgs for ReviewArgs {
-    fn parse(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind> {
-        let parser = SlashArgsParser::new(input)?;
-        let instructions = parser.required_remainder(&text())?;
-        Ok(Self { instructions })
-    }
-
-    fn serialize(&self) -> SlashSerializedText {
-        let mut serializer = SlashArgsSerializer::default();
-        serializer.remainder(&self.instructions, &text());
-        serializer.finish()
-    }
-}
-
 impl SlashCommandInlineArgs for ReviewArgs {
     const USAGE_LINES: &'static [&'static str] = &["/review", "/review <instructions>"];
+
+    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+        Box::new(remainder(text()).map_result(
+            |instructions| Ok(Self { instructions }),
+            |args| args.instructions.clone(),
+        ))
+    }
 
     fn into_invocation(self) -> SlashCommandInvocation {
         SlashCommandInvocation::Review(self)
@@ -239,29 +226,18 @@ pub(crate) struct SandboxReadRootArgs {
     pub(crate) path: String,
 }
 
-impl SlashCommandArgs for SandboxReadRootArgs {
-    fn parse(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind> {
-        let mut parser = SlashArgsParser::new(input)?;
-        let path = match parser.named("path", &string())? {
-            Some(path) => path,
-            None => parser.positional(&string())?,
-        };
-        parser.finish()?;
-        Ok(Self { path })
-    }
-
-    fn serialize(&self) -> SlashSerializedText {
-        let mut serializer = SlashArgsSerializer::default();
-        serializer.positional(&self.path, &string());
-        serializer.finish()
-    }
-}
-
 impl SlashCommandInlineArgs for SandboxReadRootArgs {
     const USAGE_LINES: &'static [&'static str] = &[
         "/sandbox-add-read-dir <absolute-path>",
         "/sandbox-add-read-dir --path=<absolute-path>",
     ];
+
+    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+        Box::new(
+            named_or_positional("path", string())
+                .map_result(|path| Ok(Self { path }), |args| args.path.clone()),
+        )
+    }
 
     fn into_invocation(self) -> SlashCommandInvocation {
         SlashCommandInvocation::SandboxReadRoot(self)
@@ -273,26 +249,18 @@ pub(crate) struct FeedbackArgs {
     pub(crate) category: FeedbackCategory,
 }
 
-impl SlashCommandArgs for FeedbackArgs {
-    fn parse(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind> {
-        let mut parser = SlashArgsParser::new(input)?;
-        let category = parser.positional(&enum_choice(FEEDBACK_CATEGORY_CHOICES))?;
-        parser.finish()?;
-        Ok(Self { category })
-    }
-
-    fn serialize(&self) -> SlashSerializedText {
-        let mut serializer = SlashArgsSerializer::default();
-        serializer.positional(&self.category, &enum_choice(FEEDBACK_CATEGORY_CHOICES));
-        serializer.finish()
-    }
-}
-
 impl SlashCommandInlineArgs for FeedbackArgs {
     const USAGE_LINES: &'static [&'static str] = &[
         "/feedback",
         "/feedback <bad-result|good-result|bug|safety-check|other>",
     ];
+
+    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+        Box::new(
+            positional(enum_choice(FEEDBACK_CATEGORY_CHOICES))
+                .map_result(|category| Ok(Self { category }), |args| args.category),
+        )
+    }
 
     fn into_invocation(self) -> SlashCommandInvocation {
         SlashCommandInvocation::Feedback(self)
@@ -304,29 +272,21 @@ pub(crate) struct StatuslineArgs {
     pub(crate) items: Vec<StatusLineItem>,
 }
 
-impl SlashCommandArgs for StatuslineArgs {
-    fn parse(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind> {
-        let mut parser = SlashArgsParser::new(input)?;
-        let items = parser.positional_list(&from_str_value::<StatusLineItem>())?;
-        parser.finish()?;
-        if items.is_empty() {
-            return Err(SlashCommandUsageErrorKind::InvalidInlineArgs);
-        }
-        Ok(Self { items })
-    }
-
-    fn serialize(&self) -> SlashSerializedText {
-        let mut serializer = SlashArgsSerializer::default();
-        serializer.list(
-            self.items.iter().cloned(),
-            &from_str_value::<StatusLineItem>(),
-        );
-        serializer.finish()
-    }
-}
-
 impl SlashCommandInlineArgs for StatuslineArgs {
     const USAGE_LINES: &'static [&'static str] = &["/statusline", "/statusline <item>..."];
+
+    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+        Box::new(list(from_str_value::<StatusLineItem>()).map_result(
+            |items| {
+                if items.is_empty() {
+                    Err(SlashCommandUsageErrorKind::InvalidInlineArgs)
+                } else {
+                    Ok(Self { items })
+                }
+            },
+            |args| args.items.clone(),
+        ))
+    }
 
     fn into_invocation(self) -> SlashCommandInvocation {
         SlashCommandInvocation::Statusline(self)
@@ -367,13 +327,13 @@ impl SlashCommandInvocation {
         let prefix = format!("/{}", self.command().command());
         match self {
             Self::Bare(_) => SlashSerializedText::empty().with_prefix(&prefix),
-            Self::Fast(args) => args.serialize().with_prefix(&prefix),
-            Self::Rename(args) => args.serialize().with_prefix(&prefix),
-            Self::Plan(args) => args.serialize().with_prefix(&prefix),
-            Self::Review(args) => args.serialize().with_prefix(&prefix),
-            Self::SandboxReadRoot(args) => args.serialize().with_prefix(&prefix),
-            Self::Feedback(args) => args.serialize().with_prefix(&prefix),
-            Self::Statusline(args) => args.serialize().with_prefix(&prefix),
+            Self::Fast(args) => args.serialize_inline().with_prefix(&prefix),
+            Self::Rename(args) => args.serialize_inline().with_prefix(&prefix),
+            Self::Plan(args) => args.serialize_inline().with_prefix(&prefix),
+            Self::Review(args) => args.serialize_inline().with_prefix(&prefix),
+            Self::SandboxReadRoot(args) => args.serialize_inline().with_prefix(&prefix),
+            Self::Feedback(args) => args.serialize_inline().with_prefix(&prefix),
+            Self::Statusline(args) => args.serialize_inline().with_prefix(&prefix),
         }
     }
 
@@ -411,7 +371,7 @@ fn parse_typed_inline<T>(
 where
     T: SlashCommandInlineArgs,
 {
-    T::parse(input).map(T::into_invocation)
+    T::parse_inline(input).map(T::into_invocation)
 }
 
 // ===== /model =====
