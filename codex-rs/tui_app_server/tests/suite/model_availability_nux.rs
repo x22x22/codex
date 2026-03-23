@@ -139,13 +139,7 @@ trust_level = "trusted"
     let mut exit_rx = exit_rx;
     let writer_tx = session.writer_sender();
     let interrupt_writer = writer_tx.clone();
-    let interrupt_task = tokio::spawn(async move {
-        sleep(Duration::from_secs(2)).await;
-        for _ in 0..4 {
-            let _ = interrupt_writer.send(vec![3]).await;
-            sleep(Duration::from_millis(500)).await;
-        }
-    });
+    let mut startup_ready = false;
 
     let exit_code_result = timeout(Duration::from_secs(15), async {
         loop {
@@ -156,6 +150,19 @@ trust_level = "trusted"
                             let _ = writer_tx.send(b"\x1b[1;1R".to_vec()).await;
                         }
                         output.extend_from_slice(&chunk);
+                        if !startup_ready {
+                            let output_text = String::from_utf8_lossy(&output);
+                            if output_text.contains("OpenAI Codex")
+                                || output_text.contains("model:")
+                                || output_text.contains("directory:")
+                            {
+                                startup_ready = true;
+                                for _ in 0..4 {
+                                    let _ = interrupt_writer.send(vec![3]).await;
+                                    sleep(Duration::from_millis(500)).await;
+                                }
+                            }
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break exit_rx.await,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
@@ -165,8 +172,6 @@ trust_level = "trusted"
         }
     })
     .await;
-
-    interrupt_task.abort();
 
     let exit_code = match exit_code_result {
         Ok(Ok(code)) => code,
