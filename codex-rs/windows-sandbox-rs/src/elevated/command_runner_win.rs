@@ -224,6 +224,7 @@ fn spawn_ipc_process(
     let effective_cwd = effective_cwd(&req.cwd, Some(log_dir.as_path()));
 
     let mut hpc_handle: Option<HANDLE> = None;
+    let mut desktop_owner = None;
     let mut pipe_handles = None;
     let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
         let (pi, conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
@@ -234,8 +235,9 @@ fn spawn_ipc_process(
             req.use_private_desktop,
             Some(log_dir.as_path()),
         )?;
-        let (hpc, input_write, output_read) = conpty.into_raw();
+        let (hpc, input_write, output_read, desktop) = conpty.into_raw();
         hpc_handle = Some(hpc);
+        desktop_owner = Some(desktop);
         let stdin_handle = if req.stdin_open {
             Some(input_write)
         } else {
@@ -279,6 +281,7 @@ fn spawn_ipc_process(
     unsafe {
         CloseHandle(h_token);
     }
+    let _desktop_owner = desktop_owner;
 
     Ok(IpcSpawnedProcess {
         log_dir,
