@@ -668,14 +668,23 @@ async fn driver_backed_process_can_resize_via_resizer_hook() -> anyhow::Result<(
         })),
     });
 
-    spawned.session.resize(TerminalSize { rows: 40, cols: 120 })?;
+    spawned.session.resize(TerminalSize {
+        rows: 40,
+        cols: 120,
+    })?;
     exit_tx.send(0).expect("send exit code");
 
     let resized = tokio::time::timeout(tokio::time::Duration::from_secs(2), size_rx)
         .await
         .map_err(|_| anyhow::anyhow!("timed out waiting for resize"))?
         .expect("receive resized terminal size");
-    assert_eq!(resized, TerminalSize { rows: 40, cols: 120 });
+    assert_eq!(
+        resized,
+        TerminalSize {
+            rows: 40,
+            cols: 120
+        }
+    );
 
     Ok(())
 }
