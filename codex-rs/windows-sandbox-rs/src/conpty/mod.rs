@@ -6,12 +6,10 @@
 //! `tty=true`. The helpers are not tied to the IPC layer and can be reused by other
 //! Windows sandbox flows that need a PTY.
 
-mod proc_thread_attr;
-
-use self::proc_thread_attr::ProcThreadAttributeList;
 use crate::desktop::LaunchDesktop;
+use crate::proc_thread_attr::ProcThreadAttributeList;
+use crate::winutil::argv_to_command_line;
 use crate::winutil::format_last_error;
-use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use codex_utils_pty::RawConPty;
@@ -64,22 +62,6 @@ impl ConptyInstance {
     }
 }
 
-/// Create a ConPTY with backing pipes.
-///
-/// This is public so callers that need lower-level PTY setup can build on the same
-/// primitive, although the common entry point is `spawn_conpty_process_as_user`.
-pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
-    let raw = RawConPty::new(cols, rows)?;
-    let (hpc, input_write, output_read) = raw.into_raw_handles();
-
-    Ok(ConptyInstance {
-        hpc: hpc as HANDLE,
-        input_write: input_write as HANDLE,
-        output_read: output_read as HANDLE,
-        _desktop: LaunchDesktop::prepare(false, None)?,
-    })
-}
-
 /// Spawn a process under `h_token` with ConPTY attached.
 ///
 /// This is the main shared ConPTY entry point and is used by both the legacy/direct path
@@ -92,12 +74,13 @@ pub fn spawn_conpty_process_as_user(
     use_private_desktop: bool,
     logs_base_dir: Option<&Path>,
 ) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
-    let cmdline_str = argv
-        .iter()
-        .map(|arg| quote_windows_arg(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
+    let application_name = argv
+        .first()
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+        .map(to_wide);
     let env_block = make_env_block(env_map);
     let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
     si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
@@ -108,7 +91,14 @@ pub fn spawn_conpty_process_as_user(
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
 
-    let conpty = create_conpty(80, 24)?;
+    let raw = RawConPty::new(80, 24)?;
+    let (hpc, input_write, output_read) = raw.into_raw_handles();
+    let conpty = ConptyInstance {
+        hpc: hpc as HANDLE,
+        input_write: input_write as HANDLE,
+        output_read: output_read as HANDLE,
+        _desktop: desktop,
+    };
     let mut attrs = ProcThreadAttributeList::new(1)?;
     attrs.set_pseudoconsole(conpty.hpc)?;
     si.lpAttributeList = attrs.as_mut_ptr();
@@ -117,7 +107,9 @@ pub fn spawn_conpty_process_as_user(
     let ok = unsafe {
         CreateProcessAsUserW(
             h_token,
-            std::ptr::null(),
+            application_name
+                .as_ref()
+                .map_or(std::ptr::null(), std::vec::Vec::as_ptr),
             cmdline.as_mut_ptr(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -140,7 +132,5 @@ pub fn spawn_conpty_process_as_user(
             env_block.len()
         ));
     }
-    let mut conpty = conpty;
-    conpty._desktop = desktop;
     Ok((pi, conpty))
 }

@@ -295,16 +295,11 @@ pub(crate) struct ToolsConfigParams<'a> {
 }
 
 fn unified_exec_allowed_in_environment(
-    is_windows: bool,
-    sandbox_policy: &SandboxPolicy,
-    windows_sandbox_level: WindowsSandboxLevel,
+    _is_windows: bool,
+    _sandbox_policy: &SandboxPolicy,
+    _windows_sandbox_level: WindowsSandboxLevel,
 ) -> bool {
-    !(is_windows
-        && windows_sandbox_level != WindowsSandboxLevel::Disabled
-        && !matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ))
+    true
 }
 
 impl ToolsConfig {

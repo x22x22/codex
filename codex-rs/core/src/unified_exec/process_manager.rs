@@ -50,6 +50,7 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_protocol::protocol::SandboxPolicy;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -542,12 +543,77 @@ impl UnifiedExecProcessManager {
         env: &ExecRequest,
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
+        policy: Option<&SandboxPolicy>,
+        sandbox_policy_cwd: Option<&std::path::Path>,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let (program, args) = env
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
         let inherited_fds = spawn_lifecycle.inherited_fds();
+
+        #[cfg(target_os = "windows")]
+        if env.sandbox == crate::exec::SandboxType::WindowsRestrictedToken {
+            let policy = policy.ok_or_else(|| {
+                UnifiedExecError::create_process(
+                    "missing Windows sandbox policy for unified exec".to_string(),
+                )
+            })?;
+            let sandbox_policy_cwd = sandbox_policy_cwd.ok_or_else(|| {
+                UnifiedExecError::create_process(
+                    "missing Windows sandbox cwd for unified exec".to_string(),
+                )
+            })?;
+            let policy_json = serde_json::to_string(policy).map_err(|err| {
+                UnifiedExecError::create_process(format!(
+                    "failed to serialize Windows sandbox policy: {err}"
+                ))
+            })?;
+            let codex_home = crate::config::find_codex_home().map_err(|err| {
+                UnifiedExecError::create_process(format!(
+                    "windows sandbox: failed to resolve codex_home: {err}"
+                ))
+            })?;
+            let spawned = match env.windows_sandbox_level {
+                codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
+                    codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
+                        policy_json.as_str(),
+                        sandbox_policy_cwd,
+                        codex_home.as_ref(),
+                        env.command.clone(),
+                        env.cwd.as_path(),
+                        env.env.clone(),
+                        None,
+                        tty,
+                        tty,
+                        env.windows_sandbox_private_desktop,
+                    )
+                    .await
+                }
+                _ => {
+                    codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
+                        policy_json.as_str(),
+                        sandbox_policy_cwd,
+                        codex_home.as_ref(),
+                        env.command.clone(),
+                        env.cwd.as_path(),
+                        env.env.clone(),
+                        None,
+                        tty,
+                        tty,
+                        env.windows_sandbox_private_desktop,
+                    )
+                    .await
+                }
+            };
+            spawn_lifecycle.after_spawn();
+            return UnifiedExecProcess::from_spawned(
+                spawned.map_err(|err| UnifiedExecError::create_process(err.to_string()))?,
+                env.sandbox,
+                spawn_lifecycle,
+            )
+            .await;
+        }
 
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(

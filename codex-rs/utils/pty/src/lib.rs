@@ -15,6 +15,10 @@ pub use pipe::spawn_process as spawn_pipe_process;
 pub use pipe::spawn_process_no_stdin as spawn_pipe_process_no_stdin;
 /// Combine stdout/stderr receivers into a single broadcast receiver.
 pub use process::combine_output_receivers;
+/// Build a spawned process from externally managed stdin/output/exit channels.
+pub use process::spawn_from_driver;
+/// Driver-backed process wiring for externally managed backends.
+pub use process::ProcessDriver;
 /// Handle for interacting with a spawned process (PTY or pipe).
 pub use process::ProcessHandle;
 /// Bundle of process handles plus split output and exit receivers returned by spawn helpers.

@@ -1,14 +1,6 @@
 mod windows_impl {
-    use crate::acl::allow_null_device;
-    use crate::allow::compute_allow_paths;
-    use crate::allow::AllowDenyPaths;
-    use crate::cap::load_or_create_cap_sids;
-    use crate::env::ensure_non_interactive_pager;
-    use crate::env::inherit_path_env;
-    use crate::env::normalize_null_device_env;
     use crate::helper_materialization::resolve_helper_for_launch;
     use crate::helper_materialization::HelperExecutable;
-    use crate::identity::require_logon_sandbox_creds;
     use crate::ipc_framed::decode_bytes;
     use crate::ipc_framed::read_frame;
     use crate::ipc_framed::write_frame;
@@ -17,12 +9,8 @@ mod windows_impl {
     use crate::ipc_framed::OutputStream;
     use crate::ipc_framed::SpawnRequest;
     use crate::logging::log_failure;
-    use crate::logging::log_note;
-    use crate::logging::log_start;
     use crate::logging::log_success;
-    use crate::policy::parse_policy;
-    use crate::policy::SandboxPolicy;
-    use crate::token::convert_string_sid_to_sid;
+    use crate::spawn_prep::prepare_elevated_spawn_context;
     use crate::winutil::quote_windows_arg;
     use crate::winutil::resolve_sid;
     use crate::winutil::string_from_sid_bytes;
@@ -57,67 +45,6 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
     use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
-
-    /// Ensures the parent directory of a path exists before writing to it.
-    /// Walks upward from `start` to locate the git worktree root, following gitfile redirects.
-    fn find_git_root(start: &Path) -> Option<PathBuf> {
-        let mut cur = dunce::canonicalize(start).ok()?;
-        loop {
-            let marker = cur.join(".git");
-            if marker.is_dir() {
-                return Some(cur);
-            }
-            if marker.is_file() {
-                if let Ok(txt) = std::fs::read_to_string(&marker) {
-                    if let Some(rest) = txt.trim().strip_prefix("gitdir:") {
-                        let gitdir = rest.trim();
-                        let resolved = if Path::new(gitdir).is_absolute() {
-                            PathBuf::from(gitdir)
-                        } else {
-                            cur.join(gitdir)
-                        };
-                        return resolved.parent().map(|p| p.to_path_buf()).or(Some(cur));
-                    }
-                }
-                return Some(cur);
-            }
-            let parent = cur.parent()?;
-            if parent == cur {
-                return None;
-            }
-            cur = parent.to_path_buf();
-        }
-    }
-
-    /// Creates the sandbox user's Codex home directory if it does not already exist.
-    fn ensure_codex_home_exists(p: &Path) -> Result<()> {
-        std::fs::create_dir_all(p)?;
-        Ok(())
-    }
-
-    /// Adds a git safe.directory entry to the environment when running inside a repository.
-    /// git will not otherwise allow the Sandbox user to run git commands on the repo directory
-    /// which is owned by the primary user.
-    fn inject_git_safe_directory(
-        env_map: &mut HashMap<String, String>,
-        cwd: &Path,
-        _logs_base_dir: Option<&Path>,
-    ) {
-        if let Some(git_root) = find_git_root(cwd) {
-            let mut cfg_count: usize = env_map
-                .get("GIT_CONFIG_COUNT")
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(0);
-            let git_path = git_root.to_string_lossy().replace("\\\\", "/");
-            env_map.insert(
-                format!("GIT_CONFIG_KEY_{cfg_count}"),
-                "safe.directory".to_string(),
-            );
-            env_map.insert(format!("GIT_CONFIG_VALUE_{cfg_count}"), git_path);
-            cfg_count += 1;
-            env_map.insert("GIT_CONFIG_COUNT".to_string(), cfg_count.to_string());
-        }
-    }
 
     /// Resolves the command runner path, preferring CODEX_HOME/.sandbox/bin.
     fn find_runner_exe(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
@@ -212,56 +139,21 @@ mod windows_impl {
         timeout_ms: Option<u64>,
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
-        let policy = parse_policy(policy_json_or_preset)?;
-        normalize_null_device_env(&mut env_map);
-        ensure_non_interactive_pager(&mut env_map);
-        inherit_path_env(&mut env_map);
-        inject_git_safe_directory(&mut env_map, cwd, None);
-        let current_dir = cwd.to_path_buf();
-        // Use a temp-based log dir that the sandbox user can write.
-        let sandbox_base = codex_home.join(".sandbox");
-        ensure_codex_home_exists(&sandbox_base)?;
-
-        let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
-        log_start(&command, logs_base_dir);
-        let sandbox_creds =
-            require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
-        let sandbox_sid = resolve_sid(&sandbox_creds.username).map_err(|err: anyhow::Error| {
-            io::Error::new(io::ErrorKind::PermissionDenied, err.to_string())
-        })?;
+        let elevated = prepare_elevated_spawn_context(
+            policy_json_or_preset,
+            sandbox_policy_cwd,
+            codex_home,
+            cwd,
+            &mut env_map,
+            &command,
+        )?;
+        let logs_base_dir: Option<&Path> = Some(elevated.common.sandbox_base.as_path());
+        let sandbox_sid =
+            resolve_sid(&elevated.sandbox_creds.username).map_err(|err: anyhow::Error| {
+                io::Error::new(io::ErrorKind::PermissionDenied, err.to_string())
+            })?;
         let sandbox_sid = string_from_sid_bytes(&sandbox_sid)
             .map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))?;
-        // Build capability SID for ACL grants.
-        if matches!(
-            &policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ) {
-            anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
-        }
-        let caps = load_or_create_cap_sids(codex_home)?;
-        let (psid_to_use, cap_sids) = match &policy {
-            SandboxPolicy::ReadOnly { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
-                vec![caps.readonly.clone()],
-            ),
-            SandboxPolicy::WorkspaceWrite { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
-                vec![
-                    caps.workspace.clone(),
-                    crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
-                ],
-            ),
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                unreachable!("DangerFullAccess handled above")
-            }
-        };
-
-        let AllowDenyPaths { allow: _, deny: _ } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
-        // Deny/allow ACEs are now applied during setup; avoid per-command churn.
-        unsafe {
-            allow_null_device(psid_to_use);
-        }
 
         let pipe_in_name = pipe_name("in");
         let pipe_out_name = pipe_name("out");
@@ -272,7 +164,7 @@ mod windows_impl {
         let runner_exe = find_runner_exe(codex_home, logs_base_dir);
         let runner_cmdline = runner_exe
             .to_str()
-            .map(|s| s.to_string())
+            .map(|s: &str| s.to_string())
             .unwrap_or_else(|| "codex-command-runner.exe".to_string());
         let runner_full_cmd = format!(
             "{} {} {}",
@@ -289,21 +181,11 @@ mod windows_impl {
         let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
         si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-        let user_w = to_wide(&sandbox_creds.username);
+        let user_w = to_wide(&elevated.sandbox_creds.username);
         let domain_w = to_wide(".");
-        let password_w = to_wide(&sandbox_creds.password);
+        let password_w = to_wide(&elevated.sandbox_creds.password);
         // Suppress WER/UI popups from the runner process so we can collect exit codes.
         let _ = unsafe { SetErrorMode(0x0001 | 0x0002) }; // SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
-
-        log_note(
-            &format!(
-                "runner launch: exe={} cmdline={} cwd={}",
-                runner_exe.display(),
-                runner_full_cmd,
-                cwd.display()
-            ),
-            logs_base_dir,
-        );
 
         // Ensure command line buffer is mutable and includes the exe as argv[0].
         let spawn_res = unsafe {
@@ -327,14 +209,6 @@ mod windows_impl {
         };
         if spawn_res == 0 {
             let err = unsafe { GetLastError() } as i32;
-            log_note(
-                &format!(
-                    "runner launch failed before process start: exe={} cmdline={} error={err}",
-                    runner_exe.display(),
-                    runner_full_cmd
-                ),
-                logs_base_dir,
-            );
             return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
         }
 
@@ -378,9 +252,9 @@ mod windows_impl {
                         env: env_map.clone(),
                         policy_json_or_preset: policy_json_or_preset.to_string(),
                         sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
-                        codex_home: sandbox_base.clone(),
+                        codex_home: elevated.common.sandbox_base.clone(),
                         real_codex_home: codex_home.to_path_buf(),
-                        cap_sids,
+                        cap_sids: elevated.cap_sids.clone(),
                         timeout_ms,
                         tty: false,
                         stdin_open: false,
@@ -406,6 +280,9 @@ mod windows_impl {
                             OutputStream::Stderr => stderr.extend_from_slice(&bytes),
                         }
                     }
+                    Message::Stdin { .. } => {}
+                    Message::CloseStdin { .. } => {}
+                    Message::Resize { .. } => {}
                     Message::Exit { payload } => break (payload.exit_code, payload.timed_out),
                     Message::Error { payload } => {
                         return Err(anyhow::anyhow!("runner error: {}", payload.message));

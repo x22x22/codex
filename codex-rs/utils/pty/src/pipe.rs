@@ -239,6 +239,7 @@ async fn spawn_process_with_stdin_mode(
         exit_status,
         exit_code,
         /*pty_handles*/ None,
+        /*resizer*/ None,
     );
 
     Ok(SpawnedProcess {

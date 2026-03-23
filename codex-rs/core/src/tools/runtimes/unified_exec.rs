@@ -242,6 +242,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             &prepared.exec_request,
                             req.tty,
                             prepared.spawn_lifecycle,
+                            None,
+                            None,
                         )
                         .await
                         .map_err(|err| match err {
@@ -275,7 +277,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
-            .open_session_with_exec_env(&exec_env, req.tty, Box::new(NoopSpawnLifecycle))
+            .open_session_with_exec_env(
+                &exec_env,
+                req.tty,
+                Box::new(NoopSpawnLifecycle),
+                Some(attempt.policy),
+                Some(attempt.sandbox_cwd),
+            )
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {
