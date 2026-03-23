@@ -147,6 +147,7 @@ fn image_detail_original_feature_is_under_development() {
     assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
 }
 
+#[test]
 fn item_metadata_is_under_development_and_disabled_by_default() {
     assert_eq!(Feature::ItemMetadata.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::ItemMetadata.default_enabled(), false);

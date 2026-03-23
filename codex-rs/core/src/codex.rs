@@ -1016,7 +1016,7 @@ fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
     }
 }
 
-fn stamp_tool_metadata_on_response_item(
+fn set_tool_response_item_metadata(
     item: ResponseItem,
     metadata: ResponseItemMetadata,
 ) -> ResponseItem {
@@ -1083,7 +1083,7 @@ fn stamp_tool_sandbox_policy_on_response_item(
     metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
         turn_context.sandbox_policy.get(),
     ));
-    stamp_tool_metadata_on_response_item(response_item, metadata)
+    set_tool_response_item_metadata(response_item, metadata)
 }
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
