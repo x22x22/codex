@@ -43,13 +43,12 @@ The current repo now contains these implementation slices:
   package inspection, activity launch, input injection, and UI dumping instead
   of host-side Kotlin wrappers for those operations.
 - The hosted `codex app-server` process now routes `/v1/responses` traffic over
-  the existing app-server JSON-RPC channel to the Android host, and the Android
-  host forwards that traffic to the Agent over the framework session bridge.
-  This keeps network/auth Agent-owned without depending on target-sandbox local
-  sockets or direct cross-app IPC.
-- The session bridge now exposes a **narrow Responses transport** owned by the
-  Agent app itself, so Genie model traffic no longer depends on any separate
-  sidecar socket service.
+  the existing app-server JSON-RPC channel to the Android host, and the Genie
+  host now executes those requests through the framework-owned HTTP session
+  bridge instead of bouncing them through the Agent app UID.
+- The Agent now provisions per-session network config with auth/base-url
+  inputs before each Genie start, while the framework owns active session
+  `/responses` execution and streaming.
 - The Genie runtime now keeps host dynamic tools limited to framework-only
   detached-target controls and frame capture, while standard Android shell and
   device commands stay in the normal Codex tool path.
@@ -76,8 +75,9 @@ The current repo now contains these implementation slices:
   correct, for example `cmd activity start-activity --user 0 ...` or
   `am start --user 0 ...`.
 
-The Android app now owns auth, runtime status, and Genie Responses forwarding
-directly through the hosted Agent runtime. The older standalone
+The Android app now owns auth origination, runtime status, and per-session
+transport configuration handoff. Active Genie model traffic is framework-owned.
+The older standalone
 service/client split has been removed from the repo and is no longer part of
 the Android Agent/Genie flow.
 
@@ -98,17 +98,17 @@ the Android Agent/Genie flow.
 - The Agent decides which target package(s) should receive child Genie sessions.
 - Each child Genie decides its own local tool usage inside the paired sandbox.
 - The Agent is the only runtime that owns:
-  - auth
-  - outbound network access
-  - upstream provider selection
+  - sign-in UX and auth-material origination
+  - non-session outbound network access
+  - upstream provider selection and session-scoped network config handoff
   - orchestration of parent + child sessions
 - Internal Agent<->Genie coordination now splits into:
   - framework per-session bridges for fixed-form control/data RPC
   - AgentSDK session events for free-form product dialogue
 - hosted `codex app-server` inside Genie for the actual Codex execution loop
 - Genie-local transport termination between the hosted `codex` child process
-  and the framework session bridge
-- Agent-owned Responses transport termination between the framework session bridge
+  and the framework session bridges
+- framework-owned Responses transport termination between the live Genie session
   and the upstream model backend
 
 ## Runtime Model
@@ -127,7 +127,8 @@ the Android Agent/Genie flow.
   - starting Genie sessions
   - answering Genie questions
   - aggregating child progress/results into a parent task
-  - acting as the eventual network/auth proxy for Genie traffic
+  - provisioning per-session auth/base-url transport inputs for framework-owned
+    Genie traffic
 
 ### Genie
 
@@ -143,7 +144,8 @@ the Android Agent/Genie flow.
   - Android dynamic tool execution
   - Agent escalation via `request_user_input`
   - runtime bootstrap from the framework session bridge
-  - forwarding hosted `codex` `/v1/responses` traffic onto the framework session bridge
+  - forwarding hosted `codex` `/v1/responses` traffic onto the framework-owned
+    HTTP bridge
 
 ## First Milestone Scope
 
@@ -167,9 +169,9 @@ the Android Agent/Genie flow.
 - Agent-hosted runtime metadata for Genie bootstrap
 - Shell-first Genie execution for package inspection, activity launch, input injection, and UI dumping
 - Hosted `codex app-server` inside Genie, with model traffic routed through the
-  app-server request/response channel and then over the Agent framework session bridge
-- Agent-owned `/v1/responses` proxying in
-  `android/app/src/main/java/com/openai/codex/agent/AgentResponsesProxy.kt`
+  app-server request/response channel and then through the framework-owned HTTP bridge
+- Per-session framework transport provisioning in
+  `android/bridge/src/main/java/com/openai/codex/bridge/FrameworkSessionTransportCompat.kt`
 - Framework-only Android dynamic tools registered on the Genie Codex thread with:
   - detached target show/hide/attach/close
   - detached frame capture
@@ -210,13 +212,15 @@ the Android Agent/Genie flow.
   - Genie lifecycle host for the embedded `codex app-server`
 - `android/genie/src/main/java/com/openai/codex/genie/CodexAppServerHost.kt`
   - stdio JSON-RPC host for `codex app-server`, framework-only dynamic tools,
-    `request_user_input` bridging, and `/v1/responses` forwarding
+    `request_user_input` bridging, and `/v1/responses` forwarding onto the
+    framework-owned HTTP bridge
 - `android/app/src/main/java/com/openai/codex/agent/AgentSessionBridgeServer.kt`
   - Agent-side server for the framework-managed per-session bridge
 - `android/app/src/main/java/com/openai/codex/agent/AgentResponsesProxy.kt`
-  - Agent-owned Responses transport used by Genie model traffic
+  - Agent-owned Responses transport used by the hosted Agent runtime itself
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
-  - Genie-side client for the framework-managed session bridge
+  - Genie-side client for the framework-managed control bridge plus the
+    framework-owned HTTP bridge
 - `android/app/src/main/java/com/openai/codex/agent/AgentCodexAppServerClient.kt`
   - hosted Agent `codex app-server` client for planning, orchestration, auto-answering, runtime metadata, and narrow Agent tool calls
 

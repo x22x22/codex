@@ -7,6 +7,7 @@ import android.content.Context
 import android.os.Binder
 import android.os.Process
 import android.util.Log
+import com.openai.codex.bridge.FrameworkSessionTransportCompat
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.util.concurrent.Executor
 
@@ -157,6 +158,7 @@ class AgentSessionController(context: Context) {
                 childSessionIds += childSession.sessionId
                 presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
                 executionSettingsStore.saveSettings(childSession.sessionId, executionSettings)
+                provisionSessionNetworkConfig(childSession.sessionId)
                 manager.publishTrace(
                     parentSession.sessionId,
                     "Created child session ${childSession.sessionId} for ${target.packageName} with required final presentation ${target.finalPresentationPolicy.wireValue}.",
@@ -204,6 +206,7 @@ class AgentSessionController(context: Context) {
         presentationPolicyStore.savePolicy(session.sessionId, finalPresentationPolicy)
         executionSettingsStore.saveSettings(session.sessionId, executionSettings)
         try {
+            provisionSessionNetworkConfig(session.sessionId)
             manager.publishTrace(
                 session.sessionId,
                 "Starting Codex app-scoped session for $targetPackage with required final presentation ${finalPresentationPolicy.wireValue}.",
@@ -252,6 +255,7 @@ class AgentSessionController(context: Context) {
         presentationPolicyStore.savePolicy(sessionId, finalPresentationPolicy)
         executionSettingsStore.saveSettings(sessionId, executionSettings)
         try {
+            provisionSessionNetworkConfig(sessionId)
             manager.publishTrace(
                 sessionId,
                 "Starting Codex app-scoped session for $targetPackage with required final presentation ${finalPresentationPolicy.wireValue}.",
@@ -303,6 +307,7 @@ class AgentSessionController(context: Context) {
         AgentSessionBridgeServer.ensureStarted(appContext, manager, childSession.sessionId)
         presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
         executionSettingsStore.saveSettings(childSession.sessionId, executionSettings)
+        provisionSessionNetworkConfig(childSession.sessionId)
         manager.startGenieSession(
             childSession.sessionId,
             geniePackage,
@@ -384,6 +389,38 @@ class AgentSessionController(context: Context) {
 
     private fun requireAgentManager(): AgentManager {
         return checkNotNull(agentManager) { "AgentManager unavailable" }
+    }
+
+    private fun provisionSessionNetworkConfig(sessionId: String) {
+        val manager = requireAgentManager()
+        val configured = FrameworkSessionTransportCompat.setSessionNetworkConfig(
+            agentManager = manager,
+            sessionId = sessionId,
+            config = AgentResponsesProxy.buildFrameworkSessionNetworkConfig(
+                context = appContext,
+                upstreamBaseUrl = resolveUpstreamBaseUrl(),
+            ),
+        )
+        if (configured) {
+            Log.i(TAG, "Configured framework-owned /responses transport for $sessionId")
+        } else {
+            Log.i(
+                TAG,
+                "Framework-owned /responses transport unavailable for $sessionId; keeping Agent-owned fallback",
+            )
+        }
+    }
+
+    private fun resolveUpstreamBaseUrl(): String {
+        val cachedStatus = AgentCodexAppServerClient.currentRuntimeStatus()
+        if (cachedStatus?.upstreamBaseUrl?.isNotBlank() == true) {
+            return cachedStatus.upstreamBaseUrl
+        }
+        return runCatching {
+            AgentCodexAppServerClient.readRuntimeStatus(appContext).upstreamBaseUrl
+        }.getOrElse {
+            "provider-default"
+        }
     }
 
     private fun shouldRetryAnswerQuestion(

@@ -30,6 +30,17 @@ class AgentResponsesProxyTest {
     }
 
     @Test
+    fun buildResponsesBaseUrlKeepsConfiguredBaseWithoutTrailingSlash() {
+        assertEquals(
+            "https://example.invalid/custom",
+            AgentResponsesProxy.buildResponsesBaseUrl(
+                upstreamBaseUrl = "https://example.invalid/custom/",
+                authMode = "chatgpt",
+            ),
+        )
+    }
+
+    @Test
     fun loadAuthSnapshotReadsChatgptTokens() {
         val authFile = writeTempAuthJson(
             """

@@ -1,7 +1,9 @@
 package com.openai.codex.agent
 
 import android.content.Context
+import android.os.Bundle
 import android.util.Log
+import com.openai.codex.bridge.FrameworkSessionTransportCompat
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -18,6 +20,17 @@ object AgentResponsesProxy {
     private const val DEFAULT_CHATGPT_BASE_URL = "https://chatgpt.com/backend-api/codex"
     private const val DEFAULT_ORIGINATOR = "codex_cli_rs"
     private const val DEFAULT_USER_AGENT = "codex_cli_rs/android_agent_bridge"
+    private const val HEADER_AUTHORIZATION = "Authorization"
+    private const val HEADER_CONTENT_TYPE = "Content-Type"
+    private const val HEADER_ACCEPT = "Accept"
+    private const val HEADER_ACCEPT_ENCODING = "Accept-Encoding"
+    private const val HEADER_CHATGPT_ACCOUNT_ID = "ChatGPT-Account-ID"
+    private const val HEADER_ORIGINATOR = "originator"
+    private const val HEADER_USER_AGENT = "User-Agent"
+    private const val HEADER_VALUE_BEARER_PREFIX = "Bearer "
+    private const val HEADER_VALUE_APPLICATION_JSON = "application/json"
+    private const val HEADER_VALUE_TEXT_EVENT_STREAM = "text/event-stream"
+    private const val HEADER_VALUE_IDENTITY = "identity"
 
     internal data class AuthSnapshot(
         val authMode: String,
@@ -35,10 +48,7 @@ object AgentResponsesProxy {
         requestBody: String,
     ): HttpResponse {
         val authSnapshot = loadAuthSnapshot(File(context.filesDir, "codex-home/auth.json"))
-        val upstreamUrl = buildResponsesUrl(
-            upstreamBaseUrl = "provider-default",
-            authSnapshot.authMode,
-        )
+        val upstreamUrl = buildResponsesUrl(upstreamBaseUrl = "provider-default", authMode = authSnapshot.authMode)
         val requestBodyBytes = requestBody.toByteArray(StandardCharsets.UTF_8)
         Log.i(
             TAG,
@@ -47,11 +57,24 @@ object AgentResponsesProxy {
         return executeRequest(upstreamUrl, requestBodyBytes, authSnapshot)
     }
 
-    internal fun buildResponsesUrl(
+    internal fun buildFrameworkSessionNetworkConfig(
+        context: Context,
+        upstreamBaseUrl: String,
+    ): FrameworkSessionTransportCompat.SessionNetworkConfig {
+        val authSnapshot = loadAuthSnapshot(File(context.filesDir, "codex-home/auth.json"))
+        return FrameworkSessionTransportCompat.SessionNetworkConfig(
+            baseUrl = buildResponsesBaseUrl(upstreamBaseUrl, authSnapshot.authMode),
+            defaultHeaders = buildDefaultHeaders(authSnapshot),
+            connectTimeoutMillis = CONNECT_TIMEOUT_MS,
+            readTimeoutMillis = READ_TIMEOUT_MS,
+        )
+    }
+
+    internal fun buildResponsesBaseUrl(
         upstreamBaseUrl: String,
         authMode: String,
     ): String {
-        val normalizedBaseUrl = when {
+        return when {
             upstreamBaseUrl.isBlank() || upstreamBaseUrl == "provider-default" -> {
                 if (authMode == "chatgpt") {
                     DEFAULT_CHATGPT_BASE_URL
@@ -60,8 +83,14 @@ object AgentResponsesProxy {
                 }
             }
             else -> upstreamBaseUrl
-        }
-        return "${normalizedBaseUrl.trimEnd('/')}/responses"
+        }.trimEnd('/')
+    }
+
+    internal fun buildResponsesUrl(
+        upstreamBaseUrl: String,
+        authMode: String,
+    ): String {
+        return "${buildResponsesBaseUrl(upstreamBaseUrl, authMode)}/responses"
     }
 
     internal fun loadAuthSnapshot(authFile: File): AuthSnapshot {
@@ -148,18 +177,40 @@ object AgentResponsesProxy {
                 doInput = true
                 doOutput = true
                 instanceFollowRedirects = true
-                setRequestProperty("Authorization", "Bearer ${authSnapshot.bearerToken}")
-                setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("Accept", "text/event-stream")
-                setRequestProperty("Accept-Encoding", "identity")
-                setRequestProperty("originator", DEFAULT_ORIGINATOR)
-                setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
-                if (authSnapshot.authMode == "chatgpt" && !authSnapshot.accountId.isNullOrBlank()) {
-                    setRequestProperty("ChatGPT-Account-ID", authSnapshot.accountId)
+                val defaultHeaders = buildDefaultHeaders(authSnapshot)
+                defaultHeaders.keySet().forEach { key ->
+                    defaultHeaders.getString(key)?.let { value ->
+                        setRequestProperty(key, value)
+                    }
+                }
+                val requestHeaders = buildResponsesRequestHeaders()
+                requestHeaders.keySet().forEach { key ->
+                    requestHeaders.getString(key)?.let { value ->
+                        setRequestProperty(key, value)
+                    }
                 }
             }
         } catch (err: IOException) {
             throw wrapRequestFailure("open connection", upstreamUrl, err)
+        }
+    }
+
+    internal fun buildDefaultHeaders(authSnapshot: AuthSnapshot): Bundle {
+        return Bundle().apply {
+            putString(HEADER_AUTHORIZATION, "$HEADER_VALUE_BEARER_PREFIX${authSnapshot.bearerToken}")
+            putString(HEADER_ORIGINATOR, DEFAULT_ORIGINATOR)
+            putString(HEADER_USER_AGENT, DEFAULT_USER_AGENT)
+            if (authSnapshot.authMode == "chatgpt" && !authSnapshot.accountId.isNullOrBlank()) {
+                putString(HEADER_CHATGPT_ACCOUNT_ID, authSnapshot.accountId)
+            }
+        }
+    }
+
+    internal fun buildResponsesRequestHeaders(): Bundle {
+        return Bundle().apply {
+            putString(HEADER_CONTENT_TYPE, HEADER_VALUE_APPLICATION_JSON)
+            putString(HEADER_ACCEPT, HEADER_VALUE_TEXT_EVENT_STREAM)
+            putString(HEADER_ACCEPT_ENCODING, HEADER_VALUE_IDENTITY)
         }
     }
 

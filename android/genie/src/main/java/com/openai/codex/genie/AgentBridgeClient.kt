@@ -1,8 +1,10 @@
 package com.openai.codex.genie
 
 import android.app.agent.GenieService
+import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.openai.codex.bridge.FrameworkSessionTransportCompat
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -27,15 +29,30 @@ class AgentBridgeClient(
         private const val OP_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
         private const val OP_READ_SESSION_EXECUTION_SETTINGS = "readSessionExecutionSettings"
         private const val WRITE_CHUNK_BYTES = 4096
+        private const val RESPONSES_METHOD = "POST"
+        private const val RESPONSES_PATH = "/responses"
+        private const val HEADER_CONTENT_TYPE = "Content-Type"
+        private const val HEADER_ACCEPT = "Accept"
+        private const val HEADER_ACCEPT_ENCODING = "Accept-Encoding"
+        private const val HEADER_VALUE_APPLICATION_JSON = "application/json"
+        private const val HEADER_VALUE_TEXT_EVENT_STREAM = "text/event-stream"
+        private const val HEADER_VALUE_IDENTITY = "identity"
     }
 
     private val bridgeFd: ParcelFileDescriptor = callback.openSessionBridge(sessionId)
+    private val frameworkHttpBridgeFd: ParcelFileDescriptor? =
+        FrameworkSessionTransportCompat.openFrameworkSessionBridge(callback, sessionId)
     private val input = DataInputStream(BufferedInputStream(FileInputStream(bridgeFd.fileDescriptor)))
     private val output = DataOutputStream(BufferedOutputStream(FileOutputStream(bridgeFd.fileDescriptor)))
     private val ioLock = Any()
 
     init {
         Log.i(TAG, "Using framework session bridge transport for $sessionId")
+        if (frameworkHttpBridgeFd != null) {
+            Log.i(TAG, "Using framework-owned HTTP bridge for $sessionId")
+        } else {
+            Log.i(TAG, "Framework-owned HTTP bridge unavailable for $sessionId; using Agent-owned fallback")
+        }
     }
 
     fun getRuntimeStatus(): CodexAgentBridge.RuntimeStatus {
@@ -70,6 +87,26 @@ class AgentBridgeClient(
     }
 
     fun sendResponsesRequest(body: String): AgentResponsesHttpResponse {
+        val frameworkBridge = frameworkHttpBridgeFd
+        if (frameworkBridge != null) {
+            val response = FrameworkSessionTransportCompat.executeRequestAndReadFully(
+                bridge = frameworkBridge,
+                request = FrameworkSessionTransportCompat.HttpRequest(
+                    method = RESPONSES_METHOD,
+                    path = RESPONSES_PATH,
+                    headers = Bundle().apply {
+                        putString(HEADER_CONTENT_TYPE, HEADER_VALUE_APPLICATION_JSON)
+                        putString(HEADER_ACCEPT, HEADER_VALUE_TEXT_EVENT_STREAM)
+                        putString(HEADER_ACCEPT_ENCODING, HEADER_VALUE_IDENTITY)
+                    },
+                    body = body.toByteArray(StandardCharsets.UTF_8),
+                ),
+            )
+            return AgentResponsesHttpResponse(
+                statusCode = response.statusCode,
+                body = response.bodyString,
+            )
+        }
         val response = request(
             JSONObject()
                 .put("method", OP_SEND_RESPONSES_REQUEST)
@@ -86,6 +123,7 @@ class AgentBridgeClient(
             runCatching { input.close() }
             runCatching { output.close() }
             runCatching { bridgeFd.close() }
+            runCatching { frameworkHttpBridgeFd?.close() }
         }
     }
 
