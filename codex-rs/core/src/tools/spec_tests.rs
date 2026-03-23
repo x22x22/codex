@@ -367,13 +367,13 @@ fn model_info_from_models_json(slug: &str) -> ModelInfo {
 }
 
 #[test]
-fn unified_exec_is_allowed_for_windows_sandboxed_policies() {
-    assert!(unified_exec_allowed_in_environment(
+fn unified_exec_is_blocked_for_windows_sandboxed_policies() {
+    assert!(!unified_exec_allowed_in_environment(
         true,
         &SandboxPolicy::new_read_only_policy(),
         WindowsSandboxLevel::RestrictedToken,
     ));
-    assert!(unified_exec_allowed_in_environment(
+    assert!(!unified_exec_allowed_in_environment(
         true,
         &SandboxPolicy::new_workspace_write_policy(),
         WindowsSandboxLevel::RestrictedToken,
@@ -391,7 +391,7 @@ fn unified_exec_is_allowed_for_windows_sandboxed_policies() {
 }
 
 #[test]
-fn model_provided_unified_exec_is_retained_for_windows_sandboxed_policies() {
+fn model_provided_unified_exec_falls_back_for_windows_sandboxed_policies() {
     let mut model_info = model_info_from_models_json("gpt-5-codex");
     model_info.shell_type = ConfigShellToolType::UnifiedExec;
     let features = Features::with_defaults();
@@ -406,7 +406,7 @@ fn model_provided_unified_exec_is_retained_for_windows_sandboxed_policies() {
         windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
     });
 
-    assert_eq!(config.shell_type, ConfigShellToolType::UnifiedExec);
+    assert_eq!(config.shell_type, ConfigShellToolType::ShellCommand);
 }
 
 #[test]
