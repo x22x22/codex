@@ -1413,6 +1413,45 @@ async fn proposed_execpolicy_amendment_is_suppressed_when_policy_matches_allow()
     );
 }
 
+#[tokio::test]
+async fn powershell_wrapped_single_command_matches_inner_prefix_rule() {
+    let policy_src = r#"prefix_rule(pattern=["git", "add"], decision="allow")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+    let command = vec_str(&[
+        "pwsh",
+        "-NoProfile",
+        "-Command",
+        "git add -A",
+    ]);
+
+    let manager = ExecPolicyManager::new(policy);
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::WorkspaceWrite {
+                network_access: false,
+                writable_roots: vec![],
+            },
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
 fn derive_requested_execpolicy_amendment_for_test(
     prefix_rule: Option<&Vec<String>>,
     matched_rules: &[RuleMatch],
