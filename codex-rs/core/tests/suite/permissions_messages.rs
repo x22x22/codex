@@ -421,7 +421,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     let forked = initial
         .thread_manager
         .fork_thread(
-            ForkSnapshot::Interrupted,
+            ForkSnapshot::FullHistory,
             fork_config,
             rollout_path,
             /*persist_extended_history*/ false,

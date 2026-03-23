@@ -133,7 +133,7 @@ pub enum ForkSnapshot {
     /// Cut strictly before the nth user message (0-based).
     TruncateBeforeNthUserMessage(usize),
     /// Keep the full source history.
-    Interrupted,
+    FullHistory,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -568,7 +568,14 @@ impl ThreadManager {
             ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
                 truncate_before_nth_user_message(history, nth_user_message)
             }
-            ForkSnapshot::Interrupted => history,
+            ForkSnapshot::FullHistory => {
+                let rollout_items = history.get_rollout_items();
+                if rollout_items.is_empty() {
+                    InitialHistory::New
+                } else {
+                    InitialHistory::Forked(rollout_items)
+                }
+            }
         };
         Box::pin(self.state.spawn_thread(
             config,

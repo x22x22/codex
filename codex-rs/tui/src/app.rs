@@ -2503,7 +2503,7 @@ impl App {
                 );
                 let forked = thread_manager
                     .fork_thread(
-                        ForkSnapshot::Interrupted,
+                        ForkSnapshot::FullHistory,
                         config.clone(),
                         target_session.path.clone(),
                         /*persist_extended_history*/ false,
@@ -2926,7 +2926,7 @@ impl App {
                         match self
                             .server
                             .fork_thread(
-                                ForkSnapshot::Interrupted,
+                                ForkSnapshot::FullHistory,
                                 self.config.clone(),
                                 path.clone(),
                                 /*persist_extended_history*/ false,

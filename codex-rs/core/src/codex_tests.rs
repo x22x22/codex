@@ -1174,7 +1174,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     let forked = initial
         .thread_manager
         .fork_thread(
-            ForkSnapshot::Interrupted,
+            ForkSnapshot::FullHistory,
             fork_config,
             rollout_path,
             /*persist_extended_history*/ false,
