@@ -5689,7 +5689,10 @@ pub(crate) async fn run_turn(
         }
         let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
         if sess.enabled(Feature::ItemMetadata) {
-            stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
+            stamp_user_message_type_on_input_item(
+                &mut initial_input_for_turn,
+                UserMessageType::Prompt,
+            );
         }
         let response_item: ResponseItem = initial_input_for_turn.clone().into();
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
