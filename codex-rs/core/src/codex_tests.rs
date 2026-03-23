@@ -147,7 +147,7 @@ fn assistant_message(text: &str) -> ResponseItem {
 
 #[test]
 fn beta_features_header_disables_image_generation_when_feature_is_off() {
-    let config = ConfigBuilder::default().build();
+    let config = test_config();
 
     assert_eq!(
         Session::build_model_client_beta_features_header(&config),
@@ -157,7 +157,7 @@ fn beta_features_header_disables_image_generation_when_feature_is_off() {
 
 #[test]
 fn beta_features_header_uses_image_generation_feature_key_when_enabled() {
-    let mut config = ConfigBuilder::default().build();
+    let mut config = test_config();
     config.features.enable(Feature::ImageGeneration);
 
     let header = Session::build_model_client_beta_features_header(&config)
