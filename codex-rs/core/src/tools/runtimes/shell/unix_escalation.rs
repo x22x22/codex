@@ -164,7 +164,6 @@ pub(super) async fn try_run_zsh_fork(
             .permissions
             .macos_seatbelt_profile_extensions
             .clone(),
-        codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
     let main_execve_wrapper_exe = ctx
@@ -270,7 +269,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             .permissions
             .macos_seatbelt_profile_extensions
             .clone(),
-        codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
     let escalation_policy = CoreShellActionProvider {
@@ -863,7 +861,6 @@ struct CoreShellCommandExecutor {
     sandbox_policy_cwd: PathBuf,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
-    codex_linux_sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
 }
 
@@ -1063,7 +1060,6 @@ impl CoreShellCommandExecutor {
                 sandbox_policy_cwd: &self.sandbox_policy_cwd,
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions,
-                codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,

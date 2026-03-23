@@ -28,7 +28,6 @@ use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -1552,7 +1551,6 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     };
     let temp_dir = tempfile::tempdir().expect("temp dir");
     turn.cwd = temp_dir.path().to_path_buf();
-    turn.codex_linux_sandbox_exe = Some(PathBuf::from("/bin/echo"));
     let sandbox_policy = pick_allowed_sandbox_policy(
         &turn.config.permissions.sandbox_policy,
         turn.config.permissions.sandbox_policy.get().clone(),
@@ -1579,7 +1577,6 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     expected.developer_instructions = turn.developer_instructions.clone();
     expected.compact_prompt = turn.compact_prompt.clone();
     expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
-    expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     expected.cwd = turn.cwd.clone();
     expected
         .permissions
@@ -1633,7 +1630,6 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected.developer_instructions = turn.developer_instructions.clone();
     expected.compact_prompt = turn.compact_prompt.clone();
     expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
-    expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     expected.cwd = turn.cwd.clone();
     expected
         .permissions

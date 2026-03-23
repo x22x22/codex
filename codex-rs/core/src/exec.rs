@@ -217,7 +217,6 @@ pub async fn process_exec_tool_call(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_cwd: &Path,
-    codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
@@ -227,7 +226,6 @@ pub async fn process_exec_tool_call(
         file_system_sandbox_policy,
         network_sandbox_policy,
         sandbox_cwd,
-        codex_linux_sandbox_exe,
         use_legacy_landlock,
     )?;
 
@@ -243,7 +241,6 @@ pub fn build_exec_request(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_cwd: &Path,
-    codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
 ) -> Result<ExecRequest> {
     let windows_sandbox_level = params.windows_sandbox_level;
@@ -304,7 +301,6 @@ pub fn build_exec_request(
             sandbox_policy_cwd: sandbox_cwd,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
-            codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
@@ -625,9 +621,7 @@ pub(crate) mod errors {
     impl From<SandboxTransformError> for CodexErr {
         fn from(err: SandboxTransformError) -> Self {
             match err {
-                SandboxTransformError::MissingLinuxSandboxExecutable => {
-                    CodexErr::LandlockSandboxExecutableNotProvided
-                }
+                SandboxTransformError::CurrentExecutableUnavailable(err) => CodexErr::Io(err),
                 #[cfg(not(target_os = "macos"))]
                 SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
                     "seatbelt sandbox is only available on macOS".to_string(),

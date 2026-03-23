@@ -783,8 +783,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut cloud_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            codex_cloud_tasks::run_main(cloud_cli, arg0_paths.codex_linux_sandbox_exe.clone())
-                .await?;
+            codex_cloud_tasks::run_main(cloud_cli).await?;
         }
         Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
             SandboxCommand::Macos(mut seatbelt_cli) => {
@@ -793,11 +792,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     &mut seatbelt_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                codex_cli::debug_sandbox::run_command_under_seatbelt(
-                    seatbelt_cli,
-                    arg0_paths.codex_linux_sandbox_exe.clone(),
-                )
-                .await?;
+                codex_cli::debug_sandbox::run_command_under_seatbelt(seatbelt_cli).await?;
             }
             SandboxCommand::Linux(mut landlock_cli) => {
                 reject_remote_mode_for_subcommand(root_remote.as_deref(), "sandbox linux")?;
@@ -805,11 +800,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     &mut landlock_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                codex_cli::debug_sandbox::run_command_under_landlock(
-                    landlock_cli,
-                    arg0_paths.codex_linux_sandbox_exe.clone(),
-                )
-                .await?;
+                codex_cli::debug_sandbox::run_command_under_landlock(landlock_cli).await?;
             }
             SandboxCommand::Windows(mut windows_cli) => {
                 reject_remote_mode_for_subcommand(root_remote.as_deref(), "sandbox windows")?;
@@ -817,11 +808,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     &mut windows_cli.config_overrides,
                     root_config_overrides.clone(),
                 );
-                codex_cli::debug_sandbox::run_command_under_windows(
-                    windows_cli,
-                    arg0_paths.codex_linux_sandbox_exe.clone(),
-                )
-                .await?;
+                codex_cli::debug_sandbox::run_command_under_windows(windows_cli).await?;
             }
         },
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {

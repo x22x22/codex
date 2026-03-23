@@ -56,7 +56,6 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         &FileSystemSandboxPolicy::from(&policy),
         NetworkSandboxPolicy::from(&policy),
         tmp.path(),
-        &None,
         false,
         None,
     )

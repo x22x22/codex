@@ -211,7 +211,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
 
     let sandbox_state = SandboxState {
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
         use_legacy_landlock: config.features.use_legacy_landlock(),
     };

@@ -19,7 +19,6 @@ const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
-    pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
 }
 
@@ -133,9 +132,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 ///
 /// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
 /// 2.  Construct a Tokio multi-thread runtime.
-/// 3.  Derive the path to the current executable (so children can re-invoke the
-///     sandbox) when running on Linux.
-/// 4.  Execute the provided async `main_fn` inside that runtime, forwarding any
+/// 3.  Execute the provided async `main_fn` inside that runtime, forwarding any
 ///     error. Note that `main_fn` receives [`Arg0DispatchPaths`], which
 ///     contains the helper executable paths needed to construct
 ///     [`codex_core::config::Config`].
@@ -156,17 +153,7 @@ where
     // async entry-point.
     let runtime = build_runtime()?;
     runtime.block_on(async move {
-        let current_exe = std::env::current_exe().ok();
         let paths = Arg0DispatchPaths {
-            codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
-                current_exe.or_else(|| {
-                    path_entry
-                        .as_ref()
-                        .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
-                })
-            } else {
-                None
-            },
             main_execve_wrapper_exe: path_entry
                 .as_ref()
                 .and_then(|path_entry| path_entry.paths().main_execve_wrapper_exe.clone()),
@@ -324,16 +311,6 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
     }
 
     let paths = Arg0DispatchPaths {
-        codex_linux_sandbox_exe: {
-            #[cfg(target_os = "linux")]
-            {
-                Some(path.join(LINUX_SANDBOX_ARG0))
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                None
-            }
-        },
         main_execve_wrapper_exe: {
             #[cfg(unix)]
             {

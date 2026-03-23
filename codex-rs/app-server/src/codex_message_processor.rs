@@ -518,7 +518,6 @@ impl CodexMessageProcessor {
                 message: format!("failed to reload config: {err}"),
                 data: None,
             })?;
-        config.codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
         config.main_execve_wrapper_exe = self.arg0_paths.main_execve_wrapper_exe.clone();
         Ok(config)
     }
@@ -1731,7 +1730,6 @@ impl CodexMessageProcessor {
             ),
         };
 
-        let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let request_for_task = request.clone();
         let started_network_proxy_for_task = started_network_proxy;
@@ -1751,7 +1749,6 @@ impl CodexMessageProcessor {
             &effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
             sandbox_cwd.as_path(),
-            &codex_linux_sandbox_exe,
             use_legacy_landlock,
         ) {
             Ok(exec_request) => {
@@ -2153,7 +2150,6 @@ impl CodexMessageProcessor {
             approvals_reviewer: approvals_reviewer
                 .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
             sandbox_mode: sandbox.map(SandboxMode::to_core),
-            codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
             base_instructions,
             developer_instructions,

@@ -97,7 +97,6 @@ pub(crate) struct SandboxTransformRequest<'a> {
     pub sandbox_policy_cwd: &'a Path,
     #[cfg(target_os = "macos")]
     pub macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
-    pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -111,8 +110,8 @@ pub enum SandboxPreference {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SandboxTransformError {
-    #[error("missing codex-linux-sandbox executable path")]
-    MissingLinuxSandboxExecutable,
+    #[error("failed to resolve current executable for linux sandbox launch: {0}")]
+    CurrentExecutableUnavailable(std::io::Error),
     #[cfg(not(target_os = "macos"))]
     #[error("seatbelt sandbox is only available on macOS")]
     SeatbeltUnavailable,
@@ -595,7 +594,6 @@ impl SandboxManager {
             sandbox_policy_cwd,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions,
-            codex_linux_sandbox_exe,
             use_legacy_landlock,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
@@ -670,8 +668,8 @@ impl SandboxManager {
             #[cfg(not(target_os = "macos"))]
             SandboxType::MacosSeatbelt => return Err(SandboxTransformError::SeatbeltUnavailable),
             SandboxType::LinuxSeccomp => {
-                let exe = codex_linux_sandbox_exe
-                    .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
+                let exe = std::env::current_exe()
+                    .map_err(SandboxTransformError::CurrentExecutableUnavailable)?;
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
                 let mut args = create_linux_sandbox_command_args_for_policies(
                     command.clone(),

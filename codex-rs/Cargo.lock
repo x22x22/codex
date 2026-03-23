@@ -1985,6 +1985,7 @@ dependencies = [
  "codex-utils-oss",
  "codex-utils-sandbox-summary",
  "core_test_support",
+ "ctor 0.6.3",
  "libc",
  "opentelemetry",
  "opentelemetry_sdk",

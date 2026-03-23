@@ -126,8 +126,6 @@ async fn run_cmd_result_with_policies(
         justification: None,
         arg0: None,
     };
-    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
 
     process_exec_tool_call(
         params,
@@ -135,7 +133,6 @@ async fn run_cmd_result_with_policies(
         &file_system_sandbox_policy,
         network_sandbox_policy,
         sandbox_cwd.as_path(),
-        &codex_linux_sandbox_exe,
         use_legacy_landlock,
         None,
     )
@@ -388,15 +385,12 @@ async fn assert_network_blocked(cmd: &[&str]) {
     };
 
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
     let result = process_exec_tool_call(
         params,
         &sandbox_policy,
         &FileSystemSandboxPolicy::from(&sandbox_policy),
         NetworkSandboxPolicy::from(&sandbox_policy),
         sandbox_cwd.as_path(),
-        &codex_linux_sandbox_exe,
         false,
         None,
     )

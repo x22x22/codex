@@ -151,9 +151,6 @@ pub enum CodexErr {
     #[error("sandbox error: {0}")]
     Sandbox(#[from] SandboxErr),
 
-    #[error("codex-linux-sandbox was required but not provided")]
-    LandlockSandboxExecutableNotProvided,
-
     #[error("unsupported operation: {0}")]
     UnsupportedOperation(String),
 
@@ -207,7 +204,6 @@ impl CodexErr {
             | CodexErr::RefreshTokenFailed(_)
             | CodexErr::UnsupportedOperation(_)
             | CodexErr::Sandbox(_)
-            | CodexErr::LandlockSandboxExecutableNotProvided
             | CodexErr::RetryLimit(_)
             | CodexErr::ContextWindowExceeded
             | CodexErr::ThreadNotFound(_)

@@ -20,7 +20,6 @@ use tokio::process::Child;
 /// incrementally without breaking older call sites.
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn_command_under_linux_sandbox<P>(
-    codex_linux_sandbox_exe: P,
     command: Vec<String>,
     command_cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
@@ -29,10 +28,7 @@ pub async fn spawn_command_under_linux_sandbox<P>(
     stdio_policy: StdioPolicy,
     network: Option<&NetworkProxy>,
     env: HashMap<String, String>,
-) -> std::io::Result<Child>
-where
-    P: AsRef<Path>,
-{
+) -> std::io::Result<Child> {
     let file_system_sandbox_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_policy_cwd);
     let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
@@ -48,7 +44,7 @@ where
     );
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(SpawnChildRequest {
-        program: codex_linux_sandbox_exe.as_ref().to_path_buf(),
+        program: std::env::current_exe()?,
         args,
         arg0,
         cwd: command_cwd,

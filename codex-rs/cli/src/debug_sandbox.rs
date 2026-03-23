@@ -33,10 +33,7 @@ use crate::exit_status::handle_exit_status;
 use seatbelt::DenialLogger;
 
 #[cfg(target_os = "macos")]
-pub async fn run_command_under_seatbelt(
-    command: SeatbeltCommand,
-    codex_linux_sandbox_exe: Option<PathBuf>,
-) -> anyhow::Result<()> {
+pub async fn run_command_under_seatbelt(command: SeatbeltCommand) -> anyhow::Result<()> {
     let SeatbeltCommand {
         full_auto,
         log_denials,
@@ -47,7 +44,6 @@ pub async fn run_command_under_seatbelt(
         full_auto,
         command,
         config_overrides,
-        codex_linux_sandbox_exe,
         SandboxType::Seatbelt,
         log_denials,
     )
@@ -55,17 +51,11 @@ pub async fn run_command_under_seatbelt(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub async fn run_command_under_seatbelt(
-    _command: SeatbeltCommand,
-    _codex_linux_sandbox_exe: Option<PathBuf>,
-) -> anyhow::Result<()> {
+pub async fn run_command_under_seatbelt(_command: SeatbeltCommand) -> anyhow::Result<()> {
     anyhow::bail!("Seatbelt sandbox is only available on macOS");
 }
 
-pub async fn run_command_under_landlock(
-    command: LandlockCommand,
-    codex_linux_sandbox_exe: Option<PathBuf>,
-) -> anyhow::Result<()> {
+pub async fn run_command_under_landlock(command: LandlockCommand) -> anyhow::Result<()> {
     let LandlockCommand {
         full_auto,
         config_overrides,
@@ -75,17 +65,13 @@ pub async fn run_command_under_landlock(
         full_auto,
         command,
         config_overrides,
-        codex_linux_sandbox_exe,
         SandboxType::Landlock,
         /*log_denials*/ false,
     )
     .await
 }
 
-pub async fn run_command_under_windows(
-    command: WindowsCommand,
-    codex_linux_sandbox_exe: Option<PathBuf>,
-) -> anyhow::Result<()> {
+pub async fn run_command_under_windows(command: WindowsCommand) -> anyhow::Result<()> {
     let WindowsCommand {
         full_auto,
         config_overrides,
@@ -95,7 +81,6 @@ pub async fn run_command_under_windows(
         full_auto,
         command,
         config_overrides,
-        codex_linux_sandbox_exe,
         SandboxType::Windows,
         /*log_denials*/ false,
     )
@@ -113,7 +98,6 @@ async fn run_command_under_sandbox(
     full_auto: bool,
     command: Vec<String>,
     config_overrides: CliConfigOverrides,
-    codex_linux_sandbox_exe: Option<PathBuf>,
     sandbox_type: SandboxType,
     log_denials: bool,
 ) -> anyhow::Result<()> {
@@ -121,7 +105,6 @@ async fn run_command_under_sandbox(
         config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
-        codex_linux_sandbox_exe,
         full_auto,
     )
     .await?;
@@ -273,10 +256,6 @@ async fn run_command_under_sandbox(
             .await?
         }
         SandboxType::Landlock => {
-            #[expect(clippy::expect_used)]
-            let codex_linux_sandbox_exe = config
-                .codex_linux_sandbox_exe
-                .expect("codex-linux-sandbox executable not found");
             let use_legacy_landlock = config.features.use_legacy_landlock();
             let args = create_linux_sandbox_command_args_for_policies(
                 command,
@@ -290,7 +269,7 @@ async fn run_command_under_sandbox(
             );
             let network_policy = config.permissions.network_sandbox_policy;
             spawn_debug_sandbox_child(
-                codex_linux_sandbox_exe,
+                std::env::current_exe()?,
                 args,
                 Some("codex-linux-sandbox"),
                 cwd,
@@ -373,30 +352,19 @@ async fn spawn_debug_sandbox_child(
 
 async fn load_debug_sandbox_config(
     cli_overrides: Vec<(String, TomlValue)>,
-    codex_linux_sandbox_exe: Option<PathBuf>,
     full_auto: bool,
 ) -> anyhow::Result<Config> {
-    load_debug_sandbox_config_with_codex_home(
-        cli_overrides,
-        codex_linux_sandbox_exe,
-        full_auto,
-        /*codex_home*/ None,
-    )
-    .await
+    load_debug_sandbox_config_with_codex_home(cli_overrides, full_auto, /*codex_home*/ None).await
 }
 
 async fn load_debug_sandbox_config_with_codex_home(
     cli_overrides: Vec<(String, TomlValue)>,
-    codex_linux_sandbox_exe: Option<PathBuf>,
     full_auto: bool,
     codex_home: Option<PathBuf>,
 ) -> anyhow::Result<Config> {
     let config = build_debug_sandbox_config(
         cli_overrides.clone(),
-        ConfigOverrides {
-            codex_linux_sandbox_exe: codex_linux_sandbox_exe.clone(),
-            ..Default::default()
-        },
+        ConfigOverrides::default(),
         codex_home.clone(),
     )
     .await?;
@@ -414,7 +382,6 @@ async fn load_debug_sandbox_config_with_codex_home(
         cli_overrides,
         ConfigOverrides {
             sandbox_mode: Some(create_sandbox_mode(full_auto)),
-            codex_linux_sandbox_exe,
             ..Default::default()
         },
         codex_home,
@@ -505,7 +472,6 @@ mod tests {
 
         let config = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
-            None,
             false,
             Some(codex_home_path),
         )
@@ -539,7 +505,6 @@ mod tests {
 
         let err = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
-            None,
             true,
             Some(codex_home.path().to_path_buf()),
         )

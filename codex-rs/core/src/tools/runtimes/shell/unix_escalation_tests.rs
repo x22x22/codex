@@ -668,7 +668,6 @@ async fn prepare_escalated_exec_turn_default_preserves_macos_seatbelt_extensions
             macos_preferences: MacOsPreferencesPermission::ReadWrite,
             ..Default::default()
         }),
-        codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
     };
 
@@ -717,7 +716,6 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
         arg0: None,
         sandbox_policy_cwd: cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: None,
-        codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
     };
 
@@ -795,7 +793,6 @@ async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_mac
             macos_preferences: MacOsPreferencesPermission::ReadOnly,
             ..Default::default()
         }),
-        codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
     };
 

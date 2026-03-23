@@ -358,7 +358,6 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
         &FileSystemSandboxPolicy::from(&sandbox_policy),
         NetworkSandboxPolicy::Enabled,
         cwd.as_path(),
-        &None,
         false,
         None,
     )
@@ -662,7 +661,6 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
         NetworkSandboxPolicy::Enabled,
         cwd.as_path(),
-        &None,
         false,
         None,
     )
