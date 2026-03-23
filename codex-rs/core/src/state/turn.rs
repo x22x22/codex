@@ -11,7 +11,6 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -57,12 +56,6 @@ pub(crate) struct RunningTask {
     pub(crate) turn_context: Arc<TurnContext>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PendingInputItem {
-    pub(crate) input: ResponseInputItem,
-    pub(crate) metadata: Option<ResponseItemMetadata>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,7 +121,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
-    pending_input: Vec<PendingInputItem>,
+    pending_input: Vec<ResponseInputItem>,
     granted_permissions: Option<PermissionProfile>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
@@ -261,16 +254,20 @@ impl TurnState {
         self.pending_dynamic_tools.remove(key)
     }
 
-    pub(crate) fn push_pending_input(
-        &mut self,
-        input: ResponseInputItem,
-        metadata: Option<ResponseItemMetadata>,
-    ) {
-        self.pending_input
-            .push(PendingInputItem { input, metadata });
+    pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
+        self.pending_input.push(input);
     }
 
-    pub(crate) fn take_pending_input_with_metadata(&mut self) -> Vec<PendingInputItem> {
+    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
+        if input.is_empty() {
+            return;
+        }
+
+        input.append(&mut self.pending_input);
+        self.pending_input = input;
+    }
+
+    pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
         } else {
@@ -278,15 +275,6 @@ impl TurnState {
             std::mem::swap(&mut ret, &mut self.pending_input);
             ret
         }
-    }
-
-    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<PendingInputItem>) {
-        if input.is_empty() {
-            return;
-        }
-
-        input.append(&mut self.pending_input);
-        self.pending_input = input;
     }
 
     pub(crate) fn has_pending_input(&self) -> bool {

@@ -7,6 +7,5 @@ pub(crate) use session::SessionState;
 pub(crate) use turn::ActiveTurn;
 pub(crate) use turn::ApprovalOutcomeMetadata;
 pub(crate) use turn::PendingApprovalMetadata;
-pub(crate) use turn::PendingInputItem;
 pub(crate) use turn::RunningTask;
 pub(crate) use turn::TaskKind;

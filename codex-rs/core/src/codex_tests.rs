@@ -7,6 +7,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
@@ -14,6 +15,8 @@ use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_features::Feature;
+use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -2523,6 +2526,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
     let turn_context = Session::make_turn_context(
+        conversation_id,
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),
@@ -3321,6 +3325,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
 
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
     let turn_context = Arc::new(Session::make_turn_context(
+        conversation_id,
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),
@@ -3412,7 +3417,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
 #[tokio::test]
 async fn record_model_warning_appends_user_message() {
     let (mut session, turn_context) = make_session_and_context().await;
-    let features = crate::features::Features::with_defaults().into();
+    let features = Features::with_defaults().into();
     session.features = features;
 
     session
@@ -3715,7 +3720,11 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_records_message";
-    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
+    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
+        turn_context.config.codex_home.as_path(),
+        &session.conversation_id.to_string(),
+        call_id,
+    );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -3735,13 +3744,26 @@ async fn handle_output_item_done_records_image_save_history_message() {
         .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
+    let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
+        turn_context.config.codex_home.as_path(),
+        &session.conversation_id.to_string(),
+        "<image_id>",
+    );
+    let image_output_dir = image_output_path
+        .parent()
+        .expect("generated image path should have a parent");
     let save_message: ResponseItem = DeveloperInstructions::new(format!(
         "Generated images are saved to {} as {} by default.",
-        std::env::temp_dir().display(),
-        std::env::temp_dir().join("<image_id>.png").display(),
+        image_output_dir.display(),
+        image_output_path.display(),
     ))
     .into();
-    assert_eq!(history.raw_items(), &[save_message, item]);
+    let copy_message: ResponseItem = DeveloperInstructions::new(
+        "If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it."
+            .to_string(),
+    )
+    .into();
+    assert_eq!(history.raw_items(), &[save_message, copy_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
@@ -3755,7 +3777,11 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_no_message";
-    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
+    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
+        turn_context.config.codex_home.as_path(),
+        &session.conversation_id.to_string(),
+        call_id,
+    );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -4310,7 +4336,7 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
-        .enable(crate::features::Feature::ItemMetadata)
+        .enable(Feature::ItemMetadata)
         .expect("feature flag should be enabled for this test");
 
     let input = vec![UserInput::Text {
@@ -4465,7 +4491,7 @@ async fn setup_tool_call_metadata_runtime_test() -> (
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
-        .enable(crate::features::Feature::ItemMetadata)
+        .enable(Feature::ItemMetadata)
         .expect("feature flag should be enabled for this test");
 
     sess.spawn_task(
@@ -4557,7 +4583,7 @@ async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled(
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
-        .enable(crate::features::Feature::ItemMetadata)
+        .enable(Feature::ItemMetadata)
         .expect("feature flag should be enabled for this test");
 
     sess.spawn_task(
@@ -4615,7 +4641,7 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
-        .enable(crate::features::Feature::ItemMetadata)
+        .enable(Feature::ItemMetadata)
         .expect("feature flag should be enabled for this test");
 
     sess.spawn_task(
@@ -4760,21 +4786,62 @@ async fn steer_input_returns_active_turn_id() {
 
     assert_eq!(turn_id, tc.sub_id);
     assert!(sess.has_pending_input().await);
-    let pending_input = sess.get_pending_input_with_metadata().await;
+    let pending_input = sess.get_pending_input().await;
     assert_eq!(pending_input.len(), 1);
+}
+
+#[tokio::test]
+async fn steer_input_emits_prompt_steering_metadata_when_item_metadata_enabled() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(Feature::ItemMetadata)
+        .expect("feature flag should be enabled for this test");
+
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let steer_input = vec![UserInput::Text {
+        text: "steer".to_string(),
+        text_elements: Vec::new(),
+    }];
+    let turn_id = sess
+        .steer_input(steer_input, Some(&tc.sub_id))
+        .await
+        .expect("steering with matching expected turn id should succeed");
+
+    assert_eq!(turn_id, tc.sub_id);
+    let pending_input = sess.get_pending_input().await;
+    assert_eq!(pending_input.len(), 1);
+    let ResponseInputItem::Message { metadata, .. } =
+        pending_input.first().expect("pending input should exist")
+    else {
+        panic!("expected pending input message");
+    };
     assert_eq!(
-        pending_input
-            .first()
-            .and_then(|(_, metadata)| metadata.as_ref())
+        metadata
+            .as_ref()
             .and_then(|metadata| metadata.user_message_type.as_ref()),
         Some(&codex_protocol::models::UserMessageType::PromptSteering)
     );
 }
 
 #[tokio::test]
-async fn record_into_history_generates_message_metadata_uuid_when_item_metadata_enabled() {
+async fn record_into_history_generates_message_metadata_id_when_item_metadata_enabled() {
     let (mut sess, tc) = make_session_and_context().await;
-    let _ = sess.features.enable(crate::features::Feature::ItemMetadata);
+    let _ = sess.features.enable(Feature::ItemMetadata);
 
     let item = ResponseItem::Message {
         id: Some("msg_123".to_string()),
@@ -4795,11 +4862,11 @@ async fn record_into_history_generates_message_metadata_uuid_when_item_metadata_
         panic!("expected a single message item in history");
     };
 
-    let uuid = metadata
+    let metadata_id = metadata
         .as_ref()
-        .and_then(|metadata| metadata.uuid.as_deref())
-        .expect("uuid should be generated when item metadata is enabled");
-    uuid::Uuid::parse_str(uuid).expect("uuid should be valid");
+        .map(|metadata| metadata.metadata_id.as_str())
+        .expect("metadata_id should be generated when item metadata is enabled");
+    uuid::Uuid::parse_str(metadata_id).expect("metadata_id should be valid");
 }
 
 #[tokio::test]
@@ -4845,26 +4912,8 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         .await
         .expect("inject initial pending input into active turn");
 
-    let drained = sess.get_pending_input_with_metadata().await;
-    assert_eq!(
-        drained,
-        vec![
-            (
-                blocked,
-                Some(codex_protocol::models::ResponseItemMetadata {
-                    user_message_type: Some(codex_protocol::models::UserMessageType::PromptQueued),
-                    ..codex_protocol::models::ResponseItemMetadata::default()
-                }),
-            ),
-            (
-                later.clone(),
-                Some(codex_protocol::models::ResponseItemMetadata {
-                    user_message_type: Some(codex_protocol::models::UserMessageType::PromptQueued),
-                    ..codex_protocol::models::ResponseItemMetadata::default()
-                }),
-            ),
-        ]
-    );
+    let drained = sess.get_pending_input().await;
+    assert_eq!(drained, vec![blocked, later.clone()]);
 
     sess.inject_response_items(vec![newer.clone()])
         .await
@@ -4872,29 +4921,11 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
 
     let mut drained_iter = drained.into_iter();
     let _blocked = drained_iter.next().expect("blocked prompt should exist");
-    sess.prepend_pending_input_with_metadata(drained_iter.collect())
+    sess.prepend_pending_input(drained_iter.collect())
         .await
         .expect("requeue later pending input at the front of the queue");
 
-    assert_eq!(
-        sess.get_pending_input_with_metadata().await,
-        vec![
-            (
-                later,
-                Some(codex_protocol::models::ResponseItemMetadata {
-                    user_message_type: Some(codex_protocol::models::UserMessageType::PromptQueued),
-                    ..codex_protocol::models::ResponseItemMetadata::default()
-                }),
-            ),
-            (
-                newer,
-                Some(codex_protocol::models::ResponseItemMetadata {
-                    user_message_type: Some(codex_protocol::models::UserMessageType::PromptQueued),
-                    ..codex_protocol::models::ResponseItemMetadata::default()
-                }),
-            ),
-        ]
-    );
+    assert_eq!(sess.get_pending_input().await, vec![later, newer]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -5240,6 +5271,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         },
         cwd: turn_context.cwd.clone(),
         expiration: timeout_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
         sandbox_permissions,
@@ -5257,6 +5289,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         command: params.command.clone(),
         cwd: params.cwd.clone(),
         expiration: timeout_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
         windows_sandbox_level: turn_context.windows_sandbox_level,

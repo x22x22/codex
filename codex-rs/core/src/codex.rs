@@ -27,9 +27,6 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
-use crate::features::FEATURES;
-use crate::features::Feature;
-use crate::features::maybe_push_unstable_features_warning;
 #[cfg(test)]
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
@@ -59,6 +56,9 @@ use chrono::Utc;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_exec_server::Environment;
+use codex_features::FEATURES;
+use codex_features::Feature;
+use codex_features::unstable_features_warning_event;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -90,6 +90,7 @@ use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItemMessageMetadata;
 use codex_protocol::models::UserMessageType;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
@@ -141,6 +142,7 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use toml::Value as TomlValue;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
@@ -1006,20 +1008,27 @@ fn local_time_context() -> (String, String) {
 
 fn stamp_message_metadata_on_input_item(
     item: &mut ResponseInputItem,
-    patch: &ResponseItemMetadata,
+    patch: &ResponseItemMessageMetadata,
 ) {
-    if patch.is_empty() {
-        return;
-    }
     let ResponseInputItem::Message { role, metadata, .. } = item else {
         return;
     };
     if role != "user" {
         return;
     }
-    let mut metadata_value = metadata.take().unwrap_or_default();
-    metadata_value.merge_from(patch.clone());
-    *metadata = (!metadata_value.is_empty()).then_some(metadata_value);
+    match metadata {
+        Some(existing) => {
+            if patch.user_message_type.is_some() {
+                existing.user_message_type = patch.user_message_type.clone();
+            }
+            if patch.sandbox_policy.is_some() {
+                existing.sandbox_policy = patch.sandbox_policy.clone();
+            }
+        }
+        None => {
+            *metadata = Some(patch.clone());
+        }
+    }
 }
 
 fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
@@ -1035,47 +1044,11 @@ fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
 fn user_message_metadata_patch(
     kind: UserMessageType,
     sandbox_policy: Option<SandboxPolicyMetadata>,
-) -> ResponseItemMetadata {
-    ResponseItemMetadata {
+) -> ResponseItemMessageMetadata {
+    ResponseItemMessageMetadata {
         user_message_type: Some(kind),
         sandbox_policy,
-        ..ResponseItemMetadata::default()
-    }
-}
-
-fn stamp_message_metadata_on_response_item(
-    item: ResponseItem,
-    patch: Option<ResponseItemMetadata>,
-) -> ResponseItem {
-    let Some(patch) = patch else {
-        return item;
-    };
-    if patch.is_empty() {
-        return item;
-    }
-
-    match item {
-        ResponseItem::Message {
-            id,
-            role,
-            content,
-            metadata,
-            end_turn,
-            phase,
-        } if role == "user" => {
-            let mut metadata_value = metadata.unwrap_or_default();
-            metadata_value.merge_from(patch);
-            let metadata = (!metadata_value.is_empty()).then_some(metadata_value);
-            ResponseItem::Message {
-                id,
-                role,
-                content,
-                metadata,
-                end_turn,
-                phase,
-            }
-        }
-        other => other,
+        ..ResponseItemMessageMetadata::new(/*user_message_type*/ None)
     }
 }
 
@@ -1174,7 +1147,6 @@ fn stamp_tool_approval_metadata_with_snapshot(
 
     stamp_tool_metadata_on_response_item(response_item, metadata)
 }
-
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -1462,6 +1434,7 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
+        conversation_id: ThreadId,
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
@@ -1512,6 +1485,7 @@ impl Session {
 
         let cwd = session_configuration.cwd.clone();
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
+            conversation_id.to_string(),
             sub_id.clone(),
             cwd.clone(),
             session_configuration.sandbox_policy.get(),
@@ -1742,7 +1716,19 @@ impl Session {
                 }),
             });
         }
-        maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
+        let config_path = config.codex_home.join(CONFIG_TOML_FILE);
+        if let Some(event) = unstable_features_warning_event(
+            config
+                .config_layer_stack
+                .effective_config()
+                .get("features")
+                .and_then(TomlValue::as_table),
+            config.suppress_unstable_features_warning,
+            &config.features,
+            &config_path.display().to_string(),
+        ) {
+            post_session_configured_events.push(event);
+        }
         if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
             post_session_configured_events.push(Event {
                 id: "".to_owned(),
@@ -2570,6 +2556,7 @@ impl Session {
                 .skills_for_config(&per_turn_config),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
+            self.conversation_id,
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
@@ -3561,7 +3548,26 @@ impl Session {
             items
                 .iter()
                 .cloned()
-                .map(ResponseItem::with_generated_metadata_uuid)
+                .map(|item| match item {
+                    ResponseItem::Message {
+                        id,
+                        role,
+                        content,
+                        metadata,
+                        end_turn,
+                        phase,
+                    } => ResponseItem::Message {
+                        id,
+                        role,
+                        content,
+                        metadata: Some(metadata.unwrap_or_else(|| {
+                            ResponseItemMessageMetadata::new(/*user_message_type*/ None)
+                        })),
+                        end_turn,
+                        phase,
+                    },
+                    other => other,
+                })
                 .collect()
         } else {
             items.to_vec()
@@ -4053,19 +4059,7 @@ impl Session {
         turn_context: &TurnContext,
         input: &[UserInput],
         response_item: ResponseItem,
-        message_metadata: Option<ResponseItemMetadata>,
     ) {
-        let metadata_patch = if self.enabled(Feature::ItemMetadata) {
-            let mut patch = message_metadata.unwrap_or_default();
-            patch.sandbox_policy = Some(sandbox_policy_to_metadata(
-                turn_context.sandbox_policy.get(),
-            ));
-            Some(patch)
-        } else {
-            None
-        };
-        let response_item = stamp_message_metadata_on_response_item(response_item, metadata_patch);
-
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
@@ -4165,20 +4159,18 @@ impl Session {
         }
 
         let mut input_item: ResponseInputItem = input.into();
-        let metadata = Some(user_message_metadata_patch(
+        let metadata = user_message_metadata_patch(
             UserMessageType::PromptSteering,
             self.enabled(Feature::ItemMetadata)
                 .then(|| sandbox_policy_to_metadata(active_task.turn_context.sandbox_policy.get())),
-        ));
-        if self.enabled(Feature::ItemMetadata)
-            && let Some(metadata_patch) = metadata.as_ref()
-        {
-            stamp_message_metadata_on_input_item(&mut input_item, metadata_patch);
+        );
+        if self.enabled(Feature::ItemMetadata) {
+            stamp_message_metadata_on_input_item(&mut input_item, &metadata);
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input_item, metadata);
-        Ok(active_turn_id.to_string())
+        turn_state.push_pending_input(input_item);
+        Ok(active_turn_id.clone())
     }
 
     /// Returns the input if there was no task running to inject into
@@ -4194,24 +4186,16 @@ impl Session {
                 });
                 let mut ts = at.turn_state.lock().await;
                 for mut item in input {
-                    let metadata = match &item {
-                        ResponseInputItem::Message { .. } => Some(user_message_metadata_patch(
-                            UserMessageType::PromptQueued,
-                            if self.enabled(Feature::ItemMetadata) {
-                                sandbox_policy.clone()
-                            } else {
-                                None
-                            },
-                        )),
-                        _ => None,
-                    };
-
                     if self.enabled(Feature::ItemMetadata)
-                        && let Some(metadata_patch) = metadata.as_ref()
+                        && matches!(&item, ResponseInputItem::Message { .. })
                     {
-                        stamp_message_metadata_on_input_item(&mut item, metadata_patch);
+                        let metadata = user_message_metadata_patch(
+                            UserMessageType::PromptQueued,
+                            sandbox_policy.clone(),
+                        );
+                        stamp_message_metadata_on_input_item(&mut item, &metadata);
                     }
-                    ts.push_pending_input(item, metadata);
+                    ts.push_pending_input(item);
                 }
                 Ok(())
             }
@@ -4219,39 +4203,26 @@ impl Session {
         }
     }
 
-    pub async fn get_pending_input_with_metadata(
-        &self,
-    ) -> Vec<(ResponseInputItem, Option<ResponseItemMetadata>)> {
+    pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                ts.take_pending_input_with_metadata()
-                    .into_iter()
-                    .map(|item| (item.input, item.metadata))
-                    .collect()
-            }
-            None => Vec::with_capacity(0),
-        }
-    }
-
-    pub(crate) async fn prepend_pending_input_with_metadata(
-        &self,
-        input: Vec<(ResponseInputItem, Option<ResponseItemMetadata>)>,
-    ) -> Result<(), ()> {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.prepend_pending_input(
-                    input
-                        .into_iter()
-                        .map(|(input, metadata)| crate::state::PendingInputItem { input, metadata })
-                        .collect(),
-                );
+                ts.prepend_pending_input(input);
                 Ok(())
             }
             None => Err(()),
+        }
+    }
+
+    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.take_pending_input()
+            }
+            None => Vec::with_capacity(0),
         }
     }
 
@@ -5529,8 +5500,8 @@ async fn spawn_review_thread(
         .await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
-    let _ = review_features.disable(crate::features::Feature::WebSearchRequest);
-    let _ = review_features.disable(crate::features::Feature::WebSearchCached);
+    let _ = review_features.disable(Feature::WebSearchRequest);
+    let _ = review_features.disable(Feature::WebSearchCached);
     let review_web_search_mode = WebSearchMode::Disabled;
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
@@ -5589,6 +5560,7 @@ async fn spawn_review_thread(
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
+        sess.conversation_id.to_string(),
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
@@ -5920,24 +5892,17 @@ pub(crate) async fn run_turn(
         .await;
 
     let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let initial_message_metadata = Some(user_message_metadata_patch(
+    let initial_message_metadata = user_message_metadata_patch(
         UserMessageType::Prompt,
         sess.enabled(Feature::ItemMetadata)
             .then(|| sandbox_policy_to_metadata(turn_context.sandbox_policy.get())),
-    ));
-    if sess.enabled(Feature::ItemMetadata)
-        && let Some(metadata_patch) = initial_message_metadata.as_ref()
-    {
-        stamp_message_metadata_on_input_item(&mut initial_input_for_turn, metadata_patch);
+    );
+    if sess.enabled(Feature::ItemMetadata) {
+        stamp_message_metadata_on_input_item(&mut initial_input_for_turn, &initial_message_metadata);
     }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_user_prompt_and_emit_turn_item(
-        turn_context.as_ref(),
-        &input,
-        response_item,
-        initial_message_metadata,
-    )
-    .await;
+    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+        .await;
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
@@ -5978,26 +5943,25 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_response_items = sess.get_pending_input_with_metadata().await;
+        let pending_input = sess.get_pending_input().await;
+
         let mut blocked_pending_input = false;
         let mut blocked_pending_input_contexts = Vec::new();
         let mut requeued_pending_input = false;
         let mut accepted_pending_input = Vec::new();
-        if !pending_response_items.is_empty() {
-            let mut pending_input_iter = pending_response_items.into_iter();
-            while let Some((pending_input_item, message_metadata)) = pending_input_iter.next() {
+        if !pending_input.is_empty() {
+            let mut pending_input_iter = pending_input.into_iter();
+            while let Some(pending_input_item) = pending_input_iter.next() {
                 match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
-                        accepted_pending_input.push((*pending_input, message_metadata));
+                        accepted_pending_input.push(*pending_input);
                     }
                     PendingInputHookDisposition::Blocked {
                         additional_contexts,
                     } => {
                         let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
                         if !remaining_pending_input.is_empty() {
-                            let _ = sess
-                                .prepend_pending_input_with_metadata(remaining_pending_input)
-                                .await;
+                            let _ = sess.prepend_pending_input(remaining_pending_input).await;
                             requeued_pending_input = true;
                         }
                         blocked_pending_input_contexts = additional_contexts;
@@ -6009,8 +5973,8 @@ pub(crate) async fn run_turn(
         }
 
         let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for (pending_input, message_metadata) in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input, message_metadata).await;
+        for pending_input in accepted_pending_input {
+            record_pending_input(&sess, &turn_context, pending_input).await;
         }
         record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
 
