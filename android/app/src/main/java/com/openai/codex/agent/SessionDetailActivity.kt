@@ -261,7 +261,7 @@ class SessionDetailActivity : Activity() {
             } else if (isTopLevelActive) {
                 "This app-scoped session is still active."
             } else {
-                "Deleting this app-scoped session consumes its framework presentation and removes it from the Agent UI."
+                "Deleting this app-scoped session dismisses it from framework and removes it from the Agent UI."
             }
         }
         val childIsSelected = selectedChildSession != null
@@ -455,20 +455,10 @@ class SessionDetailActivity : Activity() {
     private fun deleteSession() {
         val topLevelSession = topLevelSession(latestSnapshot) ?: return
         thread {
-            var frameworkDeleteFailure: Throwable? = null
-            if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_HOME) {
-                runCatching {
-                    if (topLevelSession.state == AgentSessionInfo.STATE_COMPLETED) {
-                        sessionController.consumeCompletedHomeSession(topLevelSession.sessionId)
-                    } else {
-                        sessionController.consumeHomeSessionPresentation(topLevelSession.sessionId)
-                    }
-                }.onFailure { err ->
-                    frameworkDeleteFailure = err
-                    Log.w(TAG, "Failed to consume HOME session ${topLevelSession.sessionId} during delete", err)
-                }
-            }
             runCatching {
+                if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_HOME) {
+                    sessionController.cancelSession(topLevelSession.sessionId)
+                }
                 dismissedSessionStore.dismiss(topLevelSession.sessionId)
                 childSessions(latestSnapshot).forEach { childSession ->
                     dismissedSessionStore.dismiss(childSession.sessionId)
@@ -482,13 +472,7 @@ class SessionDetailActivity : Activity() {
             }.onFailure { err ->
                 showToast("Failed to delete session: ${err.message}")
             }.onSuccess {
-                showToast(
-                    if (frameworkDeleteFailure == null) {
-                        "Deleted session"
-                    } else {
-                        "Deleted session from Agent UI; framework consume failed"
-                    },
-                )
+                showToast("Deleted session")
                 finish()
             }
         }

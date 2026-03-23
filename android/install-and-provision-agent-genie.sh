@@ -209,6 +209,9 @@ echo "Assigning GENIE role to $genie_package"
 echo "Granting Agent notification permission"
 "${adb_cmd[@]}" shell pm grant "$agent_package" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 
+echo "Granting Agent framework session permission"
+"${adb_cmd[@]}" shell pm grant "$agent_package" android.permission.START_AGENT_REQUESTS >/dev/null 2>&1 || true
+
 if [[ $skip_auth -eq 0 && -f "$auth_file" ]]; then
   echo "Seeding Agent auth from $auth_file"
   remote_auth_tmp="/data/local/tmp/codex-agent-auth-${user_id}-$$.json"

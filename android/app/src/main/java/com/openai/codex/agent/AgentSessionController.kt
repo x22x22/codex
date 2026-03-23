@@ -322,14 +322,6 @@ class AgentSessionController(context: Context) {
         return executionSettingsStore.getSettings(sessionId)
     }
 
-    fun consumeCompletedHomeSession(sessionId: String) {
-        requireAgentManager().consumeCompletedHomeSession(sessionId)
-    }
-
-    fun consumeHomeSessionPresentation(sessionId: String) {
-        requireAgentManager().consumeHomeSessionPresentation(sessionId)
-    }
-
     fun answerQuestion(sessionId: String, answer: String, parentSessionId: String?) {
         val manager = requireAgentManager()
         repeat(QUESTION_ANSWER_RETRY_COUNT) { attempt ->
