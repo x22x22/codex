@@ -10,7 +10,6 @@ pub(crate) mod zsh_fork_backend;
 
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
-use crate::features::Feature;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -18,7 +17,6 @@ use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
-use crate::state::ApprovalOutcomeMetadata;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_command_spec;
@@ -35,8 +33,8 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_features::Feature;
 use codex_network_proxy::NetworkProxy;
-use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
@@ -155,11 +153,11 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
-                let decision = review_approval_request(
+                return review_approval_request(
                     session,
                     turn,
                     GuardianApprovalRequest::Shell {
-                        id: call_id.clone(),
+                        id: call_id,
                         command,
                         cwd,
                         sandbox_permissions: req.sandbox_permissions,
@@ -169,16 +167,6 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     retry_reason,
                 )
                 .await;
-                session
-                    .record_call_approval_outcome(
-                        call_id.clone(),
-                        ApprovalOutcomeMetadata::reviewed(
-                            &decision,
-                            ApprovalSourceMetadata::Guardian,
-                        ),
-                    )
-                    .await;
-                return decision;
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;

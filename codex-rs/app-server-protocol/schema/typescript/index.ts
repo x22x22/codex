@@ -3,7 +3,6 @@
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
-export type { ApprovalSourceMetadata } from "./ApprovalSourceMetadata";
 export type { AuthMode } from "./AuthMode";
 export type { ClientInfo } from "./ClientInfo";
 export type { ClientNotification } from "./ClientNotification";
@@ -60,6 +59,7 @@ export type { RequestId } from "./RequestId";
 export type { Resource } from "./Resource";
 export type { ResourceTemplate } from "./ResourceTemplate";
 export type { ResponseItem } from "./ResponseItem";
+export type { ResponseItemMessageMetadata } from "./ResponseItemMessageMetadata";
 export type { ResponseItemMetadata } from "./ResponseItemMetadata";
 export type { ReviewDecision } from "./ReviewDecision";
 export type { ReviewDecisionMetadata } from "./ReviewDecisionMetadata";

@@ -4,6 +4,7 @@
 //! decision to avoid re-prompting, builds the self-invocation command for
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
@@ -11,7 +12,6 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
-use crate::state::ApprovalOutcomeMetadata;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -24,7 +24,6 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
-use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
@@ -95,6 +94,7 @@ impl ApplyPatchRuntime {
             ],
             cwd: req.action.cwd.clone(),
             expiration: req.timeout_ms.into(),
+            capture_policy: ExecCapturePolicy::ShellTool,
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             sandbox_permissions: req.sandbox_permissions,
@@ -142,17 +142,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
-                let decision = review_approval_request(session, turn, action, retry_reason).await;
-                session
-                    .record_call_approval_outcome(
-                        call_id.clone(),
-                        ApprovalOutcomeMetadata::reviewed(
-                            &decision,
-                            ApprovalSourceMetadata::Guardian,
-                        ),
-                    )
-                    .await;
-                return decision;
+                return review_approval_request(session, turn, action, retry_reason).await;
             }
             if req.permissions_preapproved && retry_reason.is_none() {
                 return ReviewDecision::Approved;

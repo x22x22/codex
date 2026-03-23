@@ -10,9 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
-use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -60,29 +58,18 @@ pub(crate) struct RunningTask {
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct PendingInputItem {
-    pub(crate) input: ResponseInputItem,
-    pub(crate) metadata: Option<ResponseItemMetadata>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingApprovalMetadata {
     pub(crate) call_id: String,
-    pub(crate) approval_source: ApprovalSourceMetadata,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ApprovalOutcomeMetadata {
     pub(crate) review_decision: Option<ReviewDecisionMetadata>,
-    pub(crate) approval_source: ApprovalSourceMetadata,
 }
 
 impl ApprovalOutcomeMetadata {
-    pub(crate) fn reviewed(
-        decision: &ReviewDecision,
-        approval_source: ApprovalSourceMetadata,
-    ) -> Self {
+    pub(crate) fn reviewed(decision: &ReviewDecision) -> Self {
         let review_decision = match decision {
             ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
@@ -104,7 +91,6 @@ impl ApprovalOutcomeMetadata {
         };
         Self {
             review_decision: Some(review_decision),
-            approval_source,
         }
     }
 }
@@ -135,7 +121,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
-    pending_input: Vec<PendingInputItem>,
+    pending_input: Vec<ResponseInputItem>,
     granted_permissions: Option<PermissionProfile>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
@@ -268,16 +254,11 @@ impl TurnState {
         self.pending_dynamic_tools.remove(key)
     }
 
-    pub(crate) fn push_pending_input(
-        &mut self,
-        input: ResponseInputItem,
-        metadata: Option<ResponseItemMetadata>,
-    ) {
-        self.pending_input
-            .push(PendingInputItem { input, metadata });
+    pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
+        self.pending_input.push(input);
     }
 
-    pub(crate) fn prepend_pending_input_with_metadata(&mut self, mut input: Vec<PendingInputItem>) {
+    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
         if input.is_empty() {
             return;
         }
@@ -286,7 +267,7 @@ impl TurnState {
         self.pending_input = input;
     }
 
-    pub(crate) fn take_pending_input_with_metadata(&mut self) -> Vec<PendingInputItem> {
+    pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
         } else {

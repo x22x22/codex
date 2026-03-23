@@ -1,11 +1,11 @@
 use super::*;
 use crate::codex::make_session_and_context;
 use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
-use crate::features::Feature;
 use crate::protocol::AskForApproval;
 use crate::protocol::EventMsg;
 use crate::protocol::SandboxPolicy;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -1175,7 +1175,7 @@ console.log(out.type);
         .await?;
     assert!(result.output.contains("function_call_output"));
     assert!(result.content_items.is_empty());
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1241,7 +1241,7 @@ console.log(out.type);
             }]
             .as_slice()
         );
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1296,7 +1296,7 @@ await codex.emitImage({ bytes: png, mimeType: "image/png" });
             }]
             .as_slice()
         );
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1360,7 +1360,7 @@ await codex.emitImage(
             ]
             .as_slice()
         );
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1415,7 +1415,7 @@ console.log("cell-complete");
             }]
             .as_slice()
         );
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1497,7 +1497,7 @@ console.log("helpers-ran");
             },
         ]
     );
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1541,7 +1541,7 @@ console.log("cell-complete");
         .await
         .expect_err("unawaited invalid emitImage should fail");
     assert!(err.to_string().contains("expected non-empty bytes"));
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1590,7 +1590,7 @@ console.log("cell-complete");
     assert!(result.output.contains("expected non-empty bytes"));
     assert!(result.output.contains("cell-complete"));
     assert!(result.content_items.is_empty());
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1637,7 +1637,7 @@ await codex.emitImage({ bytes: png });
         .await
         .expect_err("missing mimeType should fail");
     assert!(err.to_string().contains("expected a non-empty mimeType"));
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1680,7 +1680,7 @@ await codex.emitImage("https://example.com/image.png");
         .await
         .expect_err("non-data URLs should fail");
     assert!(err.to_string().contains("only accepts data URLs"));
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1729,7 +1729,7 @@ await codex.emitImage("DATA:image/png;base64,AAA");
         }]
         .as_slice()
     );
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1779,7 +1779,7 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: "ultra" });
         err.to_string()
             .contains("only supports detail \"original\"")
     );
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1831,8 +1831,8 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: null });
                 detail: None,
             }]
             .as_slice()
-    );
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+        );
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -1917,7 +1917,7 @@ await codex.emitImage(out);
         err.to_string()
             .contains("does not accept mixed text and image content")
     );
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
@@ -2079,7 +2079,7 @@ console.log(JSON.stringify(out));
     let result = result?;
     response_watcher_result?;
     assert!(result.output.contains("hidden-ok"));
-    assert!(session.get_pending_input_with_metadata().await.is_empty());
+    assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
 }
