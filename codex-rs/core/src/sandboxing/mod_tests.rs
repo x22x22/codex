@@ -2,7 +2,6 @@
 use super::EffectiveSandboxPermissions;
 use super::SandboxManager;
 use super::effective_file_system_sandbox_policy;
-#[cfg(target_os = "macos")]
 use super::intersect_permission_profiles;
 use super::merge_file_system_policy_with_additional_permissions;
 use super::normalize_additional_permissions;
