@@ -51,7 +51,7 @@ Or use the helper script from `android/`:
 
 ```bash
 cd android
-./build-agent-genie-apks.sh --agent-sdk-zip /path/to/android-agent-platform-stub-sdk.zip
+./build-agent-genie-apks.sh --agent-sdk-zip /path/to/android-agent-platform-stub-sdk.zip --variant debug
 ```
 
 If you prefer the system Gradle install, use `gradle :app:assembleDebug` from
@@ -68,8 +68,20 @@ optionally seed `auth.json` into the Agent sandbox:
 
 ```bash
 cd android
-./install-and-provision-agent-genie.sh --serial emulator-5554
+./install-and-provision-agent-genie.sh --serial emulator-5554 --variant debug
 ```
+
+For release APKs:
+
+```bash
+cd android
+./build-agent-genie-apks.sh --agent-sdk-zip /path/to/android-agent-platform-stub-sdk.zip --variant release
+```
+
+The default release outputs are the standard Gradle unsigned artifacts
+(`app-release-unsigned.apk` and `genie-release-unsigned.apk`). Sign them before
+calling `install-and-provision-agent-genie.sh --variant release`, or override
+the install paths with `--agent-apk` and `--genie-apk`.
 
 If `cargo-ndk` cannot find your NDK, set:
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Install the Codex Agent and Genie debug APKs and provision device roles.
+Install the Codex Agent and Genie APKs and provision device roles.
 
 Usage:
   install-and-provision-agent-genie.sh [options]
@@ -11,8 +11,9 @@ Usage:
 Options:
   --serial SERIAL      adb device serial. Defaults to the adb default device.
   --user USER_ID       Android user id for role assignment. Defaults to 0.
-  --agent-apk PATH     Agent APK path. Defaults to android/app/build/outputs/apk/debug/app-debug.apk.
-  --genie-apk PATH     Genie APK path. Defaults to android/genie/build/outputs/apk/debug/genie-debug.apk.
+  --variant VALUE      APK variant to install: debug or release. Defaults to debug.
+  --agent-apk PATH     Agent APK path. Overrides the default path for the selected variant.
+  --genie-apk PATH     Genie APK path. Overrides the default path for the selected variant.
   --auth-file PATH     Auth file to seed into the Agent sandbox.
                        Defaults to $HOME/.codex/auth.json when present.
   --skip-auth          Do not copy auth.json into the Agent sandbox.
@@ -27,8 +28,6 @@ fail() {
 }
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-agent_apk="$script_dir/app/build/outputs/apk/debug/app-debug.apk"
-genie_apk="$script_dir/genie/build/outputs/apk/debug/genie-debug.apk"
 agent_package="com.openai.codex.agent"
 genie_package="com.openai.codex.genie"
 user_id=0
@@ -36,6 +35,11 @@ adb_serial=""
 launch_agent=0
 skip_auth=0
 auth_file="$HOME/.codex/auth.json"
+variant="debug"
+agent_apk=""
+genie_apk=""
+agent_apk_overridden=0
+genie_apk_overridden=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,15 +53,22 @@ while [[ $# -gt 0 ]]; do
       [[ $# -gt 0 ]] || fail "--user requires a value"
       user_id="$1"
       ;;
+    --variant)
+      shift
+      [[ $# -gt 0 ]] || fail "--variant requires a value"
+      variant="$1"
+      ;;
     --agent-apk)
       shift
       [[ $# -gt 0 ]] || fail "--agent-apk requires a path"
       agent_apk="$1"
+      agent_apk_overridden=1
       ;;
     --genie-apk)
       shift
       [[ $# -gt 0 ]] || fail "--genie-apk requires a path"
       genie_apk="$1"
+      genie_apk_overridden=1
       ;;
     --auth-file)
       shift
@@ -81,8 +92,31 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+[[ "$variant" == "debug" || "$variant" == "release" ]] || fail "--variant must be debug or release"
+
+if [[ $agent_apk_overridden -eq 0 ]]; then
+  agent_apk="$script_dir/app/build/outputs/apk/$variant/app-$variant.apk"
+fi
+if [[ $genie_apk_overridden -eq 0 ]]; then
+  genie_apk="$script_dir/genie/build/outputs/apk/$variant/genie-$variant.apk"
+fi
+if [[ "$variant" == "release" ]]; then
+  if [[ $agent_apk_overridden -eq 0 ]]; then
+    agent_apk="$script_dir/app/build/outputs/apk/$variant/app-$variant-unsigned.apk"
+  fi
+  if [[ $genie_apk_overridden -eq 0 ]]; then
+    genie_apk="$script_dir/genie/build/outputs/apk/$variant/genie-$variant-unsigned.apk"
+  fi
+fi
+
 [[ -f "$agent_apk" ]] || fail "Agent APK not found: $agent_apk"
 [[ -f "$genie_apk" ]] || fail "Genie APK not found: $genie_apk"
+if [[ "$variant" == "release" && $agent_apk_overridden -eq 0 && "$agent_apk" == *-unsigned.apk ]]; then
+  fail "default release Agent APK is unsigned: $agent_apk; sign it first or pass --agent-apk"
+fi
+if [[ "$variant" == "release" && $genie_apk_overridden -eq 0 && "$genie_apk" == *-unsigned.apk ]]; then
+  fail "default release Genie APK is unsigned: $genie_apk; sign it first or pass --genie-apk"
+fi
 
 adb_cmd=(adb)
 if [[ -n "$adb_serial" ]]; then
