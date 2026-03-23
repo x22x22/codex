@@ -68,7 +68,11 @@ object AgentSessionLauncher {
                     parentSessionId = sourceTopLevelSession.sessionId,
                     target = AgentDelegationTarget(
                         packageName = targetPackage,
-                        objective = prompt,
+                        objective = SessionContinuationPromptBuilder.build(
+                            sourceTopLevelSession = sourceTopLevelSession,
+                            selectedSession = selectedSession,
+                            prompt = prompt,
+                        ),
                         finalPresentationPolicy = selectedSession.requiredFinalPresentationPolicy
                             ?: SessionFinalPresentationPolicy.AGENT_CHOICE,
                     ),

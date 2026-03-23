@@ -26,6 +26,7 @@ class AgentBridgeClient(
         private const val OP_SEND_RESPONSES_REQUEST = "sendResponsesRequest"
         private const val OP_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
         private const val OP_READ_SESSION_EXECUTION_SETTINGS = "readSessionExecutionSettings"
+        private const val WRITE_CHUNK_BYTES = 4096
     }
 
     private val bridgeFd: ParcelFileDescriptor = callback.openSessionBridge(sessionId)
@@ -106,8 +107,14 @@ class AgentBridgeClient(
     private fun writeMessage(message: JSONObject) {
         val payload = message.toString().toByteArray(StandardCharsets.UTF_8)
         output.writeInt(payload.size)
-        output.write(payload)
         output.flush()
+        var offset = 0
+        while (offset < payload.size) {
+            val chunkSize = minOf(WRITE_CHUNK_BYTES, payload.size - offset)
+            output.write(payload, offset, chunkSize)
+            output.flush()
+            offset += chunkSize
+        }
     }
 
     private fun readMessage(): JSONObject {

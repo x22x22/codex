@@ -278,12 +278,12 @@ class SessionDetailActivity : Activity() {
             if (!isTopLevelActive && supportsInPlaceContinuation) View.VISIBLE else View.GONE
         findViewById<TextView>(R.id.session_detail_follow_up_label).apply {
             visibility = continueVisibility
-            text = "Continue Direct Session"
+            text = "Continue Same Session"
         }
         findViewById<EditText>(R.id.session_detail_follow_up_prompt).visibility = continueVisibility
         findViewById<Button>(R.id.session_detail_follow_up_button).apply {
             visibility = continueVisibility
-            text = "Send In-Place Prompt"
+            text = "Send Continuation Prompt"
         }
         findViewById<TextView>(R.id.session_detail_follow_up_note).visibility =
             if (!isTopLevelActive && !supportsInPlaceContinuation) View.VISIBLE else View.GONE
@@ -300,12 +300,26 @@ class SessionDetailActivity : Activity() {
         container.removeAllViews()
         emptyView.visibility = if (sessions.isEmpty()) View.VISIBLE else View.GONE
         sessions.forEach { session ->
+            val isSelected = session.sessionId == selectedSessionId
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(0, dp(8), 0, dp(8))
+                setPadding(dp(12), dp(12), dp(12), dp(12))
                 isClickable = true
                 isFocusable = true
-                setBackgroundResource(android.R.drawable.list_selector_background)
+                background = getDrawable(
+                    if (isSelected) {
+                        R.drawable.session_child_card_selected_background
+                    } else {
+                        R.drawable.session_child_card_background
+                    },
+                )
+                val layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    bottomMargin = dp(8)
+                }
+                this.layoutParams = layoutParams
                 setOnClickListener {
                     if (session.sessionId != selectedChildSessionId) {
                         selectedChildSessionId = session.sessionId
@@ -316,7 +330,7 @@ class SessionDetailActivity : Activity() {
             }
             val title = TextView(this).apply {
                 text = SessionUiFormatter.relatedSessionTitle(this@SessionDetailActivity, session)
-                setTypeface(typeface, if (session.sessionId == selectedSessionId) Typeface.BOLD else Typeface.NORMAL)
+                setTypeface(typeface, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
             }
             val subtitle = TextView(this).apply {
                 text = SessionUiFormatter.relatedSessionSubtitle(session)

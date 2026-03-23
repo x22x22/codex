@@ -72,7 +72,7 @@ object SessionUiFormatter {
     ): String {
         val targetLabel = AppLabelResolver.loadAppLabel(context, session.targetPackage)
         return buildString {
-            append(anchorLabel(session.anchor))
+            append("Child")
             append(" • ")
             append(session.stateLabel)
             append(" • ")
@@ -86,6 +86,8 @@ object SessionUiFormatter {
             session.latestQuestion ?: session.latestResult ?: session.latestError ?: session.latestTrace,
         )
         return buildString {
+            append("Tap to inspect")
+            append(" • ")
             append(session.targetPresentationLabel)
             detail?.let {
                 append(" • ")
