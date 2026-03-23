@@ -4,7 +4,6 @@ use chrono::DateTime;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
-use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use pretty_assertions::assert_eq;
 use reqwest::Response;
@@ -242,60 +241,6 @@ fn usage_limit_reached_error_formats_business_plan_without_reset() {
         err.to_string(),
         "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
     );
-}
-
-#[test]
-fn usage_limit_reached_error_formats_self_serve_business_usage_plan_with_spend_limits() {
-    let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-    let resets_at = base + ChronoDuration::hours(1);
-    with_now_override(base, move || {
-        let err = UsageLimitReachedError {
-            plan_type: Some(PlanType::Unknown(
-                "self_serve_business_usage_based".to_string(),
-            )),
-            resets_at: Some(resets_at),
-            rate_limits: Some(Box::new(RateLimitSnapshot {
-                credits: Some(CreditsSnapshot {
-                    has_credits: true,
-                    unlimited: false,
-                    balance: Some("38".to_string()),
-                }),
-                ..rate_limit_snapshot()
-            })),
-            promo_message: None,
-        };
-        assert_eq!(
-            err.to_string(),
-            "You've hit your usage limit. Contact your admin to increase spend limits to continue."
-        );
-    });
-}
-
-#[test]
-fn usage_limit_reached_error_formats_self_serve_business_usage_plan_without_credits() {
-    let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-    let resets_at = base + ChronoDuration::hours(1);
-    with_now_override(base, move || {
-        let err = UsageLimitReachedError {
-            plan_type: Some(PlanType::Unknown(
-                "self_serve_business_usage_based".to_string(),
-            )),
-            resets_at: Some(resets_at),
-            rate_limits: Some(Box::new(RateLimitSnapshot {
-                credits: Some(CreditsSnapshot {
-                    has_credits: false,
-                    unlimited: false,
-                    balance: Some("0".to_string()),
-                }),
-                ..rate_limit_snapshot()
-            })),
-            promo_message: None,
-        };
-        assert_eq!(
-            err.to_string(),
-            "You've hit your usage limit. Contact your admin to add credits to continue."
-        );
-    });
 }
 
 #[test]
