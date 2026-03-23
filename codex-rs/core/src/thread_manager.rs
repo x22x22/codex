@@ -128,6 +128,14 @@ pub struct NewThread {
     pub session_configured: SessionConfiguredEvent,
 }
 
+/// Describes how a thread fork should seed the new thread's history.
+pub enum ForkSnapshot {
+    /// Cut strictly before the nth user message (0-based).
+    TruncateBeforeNthUserMessage(usize),
+    /// Keep the full source history.
+    Interrupted,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ThreadShutdownReport {
     pub completed: Vec<ThreadId>,
@@ -543,20 +551,25 @@ impl ThreadManager {
         report
     }
 
-    /// Fork an existing thread by taking messages up to the given position (not including
-    /// the message at the given position) and starting a new thread with identical
-    /// configuration (unless overridden by the caller's `config`). The new thread will have
-    /// a fresh id. Pass `usize::MAX` to keep the full rollout history.
+    /// Fork an existing thread by snapshotting rollout history according to
+    /// `snapshot` and starting a new thread with identical configuration
+    /// (unless overridden by the caller's `config`). The new thread will have
+    /// a fresh id.
     pub async fn fork_thread(
         &self,
-        nth_user_message: usize,
+        snapshot: ForkSnapshot,
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
+        let history = match snapshot {
+            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+                truncate_before_nth_user_message(history, nth_user_message)
+            }
+            ForkSnapshot::Interrupted => history,
+        };
         Box::pin(self.state.spawn_thread(
             config,
             history,
