@@ -587,8 +587,7 @@ stream_max_retries = 0
 [mcp_servers.required_broken]
 {required_broken_transport}
 required = true
-"#
-            ,
+"#,
             required_broken_transport = broken_mcp_transport_toml()
         ),
     )
@@ -618,8 +617,7 @@ stream_max_retries = 0
 
 [mcp_servers.optional_broken]
 {optional_broken_transport}
-"#
-            ,
+"#,
             optional_broken_transport = broken_mcp_transport_toml()
         ),
     )
