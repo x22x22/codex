@@ -26,6 +26,7 @@ use tokio::fs;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use tokio::time::timeout;
 
 #[derive(Debug)]
 struct SnapshotRun {
@@ -522,13 +523,14 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let test = harness.test();
     let codex = test.codex.clone();
     let cwd = test.cwd_path().to_path_buf();
-    let codex_home = test.home.path().to_path_buf();
     let target = cwd.join("snapshot-apply.txt");
 
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\nEOF\n";
     let args = json!({
         "command": script,
-        "timeout_ms": 1_000,
+        // The intercepted apply_patch path spawns a helper process, which can
+        // take longer than a tiny shell timeout on CI.
+        "timeout_ms": 5_000,
     });
     let call_id = "shell-snapshot-apply-patch";
     let responses = vec![
@@ -565,11 +567,51 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         })
         .await?;
 
-    let snapshot_path = wait_for_snapshot(&codex_home).await?;
-    let snapshot_content = fs::read_to_string(&snapshot_path).await?;
-    assert_posix_snapshot_sections(&snapshot_content);
+    let mut saw_patch_begin = false;
+    let mut saw_patch_end = false;
+    let mut saw_exec_begin = false;
+    let mut saw_exec_end = false;
+    timeout(Duration::from_secs(10), async {
+        wait_for_event(&codex, |ev| match ev {
+            EventMsg::PatchApplyBegin(begin) if begin.call_id == call_id => {
+                saw_patch_begin = true;
+                false
+            }
+            EventMsg::PatchApplyEnd(end) if end.call_id == call_id => {
+                saw_patch_end = true;
+                false
+            }
+            EventMsg::ExecCommandBegin(event) if event.call_id == call_id => {
+                saw_exec_begin = true;
+                false
+            }
+            EventMsg::ExecCommandEnd(event) if event.call_id == call_id => {
+                saw_exec_end = true;
+                false
+            }
+            EventMsg::TurnComplete(_) => true,
+            _ => false,
+        })
+        .await;
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("timed out waiting for intercepted apply_patch turn to complete")
+    })?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    assert!(
+        saw_patch_begin,
+        "expected apply_patch to emit PatchApplyBegin"
+    );
+    assert!(saw_patch_end, "expected apply_patch to emit PatchApplyEnd");
+    assert!(
+        !saw_exec_begin,
+        "apply_patch should be intercepted before shell_command begin"
+    );
+    assert!(
+        !saw_exec_end,
+        "apply_patch should not emit shell_command end events"
+    );
 
     assert_eq!(
         wait_for_file_contents(&target).await?,
