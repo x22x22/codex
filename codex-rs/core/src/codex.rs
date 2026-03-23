@@ -1158,7 +1158,7 @@ impl Session {
     /// we precompute the comma-separated list of enabled experimental feature keys at session
     /// creation time and thread it into the client.
     fn build_model_client_beta_features_header(config: &Config) -> Option<String> {
-        let beta_features_header = FEATURES
+        let mut beta_features = FEATURES
             .iter()
             .filter_map(|spec| {
                 if spec.stage.experimental_menu_description().is_some()
@@ -1169,8 +1169,13 @@ impl Session {
                     None
                 }
             })
-            .collect::<Vec<_>>()
-            .join(",");
+            .collect::<Vec<_>>();
+
+        if !config.features.enabled(Feature::ImageGeneration) {
+            beta_features.push("disable_img_gen");
+        }
+
+        let beta_features_header = beta_features.join(",");
 
         if beta_features_header.is_empty() {
             None

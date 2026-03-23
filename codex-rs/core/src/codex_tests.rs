@@ -15,6 +15,7 @@ use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_features::Feature;
 use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -142,6 +143,28 @@ fn assistant_message(text: &str) -> ResponseItem {
         end_turn: None,
         phase: None,
     }
+}
+
+#[test]
+fn beta_features_header_disables_image_generation_when_feature_is_off() {
+    let config = ConfigBuilder::default().build();
+
+    assert_eq!(
+        Session::build_model_client_beta_features_header(&config),
+        Some("disable_img_gen".to_string())
+    );
+}
+
+#[test]
+fn beta_features_header_uses_image_generation_feature_key_when_enabled() {
+    let mut config = ConfigBuilder::default().build();
+    config.features.enable(Feature::ImageGeneration);
+
+    let header = Session::build_model_client_beta_features_header(&config)
+        .expect("image generation should produce a beta features header");
+
+    assert!(header.split(',').any(|value| value == "image_generation"));
+    assert!(!header.split(',').any(|value| value == "disable_img_gen"));
 }
 
 fn skill_message(text: &str) -> ResponseItem {
