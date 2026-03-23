@@ -7,6 +7,8 @@
 - Add a `just android-build` helper that uses `cargo-ndk` to build `codex` for `arm64-v8a` and `x86_64` (API 26).
 - Document build and run steps for pushing the binary to a device.
 - Build the Android Agent/Genie apps directly on `codex`.
+- Have Gradle rebuild the packaged Android `codex` binary automatically instead
+  of silently reusing a stale prebuilt artifact.
 
 ## Prerequisites
 
@@ -34,15 +36,13 @@ For faster local iteration, you can skip Android release LTO:
 CODEX_ANDROID_SKIP_LTO=1 just android-build
 ```
 
-The Agent and Genie APKs now package only `codex`, so Android app builds require
-only `just android-build`.
+The Agent and Genie APKs now package only `codex`.
 
 Build the Android Agent/Genie prototype APKs with the Android Agent Platform
 stub SDK:
 
 ```bash
 export ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP=/path/to/android-agent-platform-stub-sdk.zip
-just android-build
 cd android
 ./gradlew :genie:assembleDebug :app:assembleDebug
 ```
@@ -60,8 +60,10 @@ If you prefer the system Gradle install, use `gradle :app:assembleDebug` from
 The Agent/Genie prototype modules also require
 `ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP` (or `-PagentPlatformStubSdkZip=...`) so
 Gradle can compile against the stub SDK jar. The Agent APK and Genie APK both
-package the Android `codex` binary as `libcodex.so`, so `just android-build`
-must run before `:app:assembleDebug` and `:genie:assembleDebug`.
+package the Android `codex` binary as `libcodex.so`. Gradle now rebuilds that
+native binary automatically before `:app:assembleDebug` and
+`:genie:assembleDebug`, so plain APK builds no longer silently package a stale
+`libcodex.so`.
 
 To install both APKs, assign the AGENT/GENIE roles, grant notifications, and
 optionally seed `auth.json` into the Agent sandbox:
@@ -93,6 +95,10 @@ Build outputs:
 
 - `target/android/aarch64-linux-android/release/codex`
 - `target/android/x86_64-linux-android/release/codex`
+
+`just android-build` is still useful when you want the standalone Android CLI
+binary for `adb push`, but it is no longer required as a manual prerequisite for
+building the Agent and Genie APKs.
 ## Run On Device
 
 Example for `arm64-v8a`:

@@ -72,12 +72,6 @@ if [[ "$variant" == "release" ]]; then
   genie_apk="$script_dir/genie/build/outputs/apk/$variant/genie-$variant-unsigned.apk"
 fi
 
-echo "Building packaged Codex binary"
-(
-  cd "$repo_root"
-  just android-build
-)
-
 echo "Building Android Agent and Genie APKs"
 (
   cd "$script_dir"

@@ -85,6 +85,7 @@ val extractAgentPlatformStubSdk = tasks.register<Sync>("extractAgentPlatformStub
 val syncCodexCliJniLibs = tasks.register<Sync>("syncCodexCliJniLibs") {
     val outputDir = codexJniDir
     into(outputDir)
+    dependsOn(rootProject.tasks.named("buildCodexCliNative"))
 
     codexTargets.forEach { (abi, triple) ->
         val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codex")
@@ -99,7 +100,7 @@ val syncCodexCliJniLibs = tasks.register<Sync>("syncCodexCliJniLibs") {
             val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codex")
             if (!binary.exists()) {
                 throw GradleException(
-                    "Missing codex binary for ${abi} at ${binary}. Run `just android-build` from the repo root with CODEX_ANDROID_SKIP_LTO=${if (skipAndroidLto) "1" else "0"}."
+                    "Missing codex binary for ${abi} at ${binary}. The Gradle native build task should have produced it."
                 )
             }
         }
