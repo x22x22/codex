@@ -36,6 +36,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".CreateSessionActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:taskAffinity="com.openai.codex.agent.create"
+            android:theme="@style/CodexCreateSessionTheme">
             <intent-filter>
                 <action android:name="android.app.agent.action.HANDLE_SESSION" />
                 <category android:name="android.intent.category.DEFAULT" />

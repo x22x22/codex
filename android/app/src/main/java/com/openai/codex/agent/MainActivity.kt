@@ -38,17 +38,10 @@ class MainActivity : Activity() {
     private var latestAgentRuntimeStatus: AgentCodexAppServerClient.RuntimeStatus? = null
     @Volatile
     private var pendingAuthMessage: String? = null
-    @Volatile
-    private var modelsRefreshInFlight = false
-    private val pendingModelCallbacks = mutableListOf<() -> Unit>()
 
     private val agentSessionController by lazy { AgentSessionController(this) }
     private val dismissedSessionStore by lazy { DismissedSessionStore(this) }
-    private val createSessionDialogController by lazy {
-        CreateSessionDialogController(this, agentSessionController)
-    }
     private val sessionListAdapter by lazy { TopLevelSessionListAdapter(this) }
-    private var availableModels: List<AgentModelOption> = emptyList()
     private var latestSnapshot: AgentSnapshot = AgentSnapshot.unavailable
 
     private val runtimeStatusListener = AgentCodexAppServerClient.RuntimeStatusListener { status ->
@@ -94,7 +87,6 @@ class MainActivity : Activity() {
         AgentCodexAppServerClient.registerRuntimeStatusListener(runtimeStatusListener)
         AgentCodexAppServerClient.refreshRuntimeStatusAsync(this, refreshToken = true)
         refreshAgentSessions(force = true)
-        refreshModelsIfNeeded(force = availableModels.isEmpty())
     }
 
     override fun onPause() {
@@ -111,14 +103,13 @@ class MainActivity : Activity() {
             }
         }
         findViewById<Button>(R.id.create_session_button).setOnClickListener {
-            showCreateSessionDialog()
+            launchCreateSessionActivity()
         }
         findViewById<Button>(R.id.auth_action).setOnClickListener {
             authAction()
         }
         findViewById<Button>(R.id.refresh_sessions_button).setOnClickListener {
             refreshAgentSessions(force = true)
-            refreshModelsIfNeeded(force = true)
         }
         updateAuthUi("Agent auth: probing...", false)
         updateRuntimeStatusUi()
@@ -128,35 +119,10 @@ class MainActivity : Activity() {
     private fun handleIncomingIntent(intent: Intent?) {
         val sessionId = intent?.getStringExtra(AgentManager.EXTRA_SESSION_ID)
         if (!sessionId.isNullOrBlank()) {
-            routeIncomingSession(sessionId)
+            openSessionDetail(sessionId)
             return
         }
         maybeHandleDebugIntent(intent)
-    }
-
-    private fun routeIncomingSession(sessionId: String) {
-        thread {
-            val draftSession = runCatching {
-                findStandaloneHomeDraftSession(sessionId)
-            }.getOrElse { err ->
-                Log.w(TAG, "Failed to inspect incoming session $sessionId", err)
-                null
-            }
-            runOnUiThread {
-                if (draftSession != null) {
-                    showCreateSessionDialog(
-                        initialTargetSelection = CreateSessionDialogController.InitialTargetSelection(
-                            packageName = checkNotNull(draftSession.targetPackage),
-                            locked = true,
-                        ),
-                        existingSessionId = draftSession.sessionId,
-                        initialSettings = agentSessionController.executionSettingsForSession(draftSession.sessionId),
-                    )
-                } else {
-                    openSessionDetail(sessionId)
-                }
-            }
-        }
     }
 
     private fun maybeHandleDebugIntent(intent: Intent?) {
@@ -233,119 +199,9 @@ class MainActivity : Activity() {
                 Log.w(TAG, "Failed to start debug Agent session", err)
                 showToast("Failed to start Agent session: ${err.message}")
             }
-            result.onSuccess(::handleSessionStarted)
-        }
-    }
-
-    private fun showCreateSessionDialog(
-        initialTargetSelection: CreateSessionDialogController.InitialTargetSelection? = null,
-        existingSessionId: String? = null,
-        initialSettings: SessionExecutionSettings = SessionExecutionSettings(
-            model = latestAgentRuntimeStatus?.effectiveModel,
-            reasoningEffort = null,
-        ),
-    ) {
-        if (availableModels.isEmpty()) {
-            refreshModelsIfNeeded(force = true) {
-                runOnUiThread {
-                    openCreateSessionDialog(
-                        initialTargetSelection = initialTargetSelection,
-                        existingSessionId = existingSessionId,
-                        initialSettings = initialSettings,
-                    )
-                }
-            }
-            showToast("Loading model catalog…")
-            return
-        }
-        openCreateSessionDialog(
-            initialTargetSelection = initialTargetSelection,
-            existingSessionId = existingSessionId,
-            initialSettings = initialSettings,
-        )
-    }
-
-    private fun openCreateSessionDialog(
-        initialTargetSelection: CreateSessionDialogController.InitialTargetSelection? = null,
-        existingSessionId: String? = null,
-        initialSettings: SessionExecutionSettings,
-    ) {
-        createSessionDialogController.show(
-            models = availableModels,
-            initialPrompt = "",
-            initialSettings = initialSettings,
-            initialTargetSelection = initialTargetSelection,
-            existingSessionId = existingSessionId,
-            onSubmit = ::startSessionFromUi,
-        )
-    }
-
-    private fun startSessionFromUi(request: LaunchSessionRequest) {
-        thread {
-            val result = runCatching {
-                AgentSessionLauncher.startSession(
-                    context = this,
-                    request = request,
-                    sessionController = agentSessionController,
-                    requestUserInputHandler = { questions ->
-                        AgentUserInputPrompter.promptForAnswers(this, questions)
-                    },
-                )
-            }
-            result.onFailure { err ->
-                Log.w(TAG, "Failed to start Agent session", err)
-                showToast("Failed to start Agent session: ${err.message}")
+            result.onSuccess { started ->
+                showToast("Started session ${started.parentSessionId}")
                 refreshAgentSessions(force = true)
-            }
-            result.onSuccess(::handleSessionStarted)
-        }
-    }
-
-    private fun handleSessionStarted(sessionStart: SessionStartResult) {
-        Log.i(
-            TAG,
-            "Started session topLevel=${sessionStart.parentSessionId} anchor=${sessionStart.anchor} children=${sessionStart.childSessionIds}",
-        )
-        val targetSummary = sessionStart.plannedTargets.joinToString(", ")
-        showToast(
-            "Started ${sessionStart.childSessionIds.size} session(s) for $targetSummary via ${sessionStart.geniePackage}",
-        )
-        refreshAgentSessions(force = true)
-        openSessionDetail(sessionStart.parentSessionId)
-    }
-
-    private fun refreshModelsIfNeeded(
-        force: Boolean,
-        onComplete: (() -> Unit)? = null,
-    ) {
-        if (!force && availableModels.isNotEmpty()) {
-            onComplete?.invoke()
-            return
-        }
-        if (onComplete != null) {
-            synchronized(pendingModelCallbacks) {
-                pendingModelCallbacks += onComplete
-            }
-        }
-        if (modelsRefreshInFlight) {
-            return
-        }
-        modelsRefreshInFlight = true
-        thread {
-            try {
-                runCatching { AgentCodexAppServerClient.listModels(this) }
-                    .onFailure { err ->
-                        Log.w(TAG, "Failed to load model catalog", err)
-                    }
-                    .onSuccess { models ->
-                        availableModels = models
-                    }
-            } finally {
-                modelsRefreshInFlight = false
-                val callbacks = synchronized(pendingModelCallbacks) {
-                    pendingModelCallbacks.toList().also { pendingModelCallbacks.clear() }
-                }
-                callbacks.forEach { callback -> callback.invoke() }
             }
         }
     }
@@ -386,18 +242,6 @@ class MainActivity : Activity() {
             } finally {
                 agentRefreshInFlight = false
             }
-        }
-    }
-
-    private fun findStandaloneHomeDraftSession(sessionId: String): AgentSessionDetails? {
-        val snapshot = agentSessionController.loadSnapshot(sessionId)
-        val session = snapshot.sessions.firstOrNull { it.sessionId == sessionId } ?: return null
-        val hasChildren = snapshot.sessions.any { it.parentSessionId == sessionId }
-        return session.takeIf {
-            it.anchor == AgentSessionInfo.ANCHOR_HOME &&
-                it.state == AgentSessionInfo.STATE_CREATED &&
-                !hasChildren &&
-                !it.targetPackage.isNullOrBlank()
         }
     }
 
@@ -557,6 +401,19 @@ class MainActivity : Activity() {
             Intent(this, SessionDetailActivity::class.java)
                 .putExtra(SessionDetailActivity.EXTRA_SESSION_ID, sessionId),
         )
+    }
+
+    private fun launchCreateSessionActivity() {
+        startActivity(
+            CreateSessionActivity.newSessionIntent(
+                context = this,
+                initialSettings = SessionExecutionSettings(
+                    model = latestAgentRuntimeStatus?.effectiveModel,
+                    reasoningEffort = null,
+                ),
+            ),
+        )
+        moveTaskToBack(true)
     }
 
     private fun showToast(message: String) {

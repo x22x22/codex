@@ -47,4 +47,22 @@ object InstalledAppCatalog {
             compareBy<InstalledApp>({ it.label.lowercase() }).thenBy { it.packageName },
         )
     }
+
+    fun resolveInstalledApp(
+        context: Context,
+        sessionController: AgentSessionController,
+        packageName: String,
+    ): InstalledApp {
+        listInstalledApps(context, sessionController)
+            .firstOrNull { it.packageName == packageName }
+            ?.let { return it }
+        val pm = context.packageManager
+        val applicationInfo = pm.getApplicationInfo(packageName, 0)
+        return InstalledApp(
+            packageName = packageName,
+            label = pm.getApplicationLabel(applicationInfo)?.toString().orEmpty().ifBlank { packageName },
+            icon = pm.getApplicationIcon(applicationInfo),
+            eligibleTarget = sessionController.canStartSessionForTarget(packageName),
+        )
+    }
 }
