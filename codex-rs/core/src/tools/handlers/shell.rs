@@ -74,6 +74,7 @@ impl ShellHandler {
             capture_policy: ExecCapturePolicy::ShellTool,
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
             network: turn_context.network.clone(),
+            network_owner_id: None,
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             windows_sandbox_private_desktop: turn_context
@@ -129,6 +130,7 @@ impl ShellCommandHandler {
             capture_policy: ExecCapturePolicy::ShellTool,
             env: create_env(&turn_context.shell_environment_policy, Some(thread_id)),
             network: turn_context.network.clone(),
+            network_owner_id: None,
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
             windows_sandbox_private_desktop: turn_context
@@ -474,6 +476,7 @@ impl ShellHandler {
             session: session.clone(),
             turn: turn.clone(),
             call_id: call_id.clone(),
+            network_approval_owner_id: None,
             tool_name,
         };
         let out = orchestrator

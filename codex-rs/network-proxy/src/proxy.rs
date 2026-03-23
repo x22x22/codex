@@ -305,15 +305,23 @@ fn set_env_keys(env: &mut HashMap<String, String>, keys: &[&str], value: &str) {
     }
 }
 
+fn proxy_url(scheme: &str, addr: SocketAddr, network_owner_id: Option<&str>) -> String {
+    match network_owner_id {
+        Some(network_owner_id) => format!("{scheme}://{network_owner_id}@{addr}"),
+        None => format!("{scheme}://{addr}"),
+    }
+}
+
 fn apply_proxy_env_overrides(
     env: &mut HashMap<String, String>,
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
+    network_owner_id: Option<&str>,
 ) {
-    let http_proxy_url = format!("http://{http_addr}");
-    let socks_proxy_url = format!("socks5h://{socks_addr}");
+    let http_proxy_url = proxy_url("http", http_addr, network_owner_id);
+    let socks_proxy_url = proxy_url("socks5h", socks_addr, network_owner_id);
     env.insert(
         ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
         if allow_local_binding {
@@ -414,6 +422,14 @@ impl NetworkProxy {
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        self.apply_to_env_for_owner(env, /*network_owner_id*/ None);
+    }
+
+    pub fn apply_to_env_for_owner(
+        &self,
+        env: &mut HashMap<String, String>,
+        network_owner_id: Option<&str>,
+    ) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
         apply_proxy_env_overrides(
@@ -422,6 +438,7 @@ impl NetworkProxy {
             self.socks_addr,
             self.socks_enabled,
             self.allow_local_binding,
+            network_owner_id,
         );
     }
 
@@ -696,6 +713,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
+            /*network_owner_id*/ None,
         );
 
         assert_eq!(
@@ -746,6 +764,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             false,
             true,
+            /*network_owner_id*/ None,
         );
 
         assert_eq!(
@@ -764,6 +783,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
+            /*network_owner_id*/ None,
         );
 
         assert_eq!(
@@ -809,11 +829,34 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
+            /*network_owner_id*/ None,
         );
 
         assert_eq!(
             env.get("GIT_SSH_COMMAND"),
             Some(&"ssh -o ProxyCommand='tsh proxy ssh --cluster=dev %r@%h:%p'".to_string())
+        );
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_includes_owner_credentials() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            true,
+            false,
+            Some("owner-1"),
+        );
+
+        assert_eq!(
+            env.get("HTTP_PROXY"),
+            Some(&"http://owner-1@127.0.0.1:3128".to_string())
+        );
+        assert_eq!(
+            env.get("ALL_PROXY"),
+            Some(&"socks5h://owner-1@127.0.0.1:8081".to_string())
         );
     }
 }

@@ -180,9 +180,14 @@ fn only_never_policy_disables_network_approval_flow() {
 }
 
 fn denied_blocked_request(host: &str) -> BlockedRequest {
+    denied_blocked_request_with_owner(host, None)
+}
+
+fn denied_blocked_request_with_owner(host: &str, network_owner_id: Option<&str>) -> BlockedRequest {
     BlockedRequest::new(BlockedRequestArgs {
         host: host.to_string(),
         reason: "not_allowed".to_string(),
+        network_owner_id: network_owner_id.map(ToString::to_string),
         client: None,
         method: None,
         mode: None,
@@ -264,4 +269,66 @@ async fn record_blocked_request_ignores_ambiguous_unattributed_blocked_requests(
 
     assert_eq!(service.take_call_outcome("registration-1").await, None);
     assert_eq!(service.take_call_outcome("registration-2").await, None);
+}
+
+#[tokio::test]
+async fn resolve_owner_call_uses_network_owner_id_when_multiple_calls_are_active() {
+    let service = NetworkApprovalService::default();
+    service
+        .register_call(
+            "registration-1".to_string(),
+            "turn-1".to_string(),
+            "command-1".to_string(),
+        )
+        .await;
+    service
+        .register_call(
+            "registration-2".to_string(),
+            "turn-2".to_string(),
+            "command-2".to_string(),
+        )
+        .await;
+
+    let owner_call = service
+        .resolve_owner_call(Some("registration-2"))
+        .await
+        .expect("owner call should resolve");
+
+    assert_eq!(owner_call.registration_id, "registration-2");
+    assert_eq!(owner_call.turn_id, "turn-2");
+    assert_eq!(owner_call.parent_tool_item_id, "command-2");
+}
+
+#[tokio::test]
+async fn record_blocked_request_uses_network_owner_id_when_multiple_calls_are_active() {
+    let service = NetworkApprovalService::default();
+    service
+        .register_call(
+            "registration-1".to_string(),
+            "turn-1".to_string(),
+            "command-1".to_string(),
+        )
+        .await;
+    service
+        .register_call(
+            "registration-2".to_string(),
+            "turn-2".to_string(),
+            "command-2".to_string(),
+        )
+        .await;
+
+    service
+        .record_blocked_request(denied_blocked_request_with_owner(
+            "example.com",
+            Some("registration-2"),
+        ))
+        .await;
+
+    assert_eq!(service.take_call_outcome("registration-1").await, None);
+    assert_eq!(
+        service.take_call_outcome("registration-2").await,
+        Some(NetworkApprovalOutcome::DeniedByPolicy(
+            "Network access to \"example.com\" was blocked: domain is not on the allowlist for the current sandbox mode.".to_string()
+        ))
+    );
 }

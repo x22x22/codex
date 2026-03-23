@@ -50,6 +50,7 @@ use rama_http::StatusCode;
 use rama_http::header;
 use rama_http::headers::HeaderMapExt;
 use rama_http::headers::Host;
+use rama_http::headers::ProxyAuthorization;
 use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http::matcher::MethodMatcher;
 use rama_http_backend::client::proxy::layer::HttpProxyConnector;
@@ -65,6 +66,7 @@ use rama_net::proxy::ProxyRequest;
 use rama_net::proxy::ProxyTarget;
 use rama_net::proxy::StreamForwardService;
 use rama_net::stream::SocketInfo;
+use rama_net::user::Basic;
 use rama_tcp::client::Request as TcpRequest;
 use rama_tcp::client::service::TcpConnector;
 use rama_tcp::server::TcpListener;
@@ -149,6 +151,12 @@ async fn run_http_proxy_with_listener(
     Ok(())
 }
 
+fn proxy_authorization_network_owner_id<T>(req: &Request<T>) -> Option<String> {
+    req.headers()
+        .typed_get::<ProxyAuthorization<Basic>>()
+        .map(|header| header.0.username().to_string())
+}
+
 async fn http_connect_accept(
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     mut req: Request,
@@ -173,6 +181,7 @@ async fn http_connect_accept(
     }
 
     let client = client_addr(&req);
+    let network_owner_id = proxy_authorization_network_owner_id(&req);
     let enabled = app_state
         .enabled()
         .await
@@ -185,6 +194,7 @@ async fn http_connect_accept(
             host,
             authority.port,
             client_addr(&req),
+            network_owner_id,
             Some("CONNECT".to_string()),
             NetworkProtocol::HttpsConnect,
             /*audit_endpoint_override*/ None,
@@ -196,6 +206,7 @@ async fn http_connect_accept(
         protocol: NetworkProtocol::HttpsConnect,
         host: host.clone(),
         port: authority.port,
+        network_owner_id: network_owner_id.clone(),
         client_addr: client.clone(),
         method: Some("CONNECT".to_string()),
         command: None,
@@ -220,6 +231,7 @@ async fn http_connect_accept(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: reason.clone(),
+                    network_owner_id,
                     client: client.clone(),
                     method: Some("CONNECT".to_string()),
                     mode: None,
@@ -283,6 +295,7 @@ async fn http_connect_accept(
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
                 reason: REASON_MITM_REQUIRED.to_string(),
+                network_owner_id: None,
                 client: client.clone(),
                 method: Some("CONNECT".to_string()),
                 mode: Some(NetworkMode::Limited),
@@ -432,6 +445,7 @@ async fn http_plain_proxy(
         }
     };
     let client = client_addr(&req);
+    let network_owner_id = proxy_authorization_network_owner_id(&req);
     let method_allowed = match app_state
         .method_allowed(req.method().as_str())
         .await
@@ -471,6 +485,7 @@ async fn http_plain_proxy(
                 socket_path,
                 /*port*/ 0,
                 client_addr(&req),
+                network_owner_id.clone(),
                 Some(req.method().as_str().to_string()),
                 NetworkProtocol::Http,
                 Some(("unix-socket", 0)),
@@ -616,6 +631,7 @@ async fn http_plain_proxy(
             host,
             port,
             client_addr(&req),
+            network_owner_id.clone(),
             Some(req.method().as_str().to_string()),
             NetworkProtocol::Http,
             /*audit_endpoint_override*/ None,
@@ -627,6 +643,7 @@ async fn http_plain_proxy(
         protocol: NetworkProtocol::Http,
         host: host.clone(),
         port,
+        network_owner_id: network_owner_id.clone(),
         client_addr: client.clone(),
         method: Some(req.method().as_str().to_string()),
         command: None,
@@ -651,6 +668,7 @@ async fn http_plain_proxy(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: reason.clone(),
+                    network_owner_id: network_owner_id.clone(),
                     client: client.clone(),
                     method: Some(req.method().as_str().to_string()),
                     mode: None,
@@ -696,6 +714,7 @@ async fn http_plain_proxy(
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
                 reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                network_owner_id,
                 client: client.clone(),
                 method: Some(req.method().as_str().to_string()),
                 mode: Some(NetworkMode::Limited),
@@ -889,6 +908,7 @@ async fn proxy_disabled_response(
     host: String,
     port: u16,
     client: Option<String>,
+    network_owner_id: Option<String>,
     method: Option<String>,
     protocol: NetworkProtocol,
     audit_endpoint_override: Option<(&str, u16)>,
@@ -913,6 +933,7 @@ async fn proxy_disabled_response(
         .record_blocked(BlockedRequest::new(BlockedRequestArgs {
             host: blocked_host,
             reason: REASON_PROXY_DISABLED.to_string(),
+            network_owner_id,
             client,
             method,
             mode: None,
