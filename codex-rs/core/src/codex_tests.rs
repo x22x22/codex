@@ -4464,30 +4464,12 @@ fn review_decision_metadata_mapping_is_stable() {
     );
 }
 
-#[test]
-fn sandbox_policy_metadata_mapping_is_stable() {
-    assert_eq!(
-        sandbox_policy_to_metadata(&SandboxPolicy::DangerFullAccess),
-        codex_protocol::models::SandboxPolicyMetadata::FullAccess
-    );
-    assert_eq!(
-        sandbox_policy_to_metadata(&SandboxPolicy::new_read_only_policy()),
-        codex_protocol::models::SandboxPolicyMetadata::ReadOnly
-    );
-    assert_eq!(
-        sandbox_policy_to_metadata(&SandboxPolicy::new_workspace_write_policy()),
-        codex_protocol::models::SandboxPolicyMetadata::Sandbox
-    );
-}
-
 async fn setup_tool_call_metadata_runtime_test() -> (
     Arc<Session>,
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
-    codex_protocol::models::SandboxPolicyMetadata,
 ) {
     let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
-    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
@@ -4508,7 +4490,7 @@ async fn setup_tool_call_metadata_runtime_test() -> (
     .await;
     while rx.try_recv().is_ok() {}
 
-    (sess, tc, rx, expected_sandbox_policy)
+    (sess, tc, rx)
 }
 
 fn function_call_item(call_id: &str) -> ResponseItem {
@@ -4524,7 +4506,6 @@ fn function_call_item(call_id: &str) -> ResponseItem {
 
 async fn assert_next_emitted_function_call_metadata(
     rx: &async_channel::Receiver<Event>,
-    expected_sandbox_policy: codex_protocol::models::SandboxPolicyMetadata,
     expected_escalated: bool,
     expected_review_decision: Option<codex_protocol::models::ReviewDecisionMetadata>,
 ) {
@@ -4542,14 +4523,13 @@ async fn assert_next_emitted_function_call_metadata(
                     ..
                 } if metadata.is_tool_call_escalated == Some(expected_escalated)
                     && metadata.review_decision == expected_review_decision
-                    && metadata.sandbox_policy == Some(expected_sandbox_policy)
             )
     ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enabled() {
-    let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
+    let (sess, tc, rx) = setup_tool_call_metadata_runtime_test().await;
 
     sess.record_call_approval_outcome(
         "call-1".to_string(),
@@ -4560,7 +4540,6 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
         .await;
     assert_next_emitted_function_call_metadata(
         &rx,
-        expected_sandbox_policy,
         true,
         Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
     )
@@ -4569,17 +4548,16 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
-    let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
+    let (sess, tc, rx) = setup_tool_call_metadata_runtime_test().await;
 
     sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-2"))
         .await;
-    assert_next_emitted_function_call_metadata(&rx, expected_sandbox_policy, false, None).await;
+    assert_next_emitted_function_call_metadata(&rx, false, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled() {
     let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
@@ -4629,7 +4607,6 @@ async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled(
             } if call_id == "call-stream-1"
                 && metadata.is_tool_call_escalated == Some(false)
                 && metadata.review_decision.is_none()
-                && metadata.sandbox_policy == Some(expected_sandbox_policy.clone())
         )
     }));
 }
@@ -4637,7 +4614,6 @@ async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
     let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
@@ -4689,9 +4665,7 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
         .cloned()
         .expect("function call should exist in history");
 
-    let restamped_item = sess
-        .stamp_tool_approval_metadata(tc.as_ref(), original_item)
-        .await;
+    let restamped_item = sess.stamp_tool_approval_metadata(original_item).await;
 
     assert!(matches!(
         restamped_item,
@@ -4701,7 +4675,6 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
         } if metadata.is_tool_call_escalated == Some(true)
             && metadata.review_decision
                 == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
-            && metadata.sandbox_policy == Some(expected_sandbox_policy)
     ));
 }
 
