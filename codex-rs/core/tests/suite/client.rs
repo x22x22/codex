@@ -10,8 +10,8 @@ use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
-use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -1310,6 +1310,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             }],
             cwd: config.cwd.clone(),
             approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: session_configured.model.clone(),
             effort: Some(ReasoningEffort::Low),
@@ -1427,6 +1428,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             }],
             cwd: config.cwd.clone(),
             approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: session_configured.model,
             effort: None,
