@@ -4,7 +4,7 @@ use strum_macros::IntoStaticStr;
 
 use crate::app_event::FeedbackCategory;
 use crate::bottom_pane::StatusLineItem;
-use crate::slash_command_protocol::SlashArgsCodec;
+use crate::slash_command_protocol::SlashArgsSchema;
 use crate::slash_command_protocol::SlashCommandParseInput;
 use crate::slash_command_protocol::SlashCommandUsageErrorKind;
 use crate::slash_command_protocol::SlashSerializedText;
@@ -124,22 +124,22 @@ const FEEDBACK_CATEGORY_CHOICES: &[(&str, FeedbackCategory)] = &[
 
 pub(crate) trait SlashCommandInlineArgs: Sized {
     const USAGE_LINES: &'static [&'static str];
-    fn codec() -> Box<dyn SlashArgsCodec<Self>>;
+    fn args_schema() -> Box<dyn SlashArgsSchema<Self>>;
 
     fn into_invocation(self) -> SlashCommandInvocation;
 
     fn parse_inline(input: SlashCommandParseInput<'_>) -> Result<Self, SlashCommandUsageErrorKind> {
-        let codec = Self::codec();
+        let args_schema = Self::args_schema();
         let mut parser = crate::slash_command_protocol::SlashArgsParser::new(input)?;
-        let value = codec.parse(&mut parser)?;
-        codec.finish(parser)?;
+        let value = args_schema.parse(&mut parser)?;
+        args_schema.finish(parser)?;
         Ok(value)
     }
 
     fn serialize_inline(&self) -> SlashSerializedText {
-        let codec = Self::codec();
+        let args_schema = Self::args_schema();
         let mut serializer = crate::slash_command_protocol::SlashArgsSerializer::default();
-        codec.serialize(self, &mut serializer);
+        args_schema.serialize(self, &mut serializer);
         serializer.finish()
     }
 }
@@ -152,7 +152,7 @@ pub(crate) struct FastArgs {
 impl SlashCommandInlineArgs for FastArgs {
     const USAGE_LINES: &'static [&'static str] = &["/fast", "/fast [on|off|status]"];
 
-    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+    fn args_schema() -> Box<dyn SlashArgsSchema<Self>> {
         Box::new(
             positional(enum_choice(FAST_MODE_CHOICES).ascii_case_insensitive())
                 .map_result(|mode| Ok(Self { mode }), |args| args.mode),
@@ -172,7 +172,7 @@ pub(crate) struct RenameArgs {
 impl SlashCommandInlineArgs for RenameArgs {
     const USAGE_LINES: &'static [&'static str] = &["/rename", "/rename <title>"];
 
-    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+    fn args_schema() -> Box<dyn SlashArgsSchema<Self>> {
         Box::new(
             remainder(text()).map_result(|title| Ok(Self { title }), |args| args.title.clone()),
         )
@@ -191,7 +191,7 @@ pub(crate) struct PlanArgs {
 impl SlashCommandInlineArgs for PlanArgs {
     const USAGE_LINES: &'static [&'static str] = &["/plan", "/plan <prompt>"];
 
-    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+    fn args_schema() -> Box<dyn SlashArgsSchema<Self>> {
         Box::new(
             remainder(text()).map_result(|prompt| Ok(Self { prompt }), |args| args.prompt.clone()),
         )
@@ -210,7 +210,7 @@ pub(crate) struct ReviewArgs {
 impl SlashCommandInlineArgs for ReviewArgs {
     const USAGE_LINES: &'static [&'static str] = &["/review", "/review <instructions>"];
 
-    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+    fn args_schema() -> Box<dyn SlashArgsSchema<Self>> {
         Box::new(remainder(text()).map_result(
             |instructions| Ok(Self { instructions }),
             |args| args.instructions.clone(),
@@ -233,7 +233,7 @@ impl SlashCommandInlineArgs for SandboxReadRootArgs {
         "/sandbox-add-read-dir --path=<absolute-path>",
     ];
 
-    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+    fn args_schema() -> Box<dyn SlashArgsSchema<Self>> {
         Box::new(
             named_or_positional("path", string())
                 .map_result(|path| Ok(Self { path }), |args| args.path.clone()),
@@ -256,7 +256,7 @@ impl SlashCommandInlineArgs for FeedbackArgs {
         "/feedback <bad-result|good-result|bug|safety-check|other>",
     ];
 
-    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+    fn args_schema() -> Box<dyn SlashArgsSchema<Self>> {
         Box::new(
             positional(enum_choice(FEEDBACK_CATEGORY_CHOICES))
                 .map_result(|category| Ok(Self { category }), |args| args.category),
@@ -276,7 +276,7 @@ pub(crate) struct StatuslineArgs {
 impl SlashCommandInlineArgs for StatuslineArgs {
     const USAGE_LINES: &'static [&'static str] = &["/statusline", "/statusline <item>..."];
 
-    fn codec() -> Box<dyn SlashArgsCodec<Self>> {
+    fn args_schema() -> Box<dyn SlashArgsSchema<Self>> {
         Box::new(list(from_str_value::<StatusLineItem>()).map_result(
             |items| {
                 if items.is_empty() {

@@ -424,7 +424,7 @@ impl SlashArgsSerializer {
     }
 }
 
-pub(crate) trait SlashArgsCodec<T> {
+pub(crate) trait SlashArgsSchema<T> {
     fn parse<'a>(&self, parser: &mut SlashArgsParser<'a>) -> Result<T, SlashCommandUsageErrorKind>;
 
     fn serialize(&self, value: &T, serializer: &mut SlashArgsSerializer);
@@ -437,13 +437,13 @@ pub(crate) trait SlashArgsCodec<T> {
         self,
         parse_map: P,
         serialize_map: S,
-    ) -> SlashMapResultCodec<Self, P, S, T, U>
+    ) -> SlashMapResultSchema<Self, P, S, T, U>
     where
         Self: Sized,
         P: Fn(T) -> Result<U, SlashCommandUsageErrorKind>,
         S: Fn(&U) -> T,
     {
-        SlashMapResultCodec {
+        SlashMapResultSchema {
             inner: self,
             parse_map,
             serialize_map,
@@ -452,16 +452,16 @@ pub(crate) trait SlashArgsCodec<T> {
     }
 }
 
-pub(crate) struct SlashMapResultCodec<C, P, S, T, U> {
+pub(crate) struct SlashMapResultSchema<C, P, S, T, U> {
     inner: C,
     parse_map: P,
     serialize_map: S,
     _phantom: PhantomData<fn(T) -> U>,
 }
 
-impl<C, P, S, T, U> SlashArgsCodec<U> for SlashMapResultCodec<C, P, S, T, U>
+impl<C, P, S, T, U> SlashArgsSchema<U> for SlashMapResultSchema<C, P, S, T, U>
 where
-    C: SlashArgsCodec<T>,
+    C: SlashArgsSchema<T>,
     P: Fn(T) -> Result<U, SlashCommandUsageErrorKind>,
     S: Fn(&U) -> T,
 {
@@ -480,15 +480,15 @@ where
     }
 }
 
-pub(crate) struct SlashPositionalCodec<S> {
+pub(crate) struct SlashPositionalSchema<S> {
     spec: S,
 }
 
-pub(crate) fn positional<S>(spec: S) -> SlashPositionalCodec<S> {
-    SlashPositionalCodec { spec }
+pub(crate) fn positional<S>(spec: S) -> SlashPositionalSchema<S> {
+    SlashPositionalSchema { spec }
 }
 
-impl<T, S> SlashArgsCodec<T> for SlashPositionalCodec<S>
+impl<T, S> SlashArgsSchema<T> for SlashPositionalSchema<S>
 where
     S: SlashTokenValueSpec<T>,
 {
@@ -501,15 +501,15 @@ where
     }
 }
 
-pub(crate) struct SlashListCodec<S> {
+pub(crate) struct SlashListSchema<S> {
     spec: S,
 }
 
-pub(crate) fn list<S>(spec: S) -> SlashListCodec<S> {
-    SlashListCodec { spec }
+pub(crate) fn list<S>(spec: S) -> SlashListSchema<S> {
+    SlashListSchema { spec }
 }
 
-impl<T, S> SlashArgsCodec<Vec<T>> for SlashListCodec<S>
+impl<T, S> SlashArgsSchema<Vec<T>> for SlashListSchema<S>
 where
     T: Clone,
     S: SlashTokenValueSpec<T>,
@@ -527,17 +527,17 @@ where
 }
 
 #[allow(dead_code)]
-pub(crate) struct SlashNamedCodec<S> {
+pub(crate) struct SlashNamedSchema<S> {
     key: &'static str,
     spec: S,
 }
 
 #[allow(dead_code)]
-pub(crate) fn named<S>(key: &'static str, spec: S) -> SlashNamedCodec<S> {
-    SlashNamedCodec { key, spec }
+pub(crate) fn named<S>(key: &'static str, spec: S) -> SlashNamedSchema<S> {
+    SlashNamedSchema { key, spec }
 }
 
-impl<T, S> SlashArgsCodec<Option<T>> for SlashNamedCodec<S>
+impl<T, S> SlashArgsSchema<Option<T>> for SlashNamedSchema<S>
 where
     S: SlashTokenValueSpec<T>,
 {
@@ -555,16 +555,19 @@ where
     }
 }
 
-pub(crate) struct SlashNamedOrPositionalCodec<S> {
+pub(crate) struct SlashNamedOrPositionalSchema<S> {
     key: &'static str,
     spec: S,
 }
 
-pub(crate) fn named_or_positional<S>(key: &'static str, spec: S) -> SlashNamedOrPositionalCodec<S> {
-    SlashNamedOrPositionalCodec { key, spec }
+pub(crate) fn named_or_positional<S>(
+    key: &'static str,
+    spec: S,
+) -> SlashNamedOrPositionalSchema<S> {
+    SlashNamedOrPositionalSchema { key, spec }
 }
 
-impl<T, S> SlashArgsCodec<T> for SlashNamedOrPositionalCodec<S>
+impl<T, S> SlashArgsSchema<T> for SlashNamedOrPositionalSchema<S>
 where
     S: SlashTokenValueSpec<T>,
 {
@@ -580,15 +583,15 @@ where
     }
 }
 
-pub(crate) struct SlashRemainderCodec<S> {
+pub(crate) struct SlashRemainderSchema<S> {
     spec: S,
 }
 
-pub(crate) fn remainder<S>(spec: S) -> SlashRemainderCodec<S> {
-    SlashRemainderCodec { spec }
+pub(crate) fn remainder<S>(spec: S) -> SlashRemainderSchema<S> {
+    SlashRemainderSchema { spec }
 }
 
-impl<T, S> SlashArgsCodec<T> for SlashRemainderCodec<S>
+impl<T, S> SlashArgsSchema<T> for SlashRemainderSchema<S>
 where
     S: SlashTextValueSpec<T>,
 {
