@@ -31,6 +31,7 @@ object AgentCodexAppServerClient {
         val configuredModel: String?,
         val effectiveModel: String?,
         val upstreamBaseUrl: String,
+        val frameworkResponsesPath: String,
     )
 
     data class ChatGptLoginSession(
@@ -148,7 +149,8 @@ object AgentCodexAppServerClient {
                 method = "config/read",
                 params = JSONObject().put("includeLayers", false),
             )
-            parseRuntimeStatus(accountResponse, configResponse).also(::updateCachedRuntimeStatus)
+            parseRuntimeStatus(context.applicationContext, accountResponse, configResponse)
+                .also(::updateCachedRuntimeStatus)
         } finally {
             activeRequests.decrementAndGet()
             updateClientCount()
@@ -667,6 +669,7 @@ object AgentCodexAppServerClient {
     }
 
     private fun parseRuntimeStatus(
+        context: Context,
         accountResponse: JSONObject,
         configResponse: JSONObject,
     ): RuntimeStatus {
@@ -676,6 +679,23 @@ object AgentCodexAppServerClient {
         val effectiveModel = configuredModel ?: DEFAULT_AGENT_MODEL
         val configuredProvider = config.optNullableString("model_provider")
         val accountType = account?.optNullableString("type").orEmpty()
+        val authMode = runCatching {
+            AgentResponsesProxy.loadAuthSnapshot(File(context.filesDir, "codex-home/auth.json")).authMode
+        }.getOrElse {
+            if (accountType == "apiKey") {
+                "apiKey"
+            } else {
+                "chatgpt"
+            }
+        }
+        val upstreamBaseUrl = AgentResponsesProxy.buildResponsesBaseUrl(
+            upstreamBaseUrl = resolveUpstreamBaseUrl(
+                config = config,
+                accountType = accountType,
+                configuredProvider = configuredProvider,
+            ),
+            authMode = authMode,
+        )
         return RuntimeStatus(
             authenticated = account != null,
             accountEmail = account?.optNullableString("email"),
@@ -683,11 +703,8 @@ object AgentCodexAppServerClient {
             modelProviderId = configuredProvider ?: inferModelProviderId(accountType),
             configuredModel = configuredModel,
             effectiveModel = effectiveModel,
-            upstreamBaseUrl = resolveUpstreamBaseUrl(
-                config = config,
-                accountType = accountType,
-                configuredProvider = configuredProvider,
-            ),
+            upstreamBaseUrl = upstreamBaseUrl,
+            frameworkResponsesPath = AgentResponsesProxy.buildFrameworkResponsesPath(upstreamBaseUrl),
         )
     }
 
@@ -716,7 +733,10 @@ object AgentCodexAppServerClient {
                 ?.optString("base_url")
                 ?.ifBlank { null }
         }
-        if (configuredProviderBaseUrl != null) {
+        if (
+            configuredProviderBaseUrl != null &&
+            configuredProvider != HostedCodexConfig.ANDROID_HTTP_PROVIDER_ID
+        ) {
             return configuredProviderBaseUrl
         }
         return when (accountType) {

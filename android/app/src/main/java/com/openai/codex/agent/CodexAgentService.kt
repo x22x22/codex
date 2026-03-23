@@ -397,7 +397,8 @@ class CodexAgentService : AgentService() {
                                 .put("modelProviderId", status.modelProviderId)
                                 .put("configuredModel", status.configuredModel)
                                 .put("effectiveModel", status.effectiveModel)
-                                .put("upstreamBaseUrl", status.upstreamBaseUrl),
+                                .put("upstreamBaseUrl", status.upstreamBaseUrl)
+                                .put("frameworkResponsesPath", status.frameworkResponsesPath),
                         )
                 }
                 else -> JSONObject()

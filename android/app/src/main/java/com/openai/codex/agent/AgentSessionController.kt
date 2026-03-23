@@ -398,22 +398,10 @@ class AgentSessionController(context: Context) {
             sessionId = sessionId,
             config = AgentResponsesProxy.buildFrameworkSessionNetworkConfig(
                 context = appContext,
-                upstreamBaseUrl = resolveUpstreamBaseUrl(),
+                upstreamBaseUrl = "provider-default",
             ),
         )
         Log.i(TAG, "Configured framework-owned /responses transport for $sessionId")
-    }
-
-    private fun resolveUpstreamBaseUrl(): String {
-        val cachedStatus = AgentCodexAppServerClient.currentRuntimeStatus()
-        if (cachedStatus?.upstreamBaseUrl?.isNotBlank() == true) {
-            return cachedStatus.upstreamBaseUrl
-        }
-        return runCatching {
-            AgentCodexAppServerClient.readRuntimeStatus(appContext).upstreamBaseUrl
-        }.getOrElse {
-            "provider-default"
-        }
     }
 
     private fun shouldRetryAnswerQuestion(

@@ -41,6 +41,39 @@ class AgentResponsesProxyTest {
     }
 
     @Test
+    fun buildResponsesBaseUrlTreatsNullStringAsProviderDefault() {
+        assertEquals(
+            "https://chatgpt.com/backend-api/codex",
+            AgentResponsesProxy.buildResponsesBaseUrl(
+                upstreamBaseUrl = "null",
+                authMode = "chatgpt",
+            ),
+        )
+    }
+
+    @Test
+    fun buildFrameworkTransportTargetSplitsChatgptBaseIntoOriginAndPath() {
+        assertEquals(
+            AgentResponsesProxy.FrameworkTransportTarget(
+                baseUrl = "https://chatgpt.com",
+                responsesPath = "/backend-api/codex/responses",
+            ),
+            AgentResponsesProxy.buildFrameworkTransportTarget("https://chatgpt.com/backend-api/codex"),
+        )
+    }
+
+    @Test
+    fun buildFrameworkTransportTargetSplitsOpenAiBaseIntoOriginAndPath() {
+        assertEquals(
+            AgentResponsesProxy.FrameworkTransportTarget(
+                baseUrl = "https://api.openai.com",
+                responsesPath = "/v1/responses",
+            ),
+            AgentResponsesProxy.buildFrameworkTransportTarget("https://api.openai.com/v1/"),
+        )
+    }
+
+    @Test
     fun loadAuthSnapshotReadsChatgptTokens() {
         val authFile = writeTempAuthJson(
             """

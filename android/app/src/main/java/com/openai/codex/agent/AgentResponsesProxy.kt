@@ -43,6 +43,11 @@ object AgentResponsesProxy {
         val body: String,
     )
 
+    internal data class FrameworkTransportTarget(
+        val baseUrl: String,
+        val responsesPath: String,
+    )
+
     fun sendResponsesRequest(
         context: Context,
         requestBody: String,
@@ -62,27 +67,37 @@ object AgentResponsesProxy {
         upstreamBaseUrl: String,
     ): FrameworkSessionTransportCompat.SessionNetworkConfig {
         val authSnapshot = loadAuthSnapshot(File(context.filesDir, "codex-home/auth.json"))
+        val transportTarget = buildFrameworkTransportTarget(
+            buildResponsesBaseUrl(upstreamBaseUrl, authSnapshot.authMode),
+        )
         return FrameworkSessionTransportCompat.SessionNetworkConfig(
-            baseUrl = buildResponsesBaseUrl(upstreamBaseUrl, authSnapshot.authMode),
+            baseUrl = transportTarget.baseUrl,
             defaultHeaders = buildDefaultHeaders(authSnapshot),
             connectTimeoutMillis = CONNECT_TIMEOUT_MS,
             readTimeoutMillis = READ_TIMEOUT_MS,
         )
     }
 
+    internal fun buildFrameworkResponsesPath(responsesBaseUrl: String): String {
+        return buildFrameworkTransportTarget(responsesBaseUrl).responsesPath
+    }
+
     internal fun buildResponsesBaseUrl(
         upstreamBaseUrl: String,
         authMode: String,
     ): String {
+        val normalizedUpstreamBaseUrl = upstreamBaseUrl.trim()
         return when {
-            upstreamBaseUrl.isBlank() || upstreamBaseUrl == "provider-default" -> {
+            normalizedUpstreamBaseUrl.isBlank() ||
+                normalizedUpstreamBaseUrl == "provider-default" ||
+                normalizedUpstreamBaseUrl == "null" -> {
                 if (authMode == "chatgpt") {
                     DEFAULT_CHATGPT_BASE_URL
                 } else {
                     DEFAULT_OPENAI_BASE_URL
                 }
             }
-            else -> upstreamBaseUrl
+            else -> normalizedUpstreamBaseUrl
         }.trimEnd('/')
     }
 
@@ -91,6 +106,29 @@ object AgentResponsesProxy {
         authMode: String,
     ): String {
         return "${buildResponsesBaseUrl(upstreamBaseUrl, authMode)}/responses"
+    }
+
+    internal fun buildFrameworkTransportTarget(responsesBaseUrl: String): FrameworkTransportTarget {
+        val upstreamUrl = URL(responsesBaseUrl)
+        val baseUrl = buildString {
+            append(upstreamUrl.protocol)
+            append("://")
+            append(upstreamUrl.host)
+            if (upstreamUrl.port != -1) {
+                append(":")
+                append(upstreamUrl.port)
+            }
+        }
+        val normalizedPath = upstreamUrl.path.trimEnd('/').ifBlank { "/" }
+        val responsesPath = if (normalizedPath == "/") {
+            "/responses"
+        } else {
+            "$normalizedPath/responses"
+        }
+        return FrameworkTransportTarget(
+            baseUrl = baseUrl,
+            responsesPath = responsesPath,
+        )
     }
 
     internal fun loadAuthSnapshot(authFile: File): AuthSnapshot {

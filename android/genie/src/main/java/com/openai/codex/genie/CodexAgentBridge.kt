@@ -46,6 +46,7 @@ object CodexAgentBridge {
         val configuredModel: String?,
         val effectiveModel: String?,
         val upstreamBaseUrl: String,
+        val frameworkResponsesPath: String,
     )
 
     data class HttpResponse(
