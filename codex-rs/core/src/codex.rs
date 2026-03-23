@@ -5898,7 +5898,10 @@ pub(crate) async fn run_turn(
             .then(|| sandbox_policy_to_metadata(turn_context.sandbox_policy.get())),
     );
     if sess.enabled(Feature::ItemMetadata) {
-        stamp_message_metadata_on_input_item(&mut initial_input_for_turn, &initial_message_metadata);
+        stamp_message_metadata_on_input_item(
+            &mut initial_input_for_turn,
+            &initial_message_metadata,
+        );
     }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)

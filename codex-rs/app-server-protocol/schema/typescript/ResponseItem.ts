@@ -13,7 +13,7 @@ import type { ResponseItemMessageMetadata } from "./ResponseItemMessageMetadata"
 import type { ResponseItemMetadata } from "./ResponseItemMetadata";
 import type { WebSearchAction } from "./WebSearchAction";
 
-export type ResponseItem = { "type": "message", role: string, content: Array<ContentItem>, metadata?: ResponseItemMessageMetadata, end_turn?: boolean, phase?: MessagePhase, } | { "type": "reasoning", summary: Array<ReasoningItemReasoningSummary>, content?: Array<ReasoningItemContent>, encrypted_content: string | null, } | { "type": "local_shell_call",
+export type ResponseItem = { "type": "message", role: string, content: Array<ContentItem>, metadata?: ResponseItemMessageMetadata, end_turn?: boolean, phase?: MessagePhase, } | { "type": "reasoning", summary: Array<ReasoningItemReasoningSummary>, content?: Array<ReasoningItemContent>, encrypted_content: string | null, } | { "type": "local_shell_call", 
 /**
  * Set when using the Responses API.
  */
