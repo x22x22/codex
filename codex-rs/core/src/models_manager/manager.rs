@@ -1,6 +1,7 @@
 use super::cache::ModelsCacheManager;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
+use crate::api_bridge::resolve_auth_for_provider;
 use crate::auth::AuthManager;
 use crate::auth::AuthMode;
 use crate::auth::CodexAuth;
@@ -431,7 +432,7 @@ impl ModelsManager {
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
-        let auth = self.auth_manager.auth().await;
+        let auth = resolve_auth_for_provider(self.auth_manager.auth().await, &self.provider);
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider.to_api_provider(auth_mode)?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;

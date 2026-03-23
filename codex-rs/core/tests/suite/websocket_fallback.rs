@@ -1,19 +1,41 @@
 use anyhow::Result;
+use codex_core::AuthManager;
+use codex_core::ModelClient;
+use codex_core::Prompt;
+use codex_core::ResponseEvent;
+use codex_core::auth::AuthCredentialsStoreMode;
+use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
+use codex_core::built_in_model_providers;
+use codex_otel::SessionTelemetry;
+use codex_otel::TelemetryAuthMode;
+use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use std::ffi::OsStr;
+use std::ffi::OsString;
+use std::sync::Arc;
+use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use wiremock::Mock;
@@ -21,6 +43,34 @@ use wiremock::ResponseTemplate;
 use wiremock::http::Method;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
+
+const MODEL: &str = "gpt-5.3-codex";
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &OsStr) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Result<()> {
@@ -70,6 +120,101 @@ async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Re
     assert_eq!(websocket_attempts, 1);
     assert_eq!(http_attempts, 1);
     assert_eq!(response_mock.requests().len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_fallback_uses_openai_api_key_env_for_http_replay() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let _api_key_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, OsStr::new("dummy"));
+    let home = TempDir::new()?;
+    let server = responses::start_mock_server().await;
+    Mock::given(method("GET"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(ResponseTemplate::new(426))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let response_mock = mount_sse_once_match(
+        &server,
+        wiremock::matchers::header("authorization", "Bearer dummy"),
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let mut config = load_default_config_for_test(&home).await;
+    config.model = Some(MODEL.to_string());
+    let model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
+
+    let mut provider = built_in_model_providers(/* openai_base_url */ None)["openai"].clone();
+    provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = true;
+    provider.request_max_retries = Some(0);
+    provider.stream_max_retries = Some(0);
+
+    let auth_manager = Arc::new(AuthManager::new(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    ));
+    let conversation_id = ThreadId::new();
+    let session_telemetry = SessionTelemetry::new(
+        conversation_id,
+        MODEL,
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        auth_manager.auth_mode().map(TelemetryAuthMode::from),
+        "test_originator".to_string(),
+        false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+    let client = ModelClient::new(
+        Some(auth_manager),
+        conversation_id,
+        provider,
+        SessionSource::Exec,
+        config.model_verbosity,
+        false,
+        false,
+        None,
+    );
+    let mut client_session = client.new_session();
+    let mut prompt = Prompt::default();
+    prompt.input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            /*effort*/ None::<ReasoningEffort>,
+            ReasoningSummary::Auto,
+            None,
+            None,
+        )
+        .await?;
+
+    while let Some(event) = stream.next().await {
+        if matches!(event?, ResponseEvent::Completed { .. }) {
+            break;
+        }
+    }
+
+    let request = response_mock.single_request();
+    assert_eq!(request.path(), "/v1/responses");
 
     Ok(())
 }

@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::auth::CodexAuth;
+use crate::auth::read_openai_api_key_from_env;
 use crate::error::CodexErr;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
@@ -194,6 +195,21 @@ pub(crate) fn auth_provider_from_auth(
             account_id: None,
         })
     }
+}
+
+pub(crate) fn resolve_auth_for_provider(
+    auth: Option<CodexAuth>,
+    provider: &ModelProviderInfo,
+) -> Option<CodexAuth> {
+    if auth.is_some()
+        || !provider.requires_openai_auth
+        || provider.env_key.is_some()
+        || provider.experimental_bearer_token.is_some()
+    {
+        return auth;
+    }
+
+    read_openai_api_key_from_env().map(|api_key| CodexAuth::from_api_key(&api_key))
 }
 
 #[derive(Debug, Deserialize)]

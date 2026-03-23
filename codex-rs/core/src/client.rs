@@ -33,6 +33,7 @@ use std::sync::atomic::Ordering;
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
+use crate::api_bridge::resolve_auth_for_provider;
 use crate::auth::UnauthorizedRecovery;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -528,6 +529,7 @@ impl ModelClient {
             Some(manager) => manager.auth().await,
             None => None,
         };
+        let auth = resolve_auth_for_provider(auth, &self.state.provider);
         let api_provider = self
             .state
             .provider
