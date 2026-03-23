@@ -36,6 +36,7 @@ use crate::config::Config;
 use crate::powershell::extract_powershell_command;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use codex_shell_command::command_safety::windows_safe_commands::parse_powershell_command_sequence;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
@@ -624,6 +625,12 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
 
 fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
     if let Some(commands) = parse_shell_lc_plain_commands(command)
+        && !commands.is_empty()
+    {
+        return (commands, false);
+    }
+
+    if let Some(commands) = parse_powershell_command_sequence(command)
         && !commands.is_empty()
     {
         return (commands, false);

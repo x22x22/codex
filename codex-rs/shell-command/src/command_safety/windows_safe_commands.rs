@@ -31,6 +31,12 @@ fn try_parse_powershell_command_sequence(command: &[String]) -> Option<Vec<Vec<S
     }
 }
 
+/// Parse a PowerShell wrapper into the underlying command sequence when the
+/// script is simple enough to recover stable argv tokens.
+pub fn parse_powershell_command_sequence(command: &[String]) -> Option<Vec<Vec<String>>> {
+    try_parse_powershell_command_sequence(command)
+}
+
 /// Parses a PowerShell invocation into discrete command vectors, rejecting unsafe patterns.
 fn parse_powershell_invocation(executable: &str, args: &[String]) -> Option<Vec<Vec<String>>> {
     if args.is_empty() {
