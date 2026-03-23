@@ -55,6 +55,10 @@ class CodexGenieService : GenieService() {
             if (request.isDetachedModeAllowed) {
                 callback.requestLaunchDetachedTargetHidden(sessionId)
                 callback.publishTrace(sessionId, "Requested detached target launch for ${request.targetPackage}.")
+                callback.publishTrace(
+                    sessionId,
+                    "Detached-session contract active for ${request.targetPackage}: the framework already launched the target hidden. Codex must use framework target controls plus UI inspection/input, not plain shell relaunches of the target package.",
+                )
             }
 
             AgentBridgeClient(

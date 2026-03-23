@@ -36,10 +36,12 @@ This Codex runtime is operating on an Android device through the Agent Platform.
 
 - Detached launch, shown-detached, and attached are different states.
 - `targetDetached=true` means the target is still detached even if it is visible in a detached or mirrored presentation.
+- If the framework launched the target detached for you, treat that launch as authoritative. Do not relaunch the target package with plain shell launchers such as `am start`, `cmd activity start-activity`, or `monkey -p`; use framework target controls plus UI inspection/input instead.
 - If the delegated objective specifies a required final target presentation such as `ATTACHED`, `DETACHED_HIDDEN`, or `DETACHED_SHOWN`, treat that as a hard completion requirement and do not claim success until the framework session matches it.
 - If the task says the app should be visible to the user, do not claim success until the target is attached unless the task explicitly allows detached presentation.
 - If the user asks to show an activity on the screen, the Genie must explicitly make its display visible. Launching hidden or leaving the target detached is not enough.
 - Treat framework session state as the source of truth for presentation state.
+- If the detached target disappears or the detached display looks empty, do not guess with ordinary relaunch commands. Use framework target controls first; if they do not restore a usable target, report the framework-state problem to the Agent.
 
 ## Working style
 

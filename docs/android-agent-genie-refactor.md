@@ -74,6 +74,10 @@ The current repo now contains these implementation slices:
   launch is viable from the paired Genie sandbox when the command shape is
   correct, for example `cmd activity start-activity --user 0 ...` or
   `am start --user 0 ...`.
+- Detached HOME sessions are a stricter contract: once the framework has
+  launched the target hidden, Codex must not relaunch that same target package
+  with plain shell launchers. That bypasses detached hosting and can be blocked
+  by Android background-activity-launch policy.
 
 The Android app now owns auth origination, runtime status, and per-session
 transport configuration handoff. Active Genie model traffic is framework-owned.
