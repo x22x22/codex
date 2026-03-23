@@ -13,7 +13,6 @@ use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
-use crate::state::ApprovalOutcomeMetadata;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -27,7 +26,6 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -428,7 +426,7 @@ impl CoreShellActionProvider {
         Ok(stopwatch
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
-                    let decision = review_approval_request(
+                    return review_approval_request(
                         &session,
                         &turn,
                         GuardianApprovalRequest::Execve {
@@ -442,16 +440,6 @@ impl CoreShellActionProvider {
                         /*retry_reason*/ None,
                     )
                     .await;
-                    session
-                        .record_call_approval_outcome(
-                            call_id.clone(),
-                            ApprovalOutcomeMetadata::reviewed(
-                                &decision,
-                                ApprovalSourceMetadata::Guardian,
-                            ),
-                        )
-                        .await;
-                    return decision;
                 }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),
@@ -534,31 +522,12 @@ impl CoreShellActionProvider {
     ) -> anyhow::Result<EscalationDecision> {
         let action = match decision {
             Decision::Forbidden => {
-                self.session
-                    .record_call_approval_outcome(
-                        self.call_id.clone(),
-                        ApprovalOutcomeMetadata {
-                            review_decision: None,
-                            approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
-                        },
-                    )
-                    .await;
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
             }
             Decision::Prompt => {
                 if execve_prompt_is_rejected_by_policy(self.approval_policy, &decision_source)
                     .is_some()
                 {
-                    self.session
-                        .record_call_approval_outcome(
-                            self.call_id.clone(),
-                            ApprovalOutcomeMetadata {
-                                review_decision: None,
-                                approval_source:
-                                    codex_protocol::models::ApprovalSourceMetadata::Policy,
-                            },
-                        )
-                        .await;
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
                     match self

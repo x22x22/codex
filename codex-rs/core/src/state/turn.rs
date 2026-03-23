@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
-use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -62,20 +61,15 @@ pub(crate) struct RunningTask {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingApprovalMetadata {
     pub(crate) call_id: String,
-    pub(crate) approval_source: ApprovalSourceMetadata,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ApprovalOutcomeMetadata {
     pub(crate) review_decision: Option<ReviewDecisionMetadata>,
-    pub(crate) approval_source: ApprovalSourceMetadata,
 }
 
 impl ApprovalOutcomeMetadata {
-    pub(crate) fn reviewed(
-        decision: &ReviewDecision,
-        approval_source: ApprovalSourceMetadata,
-    ) -> Self {
+    pub(crate) fn reviewed(decision: &ReviewDecision) -> Self {
         let review_decision = match decision {
             ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
@@ -97,7 +91,6 @@ impl ApprovalOutcomeMetadata {
         };
         Self {
             review_decision: Some(review_decision),
-            approval_source,
         }
     }
 }
