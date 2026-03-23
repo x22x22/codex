@@ -28,7 +28,6 @@ serde_json = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-codex-arg0 = { workspace = true }
 ctor = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

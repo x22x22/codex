@@ -1,47 +1,24 @@
 // Aggregates all former standalone integration tests as modules.
-use codex_arg0::Arg0PathEntryGuard;
-use codex_arg0::arg0_dispatch;
 use ctor::ctor;
-use tempfile::TempDir;
+use std::path::Path;
 
-struct TestCodexAliasesGuard {
-    _codex_home: TempDir,
-    _arg0: Arg0PathEntryGuard,
-}
-
-const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
+const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 
 // This code runs before any other tests are run.
-// It allows the test binary to behave like codex-linux-sandbox based on arg0.
+// It allows the test binary to behave like codex-linux-sandbox when re-execed
+// via current_exe() with argv[0] overridden.
 #[ctor]
-pub static CODEX_ALIASES_TEMP_DIR: TestCodexAliasesGuard = unsafe {
-    #[allow(clippy::unwrap_used)]
-    let codex_home = tempfile::Builder::new()
-        .prefix("codex-linux-sandbox-tests")
-        .tempdir()
-        .unwrap();
-    let previous_codex_home = std::env::var_os(CODEX_HOME_ENV_VAR);
+fn dispatch_linux_sandbox_arg0() {
+    let argv0 = std::env::args_os().next().unwrap_or_default();
+    let exe_name = Path::new(&argv0)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
 
-    // Safety: #[ctor] runs before test threads start.
-    unsafe {
-        std::env::set_var(CODEX_HOME_ENV_VAR, codex_home.path());
+    if exe_name == LINUX_SANDBOX_ARG0 {
+        codex_linux_sandbox::run_main();
     }
-    #[allow(clippy::unwrap_used)]
-    let arg0 = arg0_dispatch().unwrap();
-    match previous_codex_home.as_ref() {
-        Some(value) => unsafe {
-            std::env::set_var(CODEX_HOME_ENV_VAR, value);
-        },
-        None => unsafe {
-            std::env::remove_var(CODEX_HOME_ENV_VAR);
-        },
-    }
-
-    TestCodexAliasesGuard {
-        _codex_home: codex_home,
-        _arg0: arg0,
-    }
-};
+}
 
 mod landlock;
 mod managed_proxy;
