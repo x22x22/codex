@@ -287,11 +287,37 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn is_protected_windowsapps_package_path(path: &Path) -> bool {
+    for ancestor in path.ancestors() {
+        let Some(name) = ancestor.file_name() else {
+            continue;
+        };
+        if !name.to_string_lossy().eq_ignore_ascii_case("WindowsApps") {
+            continue;
+        }
+        let Some(parent_name) = ancestor
+            .parent()
+            .and_then(Path::file_name)
+            .map(|value| value.to_string_lossy())
+        else {
+            continue;
+        };
+        if parent_name.eq_ignore_ascii_case("Program Files")
+            || parent_name.eq_ignore_ascii_case("Program Files (x86)")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            roots.push(dir.to_path_buf());
+            if !is_protected_windowsapps_package_path(dir) {
+                roots.push(dir.to_path_buf());
+            }
         }
     }
     let helper_dir = helper_bin_dir(codex_home);
@@ -673,6 +699,7 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 mod tests {
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::is_protected_windowsapps_package_path;
     use super::profile_read_roots;
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use crate::helper_materialization::helper_bin_dir;
@@ -721,6 +748,30 @@ mod tests {
         let roots = profile_read_roots(&missing_profile);
 
         assert_eq!(vec![missing_profile], roots);
+    }
+
+    #[test]
+    fn protected_windowsapps_package_paths_are_excluded_from_helper_roots() {
+        let tmp = TempDir::new().expect("tempdir");
+        let store_path = tmp
+            .path()
+            .join("Program Files")
+            .join("WindowsApps")
+            .join("OpenAI.Codex_26.313.5234.0_x64__2p2nqsd0c76g0")
+            .join("app")
+            .join("resources");
+        fs::create_dir_all(&store_path).expect("create fake store path");
+
+        assert!(is_protected_windowsapps_package_path(&store_path));
+    }
+
+    #[test]
+    fn non_store_paths_are_not_treated_as_windowsapps_packages() {
+        let tmp = TempDir::new().expect("tempdir");
+        let regular_path = tmp.path().join("app").join("resources");
+        fs::create_dir_all(&regular_path).expect("create regular path");
+
+        assert!(!is_protected_windowsapps_package_path(&regular_path));
     }
 
     #[test]
