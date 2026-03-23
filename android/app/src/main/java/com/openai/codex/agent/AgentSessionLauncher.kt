@@ -11,6 +11,7 @@ data class LaunchSessionRequest(
     val targetPackage: String?,
     val model: String?,
     val reasoningEffort: String?,
+    val existingSessionId: String? = null,
 )
 
 object AgentSessionLauncher {
@@ -25,7 +26,11 @@ object AgentSessionLauncher {
             reasoningEffort = request.reasoningEffort?.trim()?.ifEmpty { null },
         )
         val targetPackage = request.targetPackage?.trim()?.ifEmpty { null }
+        val existingSessionId = request.existingSessionId?.trim()?.ifEmpty { null }
         return if (targetPackage == null) {
+            check(existingSessionId == null) {
+                "Existing HOME sessions require a target package"
+            }
             AgentTaskPlanner.startSession(
                 context = context,
                 userObjective = request.prompt,
@@ -36,13 +41,24 @@ object AgentSessionLauncher {
                 requestUserInputHandler = requestUserInputHandler,
             )
         } else {
-            sessionController.startHomeSession(
-                targetPackage = targetPackage,
-                prompt = request.prompt,
-                allowDetachedMode = true,
-                finalPresentationPolicy = SessionFinalPresentationPolicy.AGENT_CHOICE,
-                executionSettings = executionSettings,
-            )
+            if (existingSessionId != null) {
+                sessionController.startExistingHomeSession(
+                    sessionId = existingSessionId,
+                    targetPackage = targetPackage,
+                    prompt = request.prompt,
+                    allowDetachedMode = true,
+                    finalPresentationPolicy = SessionFinalPresentationPolicy.AGENT_CHOICE,
+                    executionSettings = executionSettings,
+                )
+            } else {
+                sessionController.startHomeSession(
+                    targetPackage = targetPackage,
+                    prompt = request.prompt,
+                    allowDetachedMode = true,
+                    finalPresentationPolicy = SessionFinalPresentationPolicy.AGENT_CHOICE,
+                    executionSettings = executionSettings,
+                )
+            }
         }
     }
 

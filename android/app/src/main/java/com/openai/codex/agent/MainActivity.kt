@@ -40,6 +40,7 @@ class MainActivity : Activity() {
     private var pendingAuthMessage: String? = null
     @Volatile
     private var modelsRefreshInFlight = false
+    private val pendingModelCallbacks = mutableListOf<() -> Unit>()
 
     private val agentSessionController by lazy { AgentSessionController(this) }
     private val dismissedSessionStore by lazy { DismissedSessionStore(this) }
@@ -127,10 +128,35 @@ class MainActivity : Activity() {
     private fun handleIncomingIntent(intent: Intent?) {
         val sessionId = intent?.getStringExtra(AgentManager.EXTRA_SESSION_ID)
         if (!sessionId.isNullOrBlank()) {
-            openSessionDetail(sessionId)
+            routeIncomingSession(sessionId)
             return
         }
         maybeHandleDebugIntent(intent)
+    }
+
+    private fun routeIncomingSession(sessionId: String) {
+        thread {
+            val draftSession = runCatching {
+                findStandaloneHomeDraftSession(sessionId)
+            }.getOrElse { err ->
+                Log.w(TAG, "Failed to inspect incoming session $sessionId", err)
+                null
+            }
+            runOnUiThread {
+                if (draftSession != null) {
+                    showCreateSessionDialog(
+                        initialTargetSelection = CreateSessionDialogController.InitialTargetSelection(
+                            packageName = checkNotNull(draftSession.targetPackage),
+                            locked = true,
+                        ),
+                        existingSessionId = draftSession.sessionId,
+                        initialSettings = agentSessionController.executionSettingsForSession(draftSession.sessionId),
+                    )
+                } else {
+                    openSessionDetail(sessionId)
+                }
+            }
+        }
     }
 
     private fun maybeHandleDebugIntent(intent: Intent?) {
@@ -211,29 +237,45 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showCreateSessionDialog() {
-        if (modelsRefreshInFlight && availableModels.isEmpty()) {
-            showToast("Loading model catalog…")
-            return
-        }
+    private fun showCreateSessionDialog(
+        initialTargetSelection: CreateSessionDialogController.InitialTargetSelection? = null,
+        existingSessionId: String? = null,
+        initialSettings: SessionExecutionSettings = SessionExecutionSettings(
+            model = latestAgentRuntimeStatus?.effectiveModel,
+            reasoningEffort = null,
+        ),
+    ) {
         if (availableModels.isEmpty()) {
             refreshModelsIfNeeded(force = true) {
-                runOnUiThread { openCreateSessionDialog() }
+                runOnUiThread {
+                    openCreateSessionDialog(
+                        initialTargetSelection = initialTargetSelection,
+                        existingSessionId = existingSessionId,
+                        initialSettings = initialSettings,
+                    )
+                }
             }
             showToast("Loading model catalog…")
             return
         }
-        openCreateSessionDialog()
+        openCreateSessionDialog(
+            initialTargetSelection = initialTargetSelection,
+            existingSessionId = existingSessionId,
+            initialSettings = initialSettings,
+        )
     }
 
-    private fun openCreateSessionDialog() {
+    private fun openCreateSessionDialog(
+        initialTargetSelection: CreateSessionDialogController.InitialTargetSelection? = null,
+        existingSessionId: String? = null,
+        initialSettings: SessionExecutionSettings,
+    ) {
         createSessionDialogController.show(
             models = availableModels,
             initialPrompt = "",
-            initialSettings = SessionExecutionSettings(
-                model = latestAgentRuntimeStatus?.effectiveModel,
-                reasoningEffort = null,
-            ),
+            initialSettings = initialSettings,
+            initialTargetSelection = initialTargetSelection,
+            existingSessionId = existingSessionId,
             onSubmit = ::startSessionFromUi,
         )
     }
@@ -280,6 +322,11 @@ class MainActivity : Activity() {
             onComplete?.invoke()
             return
         }
+        if (onComplete != null) {
+            synchronized(pendingModelCallbacks) {
+                pendingModelCallbacks += onComplete
+            }
+        }
         if (modelsRefreshInFlight) {
             return
         }
@@ -295,7 +342,10 @@ class MainActivity : Activity() {
                     }
             } finally {
                 modelsRefreshInFlight = false
-                onComplete?.invoke()
+                val callbacks = synchronized(pendingModelCallbacks) {
+                    pendingModelCallbacks.toList().also { pendingModelCallbacks.clear() }
+                }
+                callbacks.forEach { callback -> callback.invoke() }
             }
         }
     }
@@ -336,6 +386,18 @@ class MainActivity : Activity() {
             } finally {
                 agentRefreshInFlight = false
             }
+        }
+    }
+
+    private fun findStandaloneHomeDraftSession(sessionId: String): AgentSessionDetails? {
+        val snapshot = agentSessionController.loadSnapshot(sessionId)
+        val session = snapshot.sessions.firstOrNull { it.sessionId == sessionId } ?: return null
+        val hasChildren = snapshot.sessions.any { it.parentSessionId == sessionId }
+        return session.takeIf {
+            it.anchor == AgentSessionInfo.ANCHOR_HOME &&
+                it.state == AgentSessionInfo.STATE_CREATED &&
+                !hasChildren &&
+                !it.targetPackage.isNullOrBlank()
         }
     }
 

@@ -18,10 +18,17 @@ class CreateSessionDialogController(
     private val activity: Activity,
     private val sessionController: AgentSessionController,
 ) {
+    data class InitialTargetSelection(
+        val packageName: String,
+        val locked: Boolean,
+    )
+
     fun show(
         models: List<AgentModelOption>,
         initialPrompt: String,
         initialSettings: SessionExecutionSettings,
+        initialTargetSelection: InitialTargetSelection? = null,
+        existingSessionId: String? = null,
         onSubmit: (LaunchSessionRequest) -> Unit,
     ) {
         val dialogView = LayoutInflater.from(activity)
@@ -66,7 +73,9 @@ class CreateSessionDialogController(
             modelLabels,
         ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
 
-        var selectedPackage: InstalledApp? = null
+        var selectedPackage: InstalledApp? = initialTargetSelection?.let { selection ->
+            resolveInstalledApp(selection.packageName)
+        }
         var selectedReasoningOptions = emptyList<AgentReasoningEffortOption>()
         val effortLabelAdapter = ArrayAdapter(
             activity,
@@ -140,6 +149,12 @@ class CreateSessionDialogController(
             selectedPackage = null
             updatePackageSummary()
         }
+        if (initialTargetSelection?.locked == true) {
+            packageButton.isEnabled = false
+            clearPackageButton.isEnabled = false
+            packageButton.visibility = View.GONE
+            clearPackageButton.visibility = View.GONE
+        }
         updatePackageSummary()
 
         val dialog = AlertDialog.Builder(activity)
@@ -161,12 +176,26 @@ class CreateSessionDialogController(
                         targetPackage = selectedPackage?.packageName,
                         model = selectedModel().model,
                         reasoningEffort = selectedEffort(),
+                        existingSessionId = existingSessionId,
                     ),
                 )
                 dialog.dismiss()
             }
         }
         dialog.show()
+    }
+
+    private fun resolveInstalledApp(packageName: String): InstalledApp {
+        val apps = InstalledAppCatalog.listInstalledApps(activity, sessionController)
+        apps.firstOrNull { it.packageName == packageName }?.let { return it }
+        val pm = activity.packageManager
+        val applicationInfo = pm.getApplicationInfo(packageName, 0)
+        return InstalledApp(
+            packageName = packageName,
+            label = pm.getApplicationLabel(applicationInfo)?.toString().orEmpty().ifBlank { packageName },
+            icon = pm.getApplicationIcon(applicationInfo),
+            eligibleTarget = sessionController.canStartSessionForTarget(packageName),
+        )
     }
 
     private fun showInstalledAppPicker(onSelected: (InstalledApp) -> Unit) {
