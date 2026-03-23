@@ -1,6 +1,7 @@
 package com.openai.codex.agent
 
 import java.io.File
+import java.net.SocketException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -70,6 +71,20 @@ class AgentResponsesProxyTest {
         assertEquals("apiKey", snapshot.authMode)
         assertEquals("sk-test-key", snapshot.bearerToken)
         assertNull(snapshot.accountId)
+    }
+
+    @Test
+    fun describeRequestFailureIncludesPhaseUrlAndCause() {
+        val message = AgentResponsesProxy.describeRequestFailure(
+            phase = "read response body",
+            upstreamUrl = "https://chatgpt.com/backend-api/codex/responses",
+            err = SocketException("Software caused connection abort"),
+        )
+
+        assertEquals(
+            "Responses proxy failed during read response body for https://chatgpt.com/backend-api/codex/responses: SocketException: Software caused connection abort",
+            message,
+        )
     }
 
     private fun writeTempAuthJson(contents: String): File {

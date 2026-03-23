@@ -5,6 +5,7 @@ import android.util.Log
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketException
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import org.json.JSONObject
@@ -38,8 +39,12 @@ object AgentResponsesProxy {
             upstreamBaseUrl = "provider-default",
             authSnapshot.authMode,
         )
-        Log.i(TAG, "Proxying /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode})")
-        return executeRequest(upstreamUrl, requestBody, authSnapshot)
+        val requestBodyBytes = requestBody.toByteArray(StandardCharsets.UTF_8)
+        Log.i(
+            TAG,
+            "Proxying /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode}, bytes=${requestBodyBytes.size})",
+        )
+        return executeRequest(upstreamUrl, requestBodyBytes, authSnapshot)
     }
 
     internal fun buildResponsesUrl(
@@ -94,19 +99,34 @@ object AgentResponsesProxy {
 
     private fun executeRequest(
         upstreamUrl: String,
-        requestBody: String,
+        requestBodyBytes: ByteArray,
         authSnapshot: AuthSnapshot,
     ): HttpResponse {
         val connection = openConnection(upstreamUrl, authSnapshot)
         return try {
-            connection.outputStream.use { output ->
-                output.write(requestBody.toByteArray(StandardCharsets.UTF_8))
-                output.flush()
+            try {
+                connection.outputStream.use { output ->
+                    output.write(requestBodyBytes)
+                    output.flush()
+                }
+            } catch (err: IOException) {
+                throw wrapRequestFailure("write request body", upstreamUrl, err)
             }
-            val statusCode = connection.responseCode
-            val stream = if (statusCode >= 400) connection.errorStream else connection.inputStream
-            val responseBody = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }
-                .orEmpty()
+            val statusCode = try {
+                connection.responseCode
+            } catch (err: IOException) {
+                throw wrapRequestFailure("read response status", upstreamUrl, err)
+            }
+            val responseBody = try {
+                val stream = if (statusCode >= 400) connection.errorStream else connection.inputStream
+                stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+            } catch (err: IOException) {
+                throw wrapRequestFailure("read response body", upstreamUrl, err)
+            }
+            Log.i(
+                TAG,
+                "Responses proxy completed status=$statusCode response_bytes=${responseBody.toByteArray(StandardCharsets.UTF_8).size}",
+            )
             HttpResponse(
                 statusCode = statusCode,
                 body = responseBody,
@@ -120,23 +140,50 @@ object AgentResponsesProxy {
         upstreamUrl: String,
         authSnapshot: AuthSnapshot,
     ): HttpURLConnection {
-        return (URL(upstreamUrl).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = CONNECT_TIMEOUT_MS
-            readTimeout = READ_TIMEOUT_MS
-            doInput = true
-            doOutput = true
-            instanceFollowRedirects = true
-            setRequestProperty("Authorization", "Bearer ${authSnapshot.bearerToken}")
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "text/event-stream")
-            setRequestProperty("Accept-Encoding", "identity")
-            setRequestProperty("originator", DEFAULT_ORIGINATOR)
-            setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
-            if (authSnapshot.authMode == "chatgpt" && !authSnapshot.accountId.isNullOrBlank()) {
-                setRequestProperty("ChatGPT-Account-ID", authSnapshot.accountId)
+        return try {
+            (URL(upstreamUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = CONNECT_TIMEOUT_MS
+                readTimeout = READ_TIMEOUT_MS
+                doInput = true
+                doOutput = true
+                instanceFollowRedirects = true
+                setRequestProperty("Authorization", "Bearer ${authSnapshot.bearerToken}")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "text/event-stream")
+                setRequestProperty("Accept-Encoding", "identity")
+                setRequestProperty("originator", DEFAULT_ORIGINATOR)
+                setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+                if (authSnapshot.authMode == "chatgpt" && !authSnapshot.accountId.isNullOrBlank()) {
+                    setRequestProperty("ChatGPT-Account-ID", authSnapshot.accountId)
+                }
             }
+        } catch (err: IOException) {
+            throw wrapRequestFailure("open connection", upstreamUrl, err)
         }
+    }
+
+    internal fun describeRequestFailure(
+        phase: String,
+        upstreamUrl: String,
+        err: IOException,
+    ): String {
+        val reason = err.message?.ifBlank { err::class.java.simpleName } ?: err::class.java.simpleName
+        return "Responses proxy failed during $phase for $upstreamUrl: ${err::class.java.simpleName}: $reason"
+    }
+
+    private fun wrapRequestFailure(
+        phase: String,
+        upstreamUrl: String,
+        err: IOException,
+    ): IOException {
+        val wrapped = IOException(describeRequestFailure(phase, upstreamUrl, err), err)
+        if (err is SocketException) {
+            Log.w(TAG, wrapped.message, err)
+        } else {
+            Log.e(TAG, wrapped.message, err)
+        }
+        return wrapped
     }
 
     private fun JSONObject.stringOrNull(key: String): String? {
