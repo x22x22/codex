@@ -477,9 +477,6 @@ impl Client {
             crate::types::PlanType::Business => AccountPlanType::Business,
             crate::types::PlanType::Enterprise => AccountPlanType::Enterprise,
             crate::types::PlanType::Edu | crate::types::PlanType::Education => AccountPlanType::Edu,
-            crate::types::PlanType::SelfServeBusinessUsage => {
-                AccountPlanType::SelfServeBusinessUsage
-            }
             crate::types::PlanType::Guest
             | crate::types::PlanType::FreeWorkspace
             | crate::types::PlanType::Quorum

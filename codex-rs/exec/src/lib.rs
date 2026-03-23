@@ -1397,7 +1397,6 @@ fn local_external_chatgpt_tokens(
         AccountPlanType::Business => "business".to_string(),
         AccountPlanType::Enterprise => "enterprise".to_string(),
         AccountPlanType::Edu => "edu".to_string(),
-        AccountPlanType::SelfServeBusinessUsage => "self_serve_business_usage_based".to_string(),
         AccountPlanType::Unknown => "unknown".to_string(),
     });
 
