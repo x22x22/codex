@@ -16,7 +16,6 @@ object InstalledAppCatalog {
     private val excludedPackages = setOf(
         "com.openai.codex.agent",
         "com.openai.codex.genie",
-        "com.openai.codexd",
     )
 
     fun listInstalledApps(

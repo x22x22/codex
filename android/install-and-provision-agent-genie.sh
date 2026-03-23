@@ -129,7 +129,6 @@ echo "Stopping existing Agent/Genie processes"
 for package_name in \
   "$agent_package" \
   "$genie_package" \
-  com.openai.codexd \
   com.example.agentstub \
   com.example.geniestub \
   com.example.agentstub.standalone \
