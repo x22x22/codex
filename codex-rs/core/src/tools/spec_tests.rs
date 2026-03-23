@@ -406,7 +406,13 @@ fn model_provided_unified_exec_falls_back_for_windows_sandboxed_policies() {
         windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
     });
 
-    assert_eq!(config.shell_type, ConfigShellToolType::ShellCommand);
+    let expected_shell_type = if cfg!(target_os = "windows") {
+        ConfigShellToolType::ShellCommand
+    } else {
+        ConfigShellToolType::UnifiedExec
+    };
+
+    assert_eq!(config.shell_type, expected_shell_type);
 }
 
 #[test]
