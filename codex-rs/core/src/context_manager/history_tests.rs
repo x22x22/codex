@@ -443,6 +443,59 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
 }
 
 #[test]
+fn for_prompt_drops_trailing_reasoning_before_next_user_message() {
+    let history = create_history_with_items(vec![
+        user_input_text_msg("first"),
+        assistant_msg("done"),
+        reasoning_msg("orphaned"),
+        user_input_text_msg("second"),
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![
+            user_input_text_msg("first"),
+            assistant_msg("done"),
+            user_input_text_msg("second"),
+        ]
+    );
+}
+
+#[test]
+fn for_prompt_drops_trailing_reasoning_at_prompt_end() {
+    let history = create_history_with_items(vec![
+        user_input_text_msg("first"),
+        assistant_msg("done"),
+        reasoning_msg("orphaned"),
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![user_input_text_msg("first"), assistant_msg("done"),]
+    );
+}
+
+#[test]
+fn for_prompt_keeps_reasoning_when_followed_by_assistant_message() {
+    let history = create_history_with_items(vec![
+        user_input_text_msg("first"),
+        reasoning_msg("kept"),
+        assistant_msg("done"),
+        user_input_text_msg("second"),
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![
+            user_input_text_msg("first"),
+            reasoning_msg("kept"),
+            assistant_msg("done"),
+            user_input_text_msg("second"),
+        ]
+    );
+}
+
+#[test]
 fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
     let history = create_history_with_items(vec![
         ResponseItem::Message {

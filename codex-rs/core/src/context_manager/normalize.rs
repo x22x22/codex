@@ -194,6 +194,33 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
     });
 }
 
+pub(crate) fn remove_trailing_reasoning_before_user_messages(items: &mut Vec<ResponseItem>) {
+    let mut normalized = Vec::with_capacity(items.len());
+    let mut removed_count = 0usize;
+
+    for item in items.drain(..) {
+        if matches!(&item, ResponseItem::Message { role, .. } if role == "user") {
+            while matches!(normalized.last(), Some(ResponseItem::Reasoning { .. })) {
+                normalized.pop();
+                removed_count += 1;
+            }
+        }
+
+        normalized.push(item);
+    }
+
+    while matches!(normalized.last(), Some(ResponseItem::Reasoning { .. })) {
+        normalized.pop();
+        removed_count += 1;
+    }
+
+    if removed_count > 0 {
+        info!("Removed {removed_count} trailing reasoning item(s) before user input or prompt end");
+    }
+
+    *items = normalized;
+}
+
 pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItem>, item: &ResponseItem) {
     match item {
         ResponseItem::FunctionCall { call_id, .. } => {
