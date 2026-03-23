@@ -95,11 +95,15 @@ pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_env_and_args(codex_home, &[], &[]).await
+        let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
+            .context("should find binary for codex-app-server")?;
+        Self::new_with_program_env_and_args(program.as_path(), codex_home, &[], &[]).await
     }
 
     pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {
-        Self::new_with_env_and_args(codex_home, &[], args).await
+        let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
+            .context("should find binary for codex-app-server")?;
+        Self::new_with_program_env_and_args(program.as_path(), codex_home, &[], args).await
     }
 
     /// Creates a new MCP process, allowing tests to override or remove
@@ -111,7 +115,9 @@ impl McpProcess {
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        Self::new_with_env_and_args(codex_home, env_overrides, &[]).await
+        let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
+            .context("should find binary for codex-app-server")?;
+        Self::new_with_program_env_and_args(program.as_path(), codex_home, env_overrides, &[]).await
     }
 
     pub async fn new_with_env_and_args(
@@ -121,6 +127,27 @@ impl McpProcess {
     ) -> anyhow::Result<Self> {
         let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
             .context("should find binary for codex-app-server")?;
+        Self::new_with_program_env_and_args(program.as_path(), codex_home, env_overrides, args)
+            .await
+    }
+
+    pub async fn new_codex_cli_with_args(
+        codex_home: &Path,
+        env_overrides: &[(&str, Option<&str>)],
+        args: &[&str],
+    ) -> anyhow::Result<Self> {
+        let program =
+            codex_utils_cargo_bin::cargo_bin("codex").context("should find binary for codex")?;
+        Self::new_with_program_env_and_args(program.as_path(), codex_home, env_overrides, args)
+            .await
+    }
+
+    async fn new_with_program_env_and_args(
+        program: &Path,
+        codex_home: &Path,
+        env_overrides: &[(&str, Option<&str>)],
+        args: &[&str],
+    ) -> anyhow::Result<Self> {
         let mut cmd = Command::new(program);
 
         cmd.stdin(Stdio::piped());

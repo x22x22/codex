@@ -40,6 +40,8 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(target_os = "windows")]
+use codex_utils_pty::SpawnedProcess;
 use dunce::canonicalize;
 use macos_permissions::intersect_macos_seatbelt_profile_extensions;
 use macos_permissions::merge_macos_seatbelt_profile_extensions;
@@ -745,6 +747,77 @@ pub async fn execute_exec_request_with_after_spawn(
 ) -> crate::error::Result<ExecToolCallOutput> {
     let effective_policy = exec_request.sandbox_policy.clone();
     execute_exec_request(exec_request, &effective_policy, stdout_stream, after_spawn).await
+}
+
+#[cfg(target_os = "windows")]
+pub async fn spawn_windows_sandbox_env(
+    exec_request: ExecRequest,
+    sandbox_policy_cwd: &Path,
+    tty: bool,
+    stdin_open: bool,
+) -> crate::error::Result<SpawnedProcess> {
+    use crate::error::CodexErr;
+
+    let ExecRequest {
+        command,
+        cwd,
+        env,
+        sandbox,
+        windows_sandbox_level,
+        windows_sandbox_private_desktop,
+        sandbox_policy,
+        ..
+    } = exec_request;
+
+    if sandbox != SandboxType::WindowsRestrictedToken {
+        return Err(CodexErr::InvalidRequest(
+            "spawn_windows_sandbox_env requires a Windows sandbox exec request".to_string(),
+        ));
+    }
+
+    let policy_json = serde_json::to_string(&sandbox_policy).map_err(|err| {
+        CodexErr::Io(std::io::Error::other(format!(
+            "failed to serialize Windows sandbox policy: {err}"
+        )))
+    })?;
+    let codex_home = crate::config::find_codex_home().map_err(|err| {
+        CodexErr::Io(std::io::Error::other(format!(
+            "windows sandbox: failed to resolve codex_home: {err}"
+        )))
+    })?;
+
+    match windows_sandbox_level {
+        WindowsSandboxLevel::Elevated => {
+            codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
+                policy_json.as_str(),
+                sandbox_policy_cwd,
+                codex_home.as_ref(),
+                command,
+                cwd.as_path(),
+                env,
+                None,
+                tty,
+                stdin_open,
+                windows_sandbox_private_desktop,
+            )
+            .await
+            .map_err(|err| CodexErr::Io(std::io::Error::other(err.to_string())))
+        }
+        _ => codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
+            policy_json.as_str(),
+            sandbox_policy_cwd,
+            codex_home.as_ref(),
+            command,
+            cwd.as_path(),
+            env,
+            None,
+            tty,
+            stdin_open,
+            windows_sandbox_private_desktop,
+        )
+        .await
+        .map_err(|err| CodexErr::Io(std::io::Error::other(err.to_string()))),
+    }
 }
 
 #[cfg(test)]

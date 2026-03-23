@@ -1745,6 +1745,7 @@ impl CodexMessageProcessor {
                         request_id: request_for_task,
                         process_id,
                         exec_request,
+                        sandbox_policy_cwd: sandbox_cwd,
                         started_network_proxy: started_network_proxy_for_task,
                         tty,
                         stream_stdin,

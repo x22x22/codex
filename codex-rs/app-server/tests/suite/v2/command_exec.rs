@@ -15,9 +15,19 @@ use codex_app_server_protocol::CommandExecTerminateParams;
 use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
+#[cfg(target_os = "windows")]
+use codex_app_server_protocol::ReadOnlyAccess;
 use codex_app_server_protocol::RequestId;
+#[cfg(target_os = "windows")]
+use codex_app_server_protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::fs::OpenOptions;
+#[cfg(target_os = "windows")]
+use std::io::Write;
+#[cfg(target_os = "windows")]
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -32,6 +42,28 @@ use super::connection_handling_websocket::read_jsonrpc_message;
 use super::connection_handling_websocket::send_initialize_request;
 use super::connection_handling_websocket::send_request;
 use super::connection_handling_websocket::spawn_websocket_server;
+
+#[cfg(target_os = "windows")]
+fn pwsh_path() -> Option<String> {
+    let program_files = std::env::var_os("ProgramFiles")?;
+    let path = std::path::PathBuf::from(program_files).join("PowerShell\\7\\pwsh.exe");
+    path.is_file().then(|| path.display().to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn create_config_toml_with_windows_sandbox_mode(
+    codex_home: &Path,
+    server_uri: &str,
+    approval_policy: &str,
+    windows_sandbox_mode: &str,
+) -> std::io::Result<()> {
+    create_config_toml(codex_home, server_uri, approval_policy)?;
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(codex_home.join("config.toml"))?;
+    writeln!(file, "\n[windows]\nsandbox = \"{windows_sandbox_mode}\"")?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
@@ -704,6 +736,403 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn command_exec_windows_sandbox_tty_streams_and_accepts_input() -> Result<()> {
+    let Some(pwsh) = pwsh_path() else {
+        return Ok(());
+    };
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let process_id = "windows-sandbox-tty-1".to_string();
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                pwsh,
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-NoExit".to_string(),
+                "-Command".to_string(),
+                "$PID; Write-Output ready".to_string(),
+            ],
+            process_id: Some(process_id.clone()),
+            tty: true,
+            stream_stdin: false,
+            stream_stdout_stderr: true,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: Some(SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+            }),
+        })
+        .await?;
+
+    let started_text = read_command_exec_output_until_contains(
+        &mut mcp,
+        process_id.as_str(),
+        CommandExecOutputStream::Stdout,
+        "ready",
+    )
+    .await?;
+    assert!(
+        started_text.contains("ready"),
+        "unexpected output: {started_text:?}"
+    );
+
+    let write_request_id = mcp
+        .send_command_exec_write_request(CommandExecWriteParams {
+            process_id: process_id.clone(),
+            delta_base64: Some(STANDARD.encode("Write-Output second\r\n")),
+            close_stdin: false,
+        })
+        .await?;
+    let write_response = mcp
+        .read_stream_until_response_message(RequestId::Integer(write_request_id))
+        .await?;
+    assert_eq!(write_response.result, serde_json::json!({}));
+
+    let second_text = read_command_exec_output_until_contains(
+        &mut mcp,
+        process_id.as_str(),
+        CommandExecOutputStream::Stdout,
+        "second",
+    )
+    .await?;
+    assert!(
+        second_text.contains("second"),
+        "unexpected output: {second_text:?}"
+    );
+
+    let exit_request_id = mcp
+        .send_command_exec_write_request(CommandExecWriteParams {
+            process_id,
+            delta_base64: Some(STANDARD.encode("exit\r\n")),
+            close_stdin: false,
+        })
+        .await?;
+    let exit_response = mcp
+        .read_stream_until_response_message(RequestId::Integer(exit_request_id))
+        .await?;
+    assert_eq!(exit_response.result, serde_json::json!({}));
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(response.exit_code, 0);
+    assert_eq!(response.stdout, "");
+    assert_eq!(response.stderr, "");
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn command_exec_windows_sandbox_tty_supports_initial_size_and_resize_unelevated() -> Result<()>
+{
+    let Some(pwsh) = pwsh_path() else {
+        return Ok(());
+    };
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_windows_sandbox_mode(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        "unelevated",
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let process_id = "windows-sandbox-tty-size-unelevated-1".to_string();
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                pwsh,
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "$size=$Host.UI.RawUI.WindowSize; Write-Output ('start:{0} {1}' -f $size.Height, $size.Width); $null=Read-Host; $size=$Host.UI.RawUI.WindowSize; Write-Output ('after:{0} {1}' -f $size.Height, $size.Width)".to_string(),
+            ],
+            process_id: Some(process_id.clone()),
+            tty: true,
+            stream_stdin: false,
+            stream_stdout_stderr: true,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: Some(CommandExecTerminalSize {
+                rows: 31,
+                cols: 101,
+            }),
+            sandbox_policy: Some(SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+            }),
+        })
+        .await?;
+
+    let started_text = read_command_exec_output_until_contains(
+        &mut mcp,
+        process_id.as_str(),
+        CommandExecOutputStream::Stdout,
+        "start:31 101",
+    )
+    .await?;
+    assert!(
+        started_text.contains("start:31 101"),
+        "unexpected initial size output: {started_text:?}"
+    );
+
+    let resize_request_id = mcp
+        .send_command_exec_resize_request(CommandExecResizeParams {
+            process_id: process_id.clone(),
+            size: CommandExecTerminalSize {
+                rows: 45,
+                cols: 132,
+            },
+        })
+        .await?;
+    let resize_response = mcp
+        .read_stream_until_response_message(RequestId::Integer(resize_request_id))
+        .await?;
+    assert_eq!(resize_response.result, serde_json::json!({}));
+
+    let write_request_id = mcp
+        .send_command_exec_write_request(CommandExecWriteParams {
+            process_id: process_id.clone(),
+            delta_base64: Some(STANDARD.encode("go\r\n")),
+            close_stdin: true,
+        })
+        .await?;
+    let write_response = mcp
+        .read_stream_until_response_message(RequestId::Integer(write_request_id))
+        .await?;
+    assert_eq!(write_response.result, serde_json::json!({}));
+
+    let resized_text = read_command_exec_output_until_contains(
+        &mut mcp,
+        process_id.as_str(),
+        CommandExecOutputStream::Stdout,
+        "after:45 132",
+    )
+    .await?;
+    assert!(
+        resized_text.contains("after:45 132"),
+        "unexpected resized output: {resized_text:?}"
+    );
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(response.exit_code, 0);
+    assert_eq!(response.stdout, "");
+    assert_eq!(response.stderr, "");
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn command_exec_windows_sandbox_pipe_streams_input_without_tty() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    assert_windows_sandbox_pipe_streams_input_without_tty(&mut mcp, "windows-sandbox-pipe-1")
+        .await?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn command_exec_windows_sandbox_pipe_streams_input_without_tty_via_codex_cli() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp =
+        McpProcess::new_codex_cli_with_args(codex_home.path(), &[], &["app-server"]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    assert_windows_sandbox_pipe_streams_input_without_tty(&mut mcp, "windows-sandbox-pipe-cli-1")
+        .await?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn command_exec_windows_sandbox_pipe_streams_input_without_tty_unelevated() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_windows_sandbox_mode(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        "unelevated",
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    assert_windows_sandbox_pipe_streams_input_without_tty(
+        &mut mcp,
+        "windows-sandbox-pipe-unelevated-1",
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn command_exec_windows_sandbox_pipe_preserves_stderr_unelevated() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_windows_sandbox_mode(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        "unelevated",
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let process_id = "windows-sandbox-pipe-stderr-unelevated-1".to_string();
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/c".to_string(),
+                "(echo split-out)&(>&2 echo split-err)".to_string(),
+            ],
+            process_id: Some(process_id.clone()),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: true,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: Some(SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+            }),
+        })
+        .await?;
+
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+    let mut stdout_text = String::new();
+    let mut stderr_text = String::new();
+    while !(stdout_text.contains("split-out") && stderr_text.contains("split-err")) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let delta = timeout(remaining, read_command_exec_delta(&mut mcp))
+            .await
+            .context("timed out waiting for split stdout/stderr notifications")??;
+        assert_eq!(delta.process_id, process_id);
+
+        let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
+        match delta.stream {
+            CommandExecOutputStream::Stdout => stdout_text.push_str(&delta_text.replace('\r', "")),
+            CommandExecOutputStream::Stderr => stderr_text.push_str(&delta_text.replace('\r', "")),
+        }
+    }
+    assert!(
+        stdout_text.contains("split-out"),
+        "unexpected stdout output: {stdout_text:?}"
+    );
+    assert!(
+        stderr_text.contains("split-err"),
+        "unexpected stderr output: {stderr_text:?}"
+    );
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(response.exit_code, 0);
+    assert_eq!(response.stdout, "");
+    assert_eq!(response.stderr, "");
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn command_exec_windows_sandbox_rejects_restricted_read_only_unelevated() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_windows_sandbox_mode(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        "unelevated",
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/c".to_string(),
+                "echo restricted".to_string(),
+            ],
+            process_id: Some("windows-sandbox-restricted-unelevated-1".to_string()),
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: Some(SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![],
+                },
+                network_access: false,
+            }),
+        })
+        .await?;
+
+    let error = mcp
+        .read_stream_until_response_error(RequestId::Integer(request_id))
+        .await?;
+    assert!(
+        error
+            .error
+            .message
+            .contains("Restricted read-only access requires the elevated Windows sandbox backend"),
+        "unexpected error: {:?}",
+        error.error.message
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminates_process()
 -> Result<()> {
@@ -815,7 +1244,9 @@ async fn read_command_exec_output_until_contains(
                 )
             })??;
         assert_eq!(delta.process_id, process_id);
-        assert_eq!(delta.stream, stream);
+        if delta.stream != stream {
+            continue;
+        }
 
         let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
         collected.push_str(&delta_text.replace('\r', ""));
@@ -846,6 +1277,71 @@ fn decode_delta_notification(
         .params
         .context("command/exec/outputDelta notification should include params")?;
     serde_json::from_value(params).context("deserialize command/exec/outputDelta notification")
+}
+
+#[cfg(target_os = "windows")]
+async fn assert_windows_sandbox_pipe_streams_input_without_tty(
+    mcp: &mut McpProcess,
+    process_id: &str,
+) -> Result<()> {
+    let process_id = process_id.to_string();
+    let command_request_id = mcp
+        .send_command_exec_request(CommandExecParams {
+            command: vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/c".to_string(),
+                "findstr .".to_string(),
+            ],
+            process_id: Some(process_id.clone()),
+            tty: false,
+            stream_stdin: true,
+            stream_stdout_stderr: true,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: Some(SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+            }),
+        })
+        .await?;
+
+    let write_request_id = mcp
+        .send_command_exec_write_request(CommandExecWriteParams {
+            process_id: process_id.clone(),
+            delta_base64: Some(STANDARD.encode("hello from stdin\r\n")),
+            close_stdin: true,
+        })
+        .await?;
+    let write_response = mcp
+        .read_stream_until_response_message(RequestId::Integer(write_request_id))
+        .await?;
+    assert_eq!(write_response.result, serde_json::json!({}));
+
+    let stdout_text = read_command_exec_output_until_contains(
+        mcp,
+        process_id.as_str(),
+        CommandExecOutputStream::Stdout,
+        "hello from stdin",
+    )
+    .await?;
+    assert!(
+        stdout_text.contains("hello from stdin"),
+        "unexpected output: {stdout_text:?}"
+    );
+
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(command_request_id))
+        .await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_eq!(response.exit_code, 0);
+    assert_eq!(response.stdout, "");
+    assert_eq!(response.stderr, "");
+    Ok(())
 }
 
 async fn read_initialize_response(
