@@ -639,9 +639,18 @@ fn build_payload_roots(
     } else {
         gather_read_roots(command_cwd, policy, codex_home)
     };
+    read_roots = filter_protected_read_roots(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
+}
+
+fn filter_protected_read_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    roots.retain(|root| {
+        let key = canonical_path_key(root);
+        key != "c:/program files/windowsapps" && !key.starts_with("c:/program files/windowsapps/")
+    });
+    roots
 }
 
 fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
@@ -671,6 +680,7 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::filter_protected_read_roots;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::profile_read_roots;
@@ -831,5 +841,27 @@ mod tests {
         assert!(canonical_windows_platform_default_roots()
             .into_iter()
             .all(|path| roots.contains(&path)));
+    }
+
+    #[test]
+    fn filter_protected_read_roots_skips_windowsapps_paths() {
+        let tmp = TempDir::new().expect("tempdir");
+        let safe_root = tmp.path().join("workspace");
+        fs::create_dir_all(&safe_root).expect("create safe root");
+
+        let roots = vec![
+            PathBuf::from(r"C:\Program Files\WindowsApps"),
+            PathBuf::from(
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3_x64__pkg\app\resources",
+            ),
+            safe_root.clone(),
+        ];
+
+        let filtered = filter_protected_read_roots(roots);
+
+        assert_eq!(
+            vec![dunce::canonicalize(&safe_root).expect("canonical safe root")],
+            filtered
+        );
     }
 }
