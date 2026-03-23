@@ -50,7 +50,6 @@ object AgentSessionBridgeServer {
         companion object {
             private const val TAG = "AgentSessionBridge"
             private const val METHOD_GET_RUNTIME_STATUS = "getRuntimeStatus"
-            private const val METHOD_SEND_RESPONSES_REQUEST = "sendResponsesRequest"
             private const val METHOD_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
             private const val METHOD_READ_SESSION_EXECUTION_SETTINGS = "readSessionExecutionSettings"
             private const val WRITE_CHUNK_BYTES = 4096
@@ -132,21 +131,6 @@ object AgentSessionBridgeServer {
                                     .put("configuredModel", status.configuredModel)
                                     .put("effectiveModel", status.effectiveModel)
                                     .put("upstreamBaseUrl", status.upstreamBaseUrl),
-                            )
-                    }
-                    METHOD_SEND_RESPONSES_REQUEST -> {
-                        val httpResponse = AgentResponsesProxy.sendResponsesRequest(
-                            context,
-                            request.optString("requestBody"),
-                        )
-                        JSONObject()
-                            .put("requestId", requestId)
-                            .put("ok", true)
-                            .put(
-                                "httpResponse",
-                                JSONObject()
-                                    .put("statusCode", httpResponse.statusCode)
-                                    .put("body", httpResponse.body),
                             )
                     }
                     METHOD_READ_INSTALLED_AGENTS_FILE -> {

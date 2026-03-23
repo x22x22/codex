@@ -16,7 +16,6 @@ class CodexAgentService : AgentService() {
         private const val BRIDGE_REQUEST_PREFIX = "__codex_bridge__ "
         private const val BRIDGE_RESPONSE_PREFIX = "__codex_bridge_result__ "
         private const val BRIDGE_METHOD_GET_RUNTIME_STATUS = "getRuntimeStatus"
-        private const val BRIDGE_METHOD_SEND_RESPONSES_REQUEST = "sendResponsesRequest"
         private const val AUTO_ANSWER_ESCALATE_PREFIX = "ESCALATE:"
         private const val AUTO_ANSWER_INSTRUCTIONS =
             "You are Codex acting as the Android Agent supervising a Genie execution. If you can answer the current Genie question from the available session context, call the framework session tool `android.framework.sessions.answer_question` exactly once with a short free-form answer. You may inspect current framework state with `android.framework.sessions.list`. If user input is required, do not call any framework tool. Instead reply with `ESCALATE: ` followed by the exact question the Agent should ask the user."
@@ -399,21 +398,6 @@ class CodexAgentService : AgentService() {
                                 .put("configuredModel", status.configuredModel)
                                 .put("effectiveModel", status.effectiveModel)
                                 .put("upstreamBaseUrl", status.upstreamBaseUrl),
-                        )
-                }
-                BRIDGE_METHOD_SEND_RESPONSES_REQUEST -> {
-                    val httpResponse = AgentResponsesProxy.sendResponsesRequest(
-                        this,
-                        request.optString("requestBody"),
-                    )
-                    JSONObject()
-                        .put("requestId", requestId)
-                        .put("ok", true)
-                        .put(
-                            "httpResponse",
-                            JSONObject()
-                                .put("statusCode", httpResponse.statusCode)
-                                .put("body", httpResponse.body),
                         )
                 }
                 else -> JSONObject()

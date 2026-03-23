@@ -25,7 +25,6 @@ class AgentBridgeClient(
     companion object {
         private const val TAG = "AgentBridgeClient"
         private const val OP_GET_RUNTIME_STATUS = "getRuntimeStatus"
-        private const val OP_SEND_RESPONSES_REQUEST = "sendResponsesRequest"
         private const val OP_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
         private const val OP_READ_SESSION_EXECUTION_SETTINGS = "readSessionExecutionSettings"
         private const val WRITE_CHUNK_BYTES = 4096
@@ -40,7 +39,7 @@ class AgentBridgeClient(
     }
 
     private val bridgeFd: ParcelFileDescriptor = callback.openSessionBridge(sessionId)
-    private val frameworkHttpBridgeFd: ParcelFileDescriptor? =
+    private val frameworkHttpBridgeFd: ParcelFileDescriptor =
         FrameworkSessionTransportCompat.openFrameworkSessionBridge(callback, sessionId)
     private val input = DataInputStream(BufferedInputStream(FileInputStream(bridgeFd.fileDescriptor)))
     private val output = DataOutputStream(BufferedOutputStream(FileOutputStream(bridgeFd.fileDescriptor)))
@@ -48,11 +47,7 @@ class AgentBridgeClient(
 
     init {
         Log.i(TAG, "Using framework session bridge transport for $sessionId")
-        if (frameworkHttpBridgeFd != null) {
-            Log.i(TAG, "Using framework-owned HTTP bridge for $sessionId")
-        } else {
-            Log.i(TAG, "Framework-owned HTTP bridge unavailable for $sessionId; using Agent-owned fallback")
-        }
+        Log.i(TAG, "Using framework-owned HTTP bridge for $sessionId")
     }
 
     fun getRuntimeStatus(): CodexAgentBridge.RuntimeStatus {
@@ -87,34 +82,22 @@ class AgentBridgeClient(
     }
 
     fun sendResponsesRequest(body: String): AgentResponsesHttpResponse {
-        val frameworkBridge = frameworkHttpBridgeFd
-        if (frameworkBridge != null) {
-            val response = FrameworkSessionTransportCompat.executeRequestAndReadFully(
-                bridge = frameworkBridge,
-                request = FrameworkSessionTransportCompat.HttpRequest(
-                    method = RESPONSES_METHOD,
-                    path = RESPONSES_PATH,
-                    headers = Bundle().apply {
-                        putString(HEADER_CONTENT_TYPE, HEADER_VALUE_APPLICATION_JSON)
-                        putString(HEADER_ACCEPT, HEADER_VALUE_TEXT_EVENT_STREAM)
-                        putString(HEADER_ACCEPT_ENCODING, HEADER_VALUE_IDENTITY)
-                    },
-                    body = body.toByteArray(StandardCharsets.UTF_8),
-                ),
-            )
-            return AgentResponsesHttpResponse(
-                statusCode = response.statusCode,
-                body = response.bodyString,
-            )
-        }
-        val response = request(
-            JSONObject()
-                .put("method", OP_SEND_RESPONSES_REQUEST)
-                .put("requestBody", body),
-        ).getJSONObject("httpResponse")
+        val response = FrameworkSessionTransportCompat.executeRequestAndReadFully(
+            bridge = frameworkHttpBridgeFd,
+            request = FrameworkSessionTransportCompat.HttpRequest(
+                method = RESPONSES_METHOD,
+                path = RESPONSES_PATH,
+                headers = Bundle().apply {
+                    putString(HEADER_CONTENT_TYPE, HEADER_VALUE_APPLICATION_JSON)
+                    putString(HEADER_ACCEPT, HEADER_VALUE_TEXT_EVENT_STREAM)
+                    putString(HEADER_ACCEPT_ENCODING, HEADER_VALUE_IDENTITY)
+                },
+                body = body.toByteArray(StandardCharsets.UTF_8),
+            ),
+        )
         return AgentResponsesHttpResponse(
-            statusCode = response.getInt("statusCode"),
-            body = response.optString("body"),
+            statusCode = response.statusCode,
+            body = response.bodyString,
         )
     }
 
@@ -123,7 +106,7 @@ class AgentBridgeClient(
             runCatching { input.close() }
             runCatching { output.close() }
             runCatching { bridgeFd.close() }
-            runCatching { frameworkHttpBridgeFd?.close() }
+            runCatching { frameworkHttpBridgeFd.close() }
         }
     }
 

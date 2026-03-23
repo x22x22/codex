@@ -393,7 +393,7 @@ class AgentSessionController(context: Context) {
 
     private fun provisionSessionNetworkConfig(sessionId: String) {
         val manager = requireAgentManager()
-        val configured = FrameworkSessionTransportCompat.setSessionNetworkConfig(
+        FrameworkSessionTransportCompat.setSessionNetworkConfig(
             agentManager = manager,
             sessionId = sessionId,
             config = AgentResponsesProxy.buildFrameworkSessionNetworkConfig(
@@ -401,14 +401,7 @@ class AgentSessionController(context: Context) {
                 upstreamBaseUrl = resolveUpstreamBaseUrl(),
             ),
         )
-        if (configured) {
-            Log.i(TAG, "Configured framework-owned /responses transport for $sessionId")
-        } else {
-            Log.i(
-                TAG,
-                "Framework-owned /responses transport unavailable for $sessionId; keeping Agent-owned fallback",
-            )
-        }
+        Log.i(TAG, "Configured framework-owned /responses transport for $sessionId")
     }
 
     private fun resolveUpstreamBaseUrl(): String {
