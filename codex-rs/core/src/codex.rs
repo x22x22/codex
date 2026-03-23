@@ -337,7 +337,6 @@ use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ResponseItemMetadata;
-use codex_protocol::models::SandboxPolicyMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -1023,9 +1022,6 @@ fn stamp_message_metadata_on_input_item(
             if patch.user_message_type.is_some() {
                 existing.user_message_type = patch.user_message_type.clone();
             }
-            if patch.sandbox_policy.is_some() {
-                existing.sandbox_policy = patch.sandbox_policy.clone();
-            }
         }
         None => {
             *metadata = Some(patch.clone());
@@ -1033,23 +1029,9 @@ fn stamp_message_metadata_on_input_item(
     }
 }
 
-fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
-    match policy {
-        SandboxPolicy::ReadOnly { .. } => SandboxPolicyMetadata::ReadOnly,
-        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::ExternalSandbox { .. } => {
-            SandboxPolicyMetadata::Sandbox
-        }
-        SandboxPolicy::DangerFullAccess => SandboxPolicyMetadata::FullAccess,
-    }
-}
-
-fn user_message_metadata_patch(
-    kind: UserMessageType,
-    sandbox_policy: Option<SandboxPolicyMetadata>,
-) -> ResponseItemMessageMetadata {
+fn user_message_metadata_patch(kind: UserMessageType) -> ResponseItemMessageMetadata {
     ResponseItemMessageMetadata {
         user_message_type: Some(kind),
-        sandbox_policy,
         ..ResponseItemMessageMetadata::new(/*user_message_type*/ None)
     }
 }
@@ -1119,7 +1101,6 @@ struct ToolApprovalMetadataSnapshot {
 }
 
 fn stamp_tool_approval_metadata_with_snapshot(
-    turn_context: &TurnContext,
     response_item: ResponseItem,
     snapshot: Option<&ToolApprovalMetadataSnapshot>,
 ) -> ResponseItem {
@@ -1137,9 +1118,6 @@ fn stamp_tool_approval_metadata_with_snapshot(
         Some(metadata) => metadata,
         None => return response_item,
     };
-    metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
-        turn_context.sandbox_policy.get(),
-    ));
 
     match outcome {
         Some(outcome) => {
@@ -3450,7 +3428,6 @@ impl Session {
 
     pub(crate) async fn stamp_tool_approval_metadata(
         &self,
-        turn_context: &TurnContext,
         response_item: ResponseItem,
     ) -> ResponseItem {
         if !self.enabled(Feature::ItemMetadata) {
@@ -3469,12 +3446,11 @@ impl Session {
                 pending_approval_call_ids,
             }
         };
-        stamp_tool_approval_metadata_with_snapshot(turn_context, response_item, Some(&snapshot))
+        stamp_tool_approval_metadata_with_snapshot(response_item, Some(&snapshot))
     }
 
     pub(crate) async fn stamp_tool_approval_metadata_on_items(
         &self,
-        turn_context: &TurnContext,
         response_items: Vec<ResponseItem>,
     ) -> Vec<ResponseItem> {
         if !self.enabled(Feature::ItemMetadata) {
@@ -3496,9 +3472,7 @@ impl Session {
 
         response_items
             .into_iter()
-            .map(|item| {
-                stamp_tool_approval_metadata_with_snapshot(turn_context, item, Some(&snapshot))
-            })
+            .map(|item| stamp_tool_approval_metadata_with_snapshot(item, Some(&snapshot)))
             .collect()
     }
 
@@ -4054,9 +4028,7 @@ impl Session {
         turn_context: &TurnContext,
         response_item: ResponseItem,
     ) {
-        let response_item = self
-            .stamp_tool_approval_metadata(turn_context, response_item)
-            .await;
+        let response_item = self.stamp_tool_approval_metadata(response_item).await;
 
         // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
@@ -4160,7 +4132,7 @@ impl Session {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
-        let Some((active_turn_id, active_task)) = active_turn.tasks.first() else {
+        let Some((active_turn_id, _active_task)) = active_turn.tasks.first() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
@@ -4174,11 +4146,7 @@ impl Session {
         }
 
         let mut input_item: ResponseInputItem = input.into();
-        let metadata = user_message_metadata_patch(
-            UserMessageType::PromptSteering,
-            self.enabled(Feature::ItemMetadata)
-                .then(|| sandbox_policy_to_metadata(active_task.turn_context.sandbox_policy.get())),
-        );
+        let metadata = user_message_metadata_patch(UserMessageType::PromptSteering);
         if self.enabled(Feature::ItemMetadata) {
             stamp_message_metadata_on_input_item(&mut input_item, &metadata);
         }
@@ -4196,18 +4164,12 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
-                let sandbox_policy = at.tasks.first().map(|(_, turn_context)| {
-                    sandbox_policy_to_metadata(turn_context.turn_context.sandbox_policy.get())
-                });
                 let mut ts = at.turn_state.lock().await;
                 for mut item in input {
                     if self.enabled(Feature::ItemMetadata)
                         && matches!(&item, ResponseInputItem::Message { .. })
                     {
-                        let metadata = user_message_metadata_patch(
-                            UserMessageType::PromptQueued,
-                            sandbox_policy.clone(),
-                        );
+                        let metadata = user_message_metadata_patch(UserMessageType::PromptQueued);
                         stamp_message_metadata_on_input_item(&mut item, &metadata);
                     }
                     ts.push_pending_input(item);
@@ -5907,11 +5869,7 @@ pub(crate) async fn run_turn(
         .await;
 
     let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let initial_message_metadata = user_message_metadata_patch(
-        UserMessageType::Prompt,
-        sess.enabled(Feature::ItemMetadata)
-            .then(|| sandbox_policy_to_metadata(turn_context.sandbox_policy.get())),
-    );
+    let initial_message_metadata = user_message_metadata_patch(UserMessageType::Prompt);
     if sess.enabled(Feature::ItemMetadata) {
         stamp_message_metadata_on_input_item(
             &mut initial_input_for_turn,
@@ -6009,10 +5967,7 @@ pub(crate) async fn run_turn(
             .await
             .for_prompt(&turn_context.model_info.input_modalities);
         let sampling_request_input = sess
-            .stamp_tool_approval_metadata_on_items(
-                turn_context.as_ref(),
-                sampling_request_input_items,
-            )
+            .stamp_tool_approval_metadata_on_items(sampling_request_input_items)
             .await;
 
         let sampling_request_input_messages = sampling_request_input
