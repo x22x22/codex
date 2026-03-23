@@ -589,10 +589,14 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let snapshot_mid_turn = snapshot_ends_mid_turn(&history);
+        let snapshot_state = snapshot_turn_state(&history);
         let history = match snapshot {
             ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-                truncate_before_nth_user_message(history, nth_user_message, snapshot_mid_turn)
+                truncate_before_nth_user_message(
+                    history,
+                    nth_user_message,
+                    snapshot_state.ends_mid_turn,
+                )
             }
             ForkSnapshot::Interrupted => {
                 let history = match history {
@@ -600,8 +604,8 @@ impl ThreadManager {
                     InitialHistory::Forked(history) => InitialHistory::Forked(history),
                     InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
                 };
-                if snapshot_mid_turn {
-                    append_interrupted_boundary(history)
+                if snapshot_state.ends_mid_turn {
+                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
                 } else {
                     history
                 }
@@ -919,32 +923,47 @@ fn truncate_before_nth_user_message(
     }
 }
 
-fn snapshot_ends_mid_turn(history: &InitialHistory) -> bool {
+#[derive(Debug, Eq, PartialEq)]
+struct SnapshotTurnState {
+    ends_mid_turn: bool,
+    active_turn_id: Option<String>,
+}
+
+fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     let rollout_items = history.get_rollout_items();
     let mut builder = ThreadHistoryBuilder::new();
     for item in &rollout_items {
         builder.handle_rollout_item(item);
     }
     if builder.has_active_turn() {
-        return true;
+        return SnapshotTurnState {
+            ends_mid_turn: true,
+            active_turn_id: builder.active_turn_snapshot().map(|turn| turn.id),
+        };
     }
 
     let Some(last_user_position) = truncation::user_message_positions_in_rollout(&rollout_items)
         .last()
         .copied()
     else {
-        return false;
+        return SnapshotTurnState {
+            ends_mid_turn: false,
+            active_turn_id: None,
+        };
     };
 
     // Synthetic fork/resume histories can contain user/assistant response items
     // without explicit turn lifecycle events. If the persisted snapshot has no
     // terminating boundary after its last user message, treat it as mid-turn.
-    !rollout_items[last_user_position + 1..].iter().any(|item| {
-        matches!(
-            item,
-            RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
-        )
-    })
+    SnapshotTurnState {
+        ends_mid_turn: !rollout_items[last_user_position + 1..].iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+            )
+        }),
+        active_turn_id: None,
+    }
 }
 
 /// Append the same persisted interrupt boundary used by the live interrupt path

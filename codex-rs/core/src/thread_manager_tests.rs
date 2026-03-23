@@ -256,6 +256,103 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
 }
 
 #[tokio::test]
+async fn interrupted_fork_snapshot_preserves_persisted_turn_id() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config();
+    config.codex_home = temp_dir.path().join("codex-home");
+    config.cwd = config.codex_home.clone();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        CollaborationModesConfig::default(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![
+                RolloutItem::ResponseItem(user_msg("hello")),
+                RolloutItem::ResponseItem(assistant_msg("partial")),
+            ]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("create source thread from completed history");
+    let source_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+    let source_history = RolloutRecorder::get_rollout_history(&source_path)
+        .await
+        .expect("read source rollout history");
+    let source_snapshot_state = snapshot_turn_state(&source_history);
+    assert!(source_snapshot_state.ends_mid_turn);
+    let expected_turn_id = source_snapshot_state.active_turn_id.clone();
+    assert!(expected_turn_id.is_some());
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            source_path,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork interrupted snapshot");
+    let forked_path = forked
+        .thread
+        .rollout_path()
+        .expect("forked rollout path should exist");
+    let history = RolloutRecorder::get_rollout_history(&forked_path)
+        .await
+        .expect("read forked rollout history");
+    assert!(!snapshot_turn_state(&history).ends_mid_turn);
+    let rollout_items: Vec<_> = history
+        .get_rollout_items()
+        .into_iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .collect();
+    let interrupted_marker_json =
+        serde_json::to_value(RolloutItem::ResponseItem(interrupted_turn_history_marker()))
+            .expect("serialize interrupted marker");
+    let interrupted_abort_json = serde_json::to_value(RolloutItem::EventMsg(
+        EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: expected_turn_id,
+            reason: TurnAbortReason::Interrupted,
+        }),
+    ))
+    .expect("serialize interrupted abort event");
+    assert_eq!(
+        rollout_items
+            .iter()
+            .filter(|item| {
+                serde_json::to_value(item).expect("serialize rollout item")
+                    == interrupted_marker_json
+            })
+            .count(),
+        1,
+    );
+    assert_eq!(
+        rollout_items
+            .iter()
+            .filter(|item| {
+                serde_json::to_value(item).expect("serialize rollout item")
+                    == interrupted_abort_json
+            })
+            .count(),
+        1,
+    );
+}
+
+#[tokio::test]
 async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_source() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config();
@@ -292,7 +389,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let source_history = RolloutRecorder::get_rollout_history(&source_path)
         .await
         .expect("read source rollout history");
-    assert!(snapshot_ends_mid_turn(&source_history));
+    assert!(snapshot_turn_state(&source_history).ends_mid_turn);
     manager.remove_thread(&source.thread_id).await;
 
     let forked = manager
@@ -312,7 +409,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let history = RolloutRecorder::get_rollout_history(&forked_path)
         .await
         .expect("read forked rollout history");
-    assert!(!snapshot_ends_mid_turn(&history));
+    assert!(!snapshot_turn_state(&history).ends_mid_turn);
 
     let forked_rollout_items: Vec<_> = history
         .get_rollout_items()
