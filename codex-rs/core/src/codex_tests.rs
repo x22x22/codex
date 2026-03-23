@@ -4418,49 +4418,95 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
 #[test]
 fn review_decision_metadata_mapping_is_stable() {
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Approved).review_decision,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Approved,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
+        .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::Approved)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied).review_decision,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Denied,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
+        .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Abort).review_decision,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Abort,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
+        .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::Abort)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::ApprovedForSession).review_decision,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::ApprovedForSession,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
+        .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedForSession)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::ApprovedExecpolicyAmendment {
-            proposed_execpolicy_amendment: codex_protocol::approvals::ExecPolicyAmendment::new(
-                vec!["echo".to_string(), "hi".to_string()],
-            ),
-        })
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: codex_protocol::approvals::ExecPolicyAmendment::new(
+                    vec!["echo".to_string(), "hi".to_string()],
+                ),
+            },
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
         .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedWithAmendment)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::NetworkPolicyAmendment {
-            network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
-                host: "example.com".to_string(),
-                action: codex_protocol::protocol::NetworkPolicyRuleAction::Allow,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: codex_protocol::protocol::NetworkPolicyRuleAction::Allow,
+                },
             },
-        })
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
         .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::NetworkPolicyAmendment {
-            network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
-                host: "example.com".to_string(),
-                action: codex_protocol::protocol::NetworkPolicyRuleAction::Deny,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: codex_protocol::protocol::NetworkPolicyRuleAction::Deny,
+                },
             },
-        })
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
         .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny)
+    );
+}
+
+#[tokio::test]
+async fn approval_source_metadata_mapping_is_stable() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    assert_eq!(
+        approval_source_for_turn(&turn_context),
+        codex_protocol::models::ApprovalSourceMetadata::User
+    );
+
+    turn_context
+        .approval_policy
+        .set(crate::protocol::AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    Arc::get_mut(&mut turn_context.config)
+        .expect("single turn config ref")
+        .approvals_reviewer = codex_protocol::config_types::ApprovalsReviewer::GuardianSubagent;
+    assert_eq!(
+        approval_source_for_turn(&turn_context),
+        codex_protocol::models::ApprovalSourceMetadata::Guardian
     );
 }
 
@@ -4527,6 +4573,7 @@ async fn assert_next_emitted_function_call_metadata(
     expected_sandbox_policy: codex_protocol::models::SandboxPolicyMetadata,
     expected_escalated: bool,
     expected_review_decision: Option<codex_protocol::models::ReviewDecisionMetadata>,
+    expected_approval_source: Option<codex_protocol::models::ApprovalSourceMetadata>,
 ) {
     let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
@@ -4543,6 +4590,7 @@ async fn assert_next_emitted_function_call_metadata(
                 } if metadata.is_tool_call_escalated == Some(expected_escalated)
                     && metadata.review_decision == expected_review_decision
                     && metadata.sandbox_policy == Some(expected_sandbox_policy)
+                    && metadata.approval_source == expected_approval_source
             )
     ));
 }
@@ -4553,7 +4601,10 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
 
     sess.record_call_approval_outcome(
         "call-1".to_string(),
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied),
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Denied,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        ),
     )
     .await;
     sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-1"))
@@ -4563,6 +4614,7 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
         expected_sandbox_policy,
         true,
         Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
+        Some(codex_protocol::models::ApprovalSourceMetadata::User),
     )
     .await;
 }
@@ -4573,7 +4625,8 @@ async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
 
     sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-2"))
         .await;
-    assert_next_emitted_function_call_metadata(&rx, expected_sandbox_policy, false, None).await;
+    assert_next_emitted_function_call_metadata(&rx, expected_sandbox_policy, false, None, None)
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4630,6 +4683,7 @@ async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled(
                 && metadata.is_tool_call_escalated == Some(false)
                 && metadata.review_decision.is_none()
                 && metadata.sandbox_policy == Some(expected_sandbox_policy.clone())
+                && metadata.approval_source.is_none()
         )
     }));
 }
@@ -4671,7 +4725,10 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
     .await;
     sess.record_call_approval_outcome(
         "call-restamp-1".to_string(),
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied),
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Denied,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        ),
     )
     .await;
 
@@ -4702,6 +4759,8 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
             && metadata.review_decision
                 == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
             && metadata.sandbox_policy == Some(expected_sandbox_policy)
+            && metadata.approval_source
+                == Some(codex_protocol::models::ApprovalSourceMetadata::User)
     ));
 }
 
