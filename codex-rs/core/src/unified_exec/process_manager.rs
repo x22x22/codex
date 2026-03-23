@@ -627,6 +627,7 @@ impl UnifiedExecProcessManager {
             session: context.session.clone(),
             turn: context.turn.clone(),
             call_id: context.call_id.clone(),
+            network_approval_owner_id: None,
             tool_name: "exec_command".to_string(),
         };
         orchestrator

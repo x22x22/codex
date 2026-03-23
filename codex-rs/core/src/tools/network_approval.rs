@@ -64,6 +64,10 @@ impl ActiveNetworkApproval {
         self.mode
     }
 
+    pub(crate) fn owner_id(&self) -> Option<&str> {
+        self.registration_id.as_deref()
+    }
+
     pub(crate) fn into_deferred(self) -> Option<DeferredNetworkApproval> {
         match (self.mode, self.registration_id) {
             (NetworkApprovalMode::Deferred, Some(registration_id)) => {
@@ -213,6 +217,18 @@ impl NetworkApprovalService {
         call_outcomes.remove(registration_id);
     }
 
+    async fn resolve_owner_call(
+        &self,
+        network_owner_id: Option<&str>,
+    ) -> Option<Arc<ActiveNetworkApprovalCall>> {
+        if let Some(network_owner_id) = network_owner_id {
+            let active_calls = self.active_calls.lock().await;
+            return active_calls.get(network_owner_id).cloned();
+        }
+
+        self.resolve_single_active_call().await
+    }
+
     async fn resolve_single_active_call(&self) -> Option<Arc<ActiveNetworkApprovalCall>> {
         let active_calls = self.active_calls.lock().await;
         if active_calls.len() == 1 {
@@ -236,8 +252,12 @@ impl NetworkApprovalService {
         (created, true)
     }
 
-    async fn record_outcome_for_single_active_call(&self, outcome: NetworkApprovalOutcome) {
-        let Some(owner_call) = self.resolve_single_active_call().await else {
+    async fn record_outcome_for_owner_call(
+        &self,
+        network_owner_id: Option<&str>,
+        outcome: NetworkApprovalOutcome,
+    ) {
+        let Some(owner_call) = self.resolve_owner_call(network_owner_id).await else {
             return;
         };
         self.record_call_outcome(&owner_call.registration_id, outcome)
@@ -265,8 +285,11 @@ impl NetworkApprovalService {
             return;
         };
 
-        self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(message))
-            .await;
+        self.record_outcome_for_owner_call(
+            blocked.network_owner_id.as_deref(),
+            NetworkApprovalOutcome::DeniedByPolicy(message),
+        )
+        .await;
     }
 
     async fn active_turn_context(session: &Session) -> Option<Arc<crate::codex::TurnContext>> {
@@ -328,9 +351,10 @@ impl NetworkApprovalService {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
-            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
-                policy_denial_message,
-            ))
+            self.record_outcome_for_owner_call(
+                request.network_owner_id.as_deref(),
+                NetworkApprovalOutcome::DeniedByPolicy(policy_denial_message),
+            )
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
@@ -338,9 +362,10 @@ impl NetworkApprovalService {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
-            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
-                policy_denial_message,
-            ))
+            self.record_outcome_for_owner_call(
+                request.network_owner_id.as_deref(),
+                NetworkApprovalOutcome::DeniedByPolicy(policy_denial_message),
+            )
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
@@ -349,7 +374,9 @@ impl NetworkApprovalService {
             host: request.host.clone(),
             protocol,
         };
-        let owner_call = self.resolve_single_active_call().await;
+        let owner_call = self
+            .resolve_owner_call(request.network_owner_id.as_deref())
+            .await;
         let approval_decision = if routes_approval_to_guardian(&turn_context) {
             // TODO(ccunningham): Attach guardian network reviews to the reviewed tool item
             // lifecycle instead of this temporary standalone network approval id.

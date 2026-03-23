@@ -207,7 +207,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 
         let mut env = req.env.clone();
         if let Some(network) = req.network.as_ref() {
-            network.apply_to_env(&mut env);
+            network.apply_to_env_for_owner(&mut env, ctx.network_approval_owner_id.as_deref());
         }
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let spec = build_command_spec(
@@ -221,7 +221,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             )
             .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
             let exec_env = attempt
-                .env_for(spec, req.network.as_ref())
+                .env_for(
+                    spec,
+                    req.network.as_ref(),
+                    ctx.network_approval_owner_id.as_deref(),
+                )
                 .map_err(|err| ToolError::Codex(err.into()))?;
             match zsh_fork_backend::maybe_prepare_unified_exec(
                 req,
@@ -269,7 +273,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         )
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
-            .env_for(spec, req.network.as_ref())
+            .env_for(
+                spec,
+                req.network.as_ref(),
+                ctx.network_approval_owner_id.as_deref(),
+            )
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
             .open_session_with_exec_env(&exec_env, req.tty, Box::new(NoopSpawnLifecycle))
