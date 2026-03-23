@@ -1,5 +1,5 @@
 <resources>
-    <style name="CodexCreateSessionTheme" parent="@android:style/Theme.DeviceDefault.Dialog.NoActionBar">
+    <style name="CodexCreateSessionTheme" parent="@android:style/Theme.DeviceDefault.Light.Dialog.NoActionBar">
         <item name="android:windowCloseOnTouchOutside">true</item>
         <item name="android:windowMinWidthMajor">90%</item>
         <item name="android:windowMinWidthMinor">90%</item>
