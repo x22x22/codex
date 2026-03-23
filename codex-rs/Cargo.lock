@@ -2168,9 +2168,11 @@ version = "0.0.0"
 dependencies = [
  "cc",
  "clap",
+ "codex-arg0",
  "codex-core",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "ctor 0.6.3",
  "landlock",
  "libc",
  "pkg-config",
