@@ -19,7 +19,7 @@ use tokio::process::Child;
 /// split filesystem/network policies as JSON so the helper can migrate
 /// incrementally without breaking older call sites.
 #[allow(clippy::too_many_arguments)]
-pub async fn spawn_command_under_linux_sandbox<P>(
+pub async fn spawn_command_under_linux_sandbox(
     command: Vec<String>,
     command_cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,

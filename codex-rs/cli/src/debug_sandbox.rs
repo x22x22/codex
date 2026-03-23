@@ -470,12 +470,9 @@ mod tests {
         )
         .await?;
 
-        let config = load_debug_sandbox_config_with_codex_home(
-            Vec::new(),
-            false,
-            Some(codex_home_path),
-        )
-        .await?;
+        let config =
+            load_debug_sandbox_config_with_codex_home(Vec::new(), false, Some(codex_home_path))
+                .await?;
 
         assert!(config_uses_permission_profiles(&config));
         assert!(
