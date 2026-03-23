@@ -244,6 +244,26 @@ fn usage_limit_reached_error_formats_business_plan_without_reset() {
 }
 
 #[test]
+fn usage_limit_reached_error_formats_self_serve_business_usage_plan() {
+    let base = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let resets_at = base + ChronoDuration::hours(1);
+    with_now_override(base, move || {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Unknown(
+                "self_serve_business_usage_based".to_string(),
+            )),
+            resets_at: Some(resets_at),
+            rate_limits: Some(Box::new(rate_limit_snapshot())),
+            promo_message: None,
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Contact your admin to add credits to continue."
+        );
+    });
+}
+
+#[test]
 fn usage_limit_reached_error_formats_default_for_other_plans() {
     let err = UsageLimitReachedError {
         plan_type: Some(PlanType::Known(KnownPlan::Enterprise)),
