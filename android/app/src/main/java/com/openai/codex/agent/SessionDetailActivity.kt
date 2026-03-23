@@ -14,6 +14,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.openai.codex.bridge.SessionExecutionSettings
 import kotlin.concurrent.thread
 
 class SessionDetailActivity : Activity() {
@@ -32,6 +33,9 @@ class SessionDetailActivity : Activity() {
     )
 
     private val sessionController by lazy { AgentSessionController(this) }
+    private val createSessionDialogController by lazy {
+        CreateSessionDialogController(this, sessionController)
+    }
     private val dismissedSessionStore by lazy { DismissedSessionStore(this) }
     private val sessionUiLeaseToken = Binder()
     private var leasedSessionId: String? = null
@@ -40,6 +44,10 @@ class SessionDetailActivity : Activity() {
     private var selectedChildSessionId: String? = null
     private var latestSnapshot: AgentSnapshot = AgentSnapshot.unavailable
     private var refreshInFlight = false
+    @Volatile
+    private var modelsRefreshInFlight = false
+    private var availableModels: List<AgentModelOption> = emptyList()
+    private val pendingModelCallbacks = mutableListOf<() -> Unit>()
 
     private val sessionListener = object : AgentManager.SessionListener {
         override fun onSessionChanged(session: AgentSessionInfo) {
@@ -64,6 +72,7 @@ class SessionDetailActivity : Activity() {
     override fun onResume() {
         super.onResume()
         registerSessionListenerIfNeeded()
+        refreshModelsIfNeeded(force = availableModels.isEmpty())
         refreshSnapshot(force = true)
     }
 
@@ -257,7 +266,7 @@ class SessionDetailActivity : Activity() {
             }
         } else {
             if (canStartStandaloneHomeSession) {
-                "This app-scoped session is ready to start. Enter a prompt below to begin."
+                "This app-scoped session is ready to start. Use the Start dialog below."
             } else if (isTopLevelActive) {
                 "This app-scoped session is still active."
             } else {
@@ -285,16 +294,17 @@ class SessionDetailActivity : Activity() {
         findViewById<TextView>(R.id.session_detail_follow_up_label).apply {
             visibility = continueVisibility
             text = if (canStartStandaloneHomeSession) {
-                "Ask Codex About This App"
+                "Start Session"
             } else {
                 "Continue Same Session"
             }
         }
-        findViewById<EditText>(R.id.session_detail_follow_up_prompt).visibility = continueVisibility
+        findViewById<EditText>(R.id.session_detail_follow_up_prompt).visibility =
+            if (canStartStandaloneHomeSession) View.GONE else continueVisibility
         findViewById<Button>(R.id.session_detail_follow_up_button).apply {
             visibility = continueVisibility
             text = if (canStartStandaloneHomeSession) {
-                "Start Session"
+                "Open Start Dialog"
             } else {
                 "Send Continuation Prompt"
             }
@@ -524,33 +534,67 @@ class SessionDetailActivity : Activity() {
     }
 
     private fun sendFollowUpPrompt() {
-        val promptInput = findViewById<EditText>(R.id.session_detail_follow_up_prompt)
-        val prompt = promptInput.text.toString().trim()
         val viewState = resolveViewState(latestSnapshot) ?: return
         val isStandaloneHomeStart = canStartStandaloneHomeSession(viewState)
-        if (prompt.isEmpty()) {
-            promptInput.error = if (isStandaloneHomeStart) {
-                "Enter a prompt"
-            } else {
-                "Enter a follow-up prompt"
-            }
-            return
-        }
-        promptInput.text.clear()
         if (isStandaloneHomeStart) {
-            startStandaloneHomeSessionAsync(prompt, viewState)
+            showStandaloneHomeSessionDialog(viewState)
         } else {
+            val promptInput = findViewById<EditText>(R.id.session_detail_follow_up_prompt)
+            val prompt = promptInput.text.toString().trim()
+            if (prompt.isEmpty()) {
+                promptInput.error = "Enter a follow-up prompt"
+                return
+            }
+            promptInput.text.clear()
             continueSessionInPlaceAsync(prompt, latestSnapshot)
         }
     }
 
-    private fun startStandaloneHomeSessionAsync(
-        prompt: String,
+    private fun showStandaloneHomeSessionDialog(
         viewState: SessionViewState,
     ) {
+        val topLevelSession = viewState.topLevelSession
+        val targetPackage = checkNotNull(topLevelSession.targetPackage) {
+            "No target package available for this session"
+        }
+        val initialSettings = sessionController.executionSettingsForSession(topLevelSession.sessionId)
+        val openDialog = {
+            runOnUiThread {
+                createSessionDialogController.show(
+                    models = availableModels,
+                    initialPrompt = "",
+                    initialSettings = initialSettings,
+                    initialTargetSelection = CreateSessionDialogController.InitialTargetSelection(
+                        packageName = targetPackage,
+                        locked = true,
+                    ),
+                    existingSessionId = topLevelSession.sessionId,
+                ) { request ->
+                    startExistingHomeSessionFromDialog(request)
+                }
+            }
+        }
+        if (modelsRefreshInFlight && availableModels.isEmpty()) {
+            refreshModelsIfNeeded(force = true, onComplete = openDialog)
+            showToast("Loading model catalog…")
+            return
+        }
+        if (availableModels.isEmpty()) {
+            refreshModelsIfNeeded(force = true, onComplete = openDialog)
+            showToast("Loading model catalog…")
+            return
+        }
+        openDialog.invoke()
+    }
+
+    private fun startExistingHomeSessionFromDialog(request: LaunchSessionRequest) {
         thread {
             runCatching {
-                startStandaloneHomeSessionOnce(prompt, viewState)
+                AgentSessionLauncher.startSession(
+                    context = this,
+                    request = request,
+                    sessionController = sessionController,
+                )
             }.onFailure { err ->
                 showToast("Failed to start session: ${err.message}")
             }.onSuccess { result ->
@@ -600,28 +644,6 @@ class SessionDetailActivity : Activity() {
             selectedSession = selectedSession,
             prompt = prompt,
             sessionController = sessionController,
-        )
-    }
-
-    private fun startStandaloneHomeSessionOnce(
-        prompt: String,
-        viewState: SessionViewState,
-    ): SessionStartResult {
-        val topLevelSession = viewState.topLevelSession
-        check(canStartStandaloneHomeSession(viewState)) {
-            "This app-scoped session is not ready to start"
-        }
-        val targetPackage = checkNotNull(topLevelSession.targetPackage) {
-            "No target package available for this session"
-        }
-        return sessionController.startExistingHomeSession(
-            sessionId = topLevelSession.sessionId,
-            targetPackage = targetPackage,
-            prompt = prompt,
-            allowDetachedMode = true,
-            finalPresentationPolicy = topLevelSession.requiredFinalPresentationPolicy
-                ?: SessionFinalPresentationPolicy.AGENT_CHOICE,
-            executionSettings = sessionController.executionSettingsForSession(topLevelSession.sessionId),
         )
     }
 
@@ -726,5 +748,41 @@ class SessionDetailActivity : Activity() {
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
+    }
+
+    private fun refreshModelsIfNeeded(
+        force: Boolean,
+        onComplete: (() -> Unit)? = null,
+    ) {
+        if (!force && availableModels.isNotEmpty()) {
+            onComplete?.invoke()
+            return
+        }
+        if (onComplete != null) {
+            synchronized(pendingModelCallbacks) {
+                pendingModelCallbacks += onComplete
+            }
+        }
+        if (modelsRefreshInFlight) {
+            return
+        }
+        modelsRefreshInFlight = true
+        thread {
+            try {
+                runCatching { AgentCodexAppServerClient.listModels(this) }
+                    .onFailure { err ->
+                        Log.w(TAG, "Failed to load model catalog", err)
+                    }
+                    .onSuccess { models ->
+                        availableModels = models
+                    }
+            } finally {
+                modelsRefreshInFlight = false
+                val callbacks = synchronized(pendingModelCallbacks) {
+                    pendingModelCallbacks.toList().also { pendingModelCallbacks.clear() }
+                }
+                callbacks.forEach { callback -> callback.invoke() }
+            }
+        }
     }
 }
