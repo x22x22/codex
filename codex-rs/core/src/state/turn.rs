@@ -10,7 +10,6 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -77,8 +76,6 @@ impl ActiveTurn {
 #[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
-    pending_approval_call_ids: HashMap<String, String>,
-    approval_outcomes_by_call_id: HashMap<String, ReviewDecisionMetadata>,
     pending_request_permissions: HashMap<String, oneshot::Sender<RequestPermissionsResponse>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
@@ -98,39 +95,6 @@ impl TurnState {
         self.pending_approvals.insert(key, tx)
     }
 
-    pub(crate) fn insert_pending_approval_call_id(
-        &mut self,
-        approval_key: String,
-        call_id: String,
-    ) -> Option<String> {
-        self.pending_approval_call_ids.insert(approval_key, call_id)
-    }
-
-    pub(crate) fn remove_pending_approval_call_id(&mut self, approval_key: &str) -> Option<String> {
-        self.pending_approval_call_ids.remove(approval_key)
-    }
-
-    pub(crate) fn record_approval_outcome(
-        &mut self,
-        call_id: String,
-        decision: ReviewDecisionMetadata,
-    ) {
-        self.approval_outcomes_by_call_id.insert(call_id, decision);
-    }
-
-    pub(crate) fn approval_outcome_for_call_id(
-        &self,
-        call_id: &str,
-    ) -> Option<ReviewDecisionMetadata> {
-        self.approval_outcomes_by_call_id.get(call_id).cloned()
-    }
-
-    pub(crate) fn has_pending_approval_for_call_id(&self, call_id: &str) -> bool {
-        self.pending_approval_call_ids
-            .values()
-            .any(|pending_call_id| pending_call_id == call_id)
-    }
-
     pub(crate) fn remove_pending_approval(
         &mut self,
         key: &str,
@@ -140,8 +104,6 @@ impl TurnState {
 
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
-        self.pending_approval_call_ids.clear();
-        self.approval_outcomes_by_call_id.clear();
         self.pending_request_permissions.clear();
         self.pending_user_input.clear();
         self.pending_elicitations.clear();

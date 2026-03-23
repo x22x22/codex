@@ -10747,36 +10747,10 @@
       },
       "ResponseItemMetadata": {
         "properties": {
-          "is_tool_call_escalated": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "review_decision": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ReviewDecisionMetadata"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "sandbox_policy": {
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/SandboxPolicyMetadata"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "user_message_type": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/UserMessageType"
               },
               {
                 "type": "null"
@@ -10886,18 +10860,6 @@
             "type": "object"
           }
         ]
-      },
-      "ReviewDecisionMetadata": {
-        "enum": [
-          "approved",
-          "denied",
-          "abort",
-          "approved_for_session",
-          "approved_with_amendment",
-          "approved_with_network_policy_allow",
-          "denied_with_network_policy_deny"
-        ],
-        "type": "string"
       },
       "ReviewDelivery": {
         "enum": [

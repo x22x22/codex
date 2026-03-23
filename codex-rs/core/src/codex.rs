@@ -335,7 +335,6 @@ use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ResponseItemMetadata;
-use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::models::SandboxPolicyMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -1007,28 +1006,6 @@ fn local_time_context() -> (String, String) {
     }
 }
 
-fn review_decision_to_metadata(decision: &ReviewDecision) -> ReviewDecisionMetadata {
-    match decision {
-        ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
-        ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-            ReviewDecisionMetadata::ApprovedWithAmendment
-        }
-        ReviewDecision::ApprovedForSession => ReviewDecisionMetadata::ApprovedForSession,
-        ReviewDecision::NetworkPolicyAmendment {
-            network_policy_amendment,
-        } => match network_policy_amendment.action {
-            codex_protocol::protocol::NetworkPolicyRuleAction::Allow => {
-                ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow
-            }
-            codex_protocol::protocol::NetworkPolicyRuleAction::Deny => {
-                ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny
-            }
-        },
-        ReviewDecision::Denied => ReviewDecisionMetadata::Denied,
-        ReviewDecision::Abort => ReviewDecisionMetadata::Abort,
-    }
-}
-
 fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
     match policy {
         SandboxPolicy::ReadOnly { .. } => SandboxPolicyMetadata::ReadOnly,
@@ -1036,18 +1013,6 @@ fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
             SandboxPolicyMetadata::Sandbox
         }
         SandboxPolicy::DangerFullAccess => SandboxPolicyMetadata::FullAccess,
-    }
-}
-
-fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
-    match item {
-        ResponseItem::LocalShellCall {
-            call_id: Some(call_id),
-            ..
-        } => Some(call_id),
-        ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
-        ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
-        _ => None,
     }
 }
 
@@ -1101,6 +1066,24 @@ fn stamp_tool_metadata_on_response_item(
         },
         other => other,
     }
+}
+
+fn stamp_tool_sandbox_policy_on_response_item(
+    turn_context: &TurnContext,
+    response_item: ResponseItem,
+) -> ResponseItem {
+    let metadata = match &response_item {
+        ResponseItem::LocalShellCall { metadata, .. }
+        | ResponseItem::FunctionCall { metadata, .. }
+        | ResponseItem::CustomToolCall { metadata, .. } => metadata.clone().unwrap_or_default(),
+        _ => return response_item,
+    };
+
+    let mut metadata = metadata;
+    metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
+        turn_context.sandbox_policy.get(),
+    ));
+    stamp_tool_metadata_on_response_item(response_item, metadata)
 }
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
@@ -2968,10 +2951,6 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval_call_id(
-                        effective_approval_id.clone(),
-                        call_id.clone(),
-                    );
                     ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
                 }
                 None => None,
@@ -3037,7 +3016,6 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval_call_id(approval_id.clone(), call_id.clone());
                     ts.insert_pending_approval(approval_id.clone(), tx_approve)
                 }
                 None => None,
@@ -3323,20 +3301,7 @@ impl Session {
         }
     }
 
-    pub async fn record_approval_outcome(&self, approval_id: &str, decision: &ReviewDecision) {
-        let mut active = self.active_turn.lock().await;
-        let Some(at) = active.as_mut() else {
-            return;
-        };
-        let mut ts = at.turn_state.lock().await;
-        let call_id = ts
-            .remove_pending_approval_call_id(approval_id)
-            .unwrap_or_else(|| approval_id.to_string());
-        ts.record_approval_outcome(call_id, review_decision_to_metadata(decision));
-    }
-
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
-        self.record_approval_outcome(approval_id, &decision).await;
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3355,56 +3320,6 @@ impl Session {
                 warn!("No pending approval found for call_id: {approval_id}");
             }
         }
-    }
-
-    async fn stamp_tool_approval_metadata(
-        &self,
-        turn_context: &TurnContext,
-        response_item: ResponseItem,
-    ) -> ResponseItem {
-        if !self.enabled(Feature::ItemMetadata) {
-            return response_item;
-        }
-        let Some(call_id) = response_item_tool_call_id(&response_item) else {
-            return response_item;
-        };
-
-        let (outcome, has_pending_approval) = {
-            let active = self.active_turn.lock().await;
-            let Some(at) = active.as_ref() else {
-                return response_item;
-            };
-            let ts = at.turn_state.lock().await;
-            let outcome = ts.approval_outcome_for_call_id(call_id);
-            let has_pending_approval = ts.has_pending_approval_for_call_id(call_id);
-            (outcome, has_pending_approval)
-        };
-
-        let mut metadata = match &response_item {
-            ResponseItem::LocalShellCall { metadata, .. }
-            | ResponseItem::FunctionCall { metadata, .. }
-            | ResponseItem::CustomToolCall { metadata, .. } => metadata.clone().unwrap_or_default(),
-            _ => return response_item,
-        };
-        metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
-            turn_context.sandbox_policy.get(),
-        ));
-
-        match outcome {
-            Some(review_decision) => {
-                metadata.is_tool_call_escalated = Some(true);
-                metadata.review_decision = Some(review_decision);
-            }
-            None if !has_pending_approval => {
-                metadata.is_tool_call_escalated = Some(false);
-                metadata.review_decision = None;
-            }
-            None => {
-                return response_item;
-            }
-        }
-
-        stamp_tool_metadata_on_response_item(response_item, metadata)
     }
 
     pub async fn resolve_elicitation(
@@ -3959,9 +3874,11 @@ impl Session {
         turn_context: &TurnContext,
         response_item: ResponseItem,
     ) {
-        let response_item = self
-            .stamp_tool_approval_metadata(turn_context, response_item)
-            .await;
+        let response_item = if self.enabled(Feature::ItemMetadata) {
+            stamp_tool_sandbox_policy_on_response_item(turn_context, response_item)
+        } else {
+            response_item
+        };
 
         // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
@@ -4896,8 +4813,6 @@ mod handlers {
         }
         match decision {
             ReviewDecision::Abort => {
-                sess.record_approval_outcome(&approval_id, &ReviewDecision::Abort)
-                    .await;
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&approval_id, other).await,

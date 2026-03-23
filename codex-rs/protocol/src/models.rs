@@ -294,19 +294,6 @@ impl ResponseItemMessageMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
-pub enum ReviewDecisionMetadata {
-    Approved,
-    Denied,
-    Abort,
-    ApprovedForSession,
-    ApprovedWithAmendment,
-    ApprovedWithNetworkPolicyAllow,
-    DeniedWithNetworkPolicyDeny,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
 pub enum SandboxPolicyMetadata {
     ReadOnly,
     Sandbox,
@@ -317,16 +304,7 @@ pub enum SandboxPolicyMetadata {
 pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub user_message_type: Option<UserMessageType>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub sandbox_policy: Option<SandboxPolicyMetadata>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub is_tool_call_escalated: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub review_decision: Option<ReviewDecisionMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
