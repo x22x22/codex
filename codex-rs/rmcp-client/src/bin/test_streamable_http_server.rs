@@ -52,22 +52,26 @@ struct TestToolServer {
     tools: Arc<Vec<Tool>>,
     resources: Arc<Vec<Resource>>,
     resource_templates: Arc<Vec<ResourceTemplate>>,
+    request_observation_state: RequestObservationState,
 }
 
 const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
+const TRACEPARENT_HEADER: &str = "traceparent";
+const TRACESTATE_HEADER: &str = "tracestate";
 
 impl TestToolServer {
-    fn new() -> Self {
-        let tools = vec![Self::echo_tool()];
+    fn new(request_observation_state: RequestObservationState) -> Self {
+        let tools = vec![Self::echo_tool(), Self::trace_inspect_tool()];
         let resources = vec![Self::memo_resource()];
         let resource_templates = vec![Self::memo_template()];
         Self {
             tools: Arc::new(tools),
             resources: Arc::new(resources),
             resource_templates: Arc::new(resource_templates),
+            request_observation_state,
         }
     }
 
@@ -87,6 +91,22 @@ impl TestToolServer {
         Tool::new(
             Cow::Borrowed("echo"),
             Cow::Borrowed("Echo back the provided message and include environment data."),
+            Arc::new(schema),
+        )
+    }
+
+    fn trace_inspect_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("trace inspect tool schema should deserialize");
+
+        Tool::new(
+            Cow::Borrowed("trace_inspect"),
+            Cow::Borrowed("Return tracing headers observed on the MCP HTTP request."),
             Arc::new(schema),
         )
     }
@@ -127,6 +147,17 @@ impl TestToolServer {
 #[derive(Clone, Default)]
 struct SessionFailureState {
     armed_failure: Arc<Mutex<Option<ArmedFailure>>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ObservedTraceHeaders {
+    traceparent: Option<String>,
+    tracestate: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct RequestObservationState {
+    last_mcp_post_headers: Arc<Mutex<ObservedTraceHeaders>>,
 }
 
 #[derive(Clone, Debug)]
@@ -257,6 +288,24 @@ impl ServerHandler for TestToolServer {
                     meta: None,
                 })
             }
+            "trace_inspect" => {
+                let observed = self
+                    .request_observation_state
+                    .last_mcp_post_headers
+                    .lock()
+                    .await
+                    .clone();
+                Ok(CallToolResult {
+                    content: Vec::new(),
+                    structured_content: Some(json!({
+                        "traceparent": observed.traceparent,
+                        "tracestate": observed.tracestate,
+                        "turn_metadata": request.meta,
+                    })),
+                    is_error: Some(false),
+                    meta: None,
+                })
+            }
             other => Err(McpError::invalid_params(
                 format!("unknown tool: {other}"),
                 None,
@@ -277,6 +326,7 @@ fn parse_bind_addr() -> Result<SocketAddr, Box<dyn std::error::Error>> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = parse_bind_addr()?;
     let session_failure_state = SessionFailureState::default();
+    let request_observation_state = RequestObservationState::default();
     const MAX_BIND_RETRIES: u32 = 20;
     const BIND_RETRY_DELAY: Duration = Duration::from_millis(50);
 
@@ -327,11 +377,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest_service(
             "/mcp",
             StreamableHttpService::new(
-                || Ok(TestToolServer::new()),
+                {
+                    let request_observation_state = request_observation_state.clone();
+                    move || Ok(TestToolServer::new(request_observation_state.clone()))
+                },
                 Arc::new(LocalSessionManager::default()),
                 StreamableHttpServerConfig::default(),
             ),
         )
+        .layer(middleware::from_fn_with_state(
+            request_observation_state,
+            capture_mcp_request_headers,
+        ))
         .layer(middleware::from_fn_with_state(
             session_failure_state.clone(),
             fail_session_post_when_armed,
@@ -367,6 +424,29 @@ async fn require_bearer(
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
+}
+
+async fn capture_mcp_request_headers(
+    State(state): State<RequestObservationState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if request.uri().path() == "/mcp" && request.method() == Method::POST {
+        let observed = ObservedTraceHeaders {
+            traceparent: request
+                .headers()
+                .get(TRACEPARENT_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+            tracestate: request
+                .headers()
+                .get(TRACESTATE_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+        };
+        *state.last_mcp_post_headers.lock().await = observed;
+    }
+    next.run(request).await
 }
 
 async fn arm_session_post_failure(

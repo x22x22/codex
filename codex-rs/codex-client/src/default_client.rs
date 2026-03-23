@@ -11,6 +11,7 @@ use serde::Serialize;
 use std::fmt::Display;
 use std::time::Duration;
 use tracing::Span;
+use tracing::field::Empty;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Clone, Debug)]
@@ -35,6 +36,13 @@ impl CodexHttpClient {
         U: IntoUrl,
     {
         self.request(Method::POST, url)
+    }
+
+    pub fn delete<U>(&self, url: U) -> CodexRequestBuilder
+    where
+        U: IntoUrl,
+    {
+        self.request(Method::DELETE, url)
     }
 
     pub fn request<U>(&self, method: Method, url: U) -> CodexRequestBuilder
@@ -111,10 +119,26 @@ impl CodexRequestBuilder {
     }
 
     pub async fn send(self) -> Result<Response, reqwest::Error> {
-        let headers = trace_headers();
+        let span = tracing::info_span!(
+            "http.client",
+            otel.kind = "client",
+            http.request.method = %self.method,
+            url.full = %self.url,
+            server.address = Empty,
+            server.port = Empty,
+            http.response.status_code = Empty,
+            error.type = Empty,
+        );
+        record_server_fields(&span, &self.url);
+        let _entered = span.enter();
+        let headers = current_trace_headers();
 
         match self.builder.headers(headers).send().await {
             Ok(response) => {
+                span.record(
+                    "http.response.status_code",
+                    response.status().as_u16() as i64,
+                );
                 tracing::debug!(
                     method = %self.method,
                     url = %self.url,
@@ -128,6 +152,17 @@ impl CodexRequestBuilder {
             }
             Err(error) => {
                 let status = error.status();
+                if let Some(status) = status {
+                    span.record("http.response.status_code", status.as_u16() as i64);
+                }
+                span.record(
+                    "error.type",
+                    if error.is_timeout() {
+                        "timeout"
+                    } else {
+                        "reqwest"
+                    },
+                );
                 tracing::debug!(
                     method = %self.method,
                     url = %self.url,
@@ -154,7 +189,19 @@ impl<'a> Injector for HeaderMapInjector<'a> {
     }
 }
 
-fn trace_headers() -> HeaderMap {
+fn record_server_fields(span: &Span, url: &str) {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return;
+    };
+    if let Some(host) = parsed.host_str() {
+        span.record("server.address", host);
+    }
+    if let Some(port) = parsed.port_or_known_default() {
+        span.record("server.port", port as i64);
+    }
+}
+
+pub fn current_trace_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     global::get_text_map_propagator(|prop| {
         prop.inject_context(
@@ -192,7 +239,7 @@ mod tests {
         let _entered = span.enter();
         let span_context = span.context().span().span_context().clone();
 
-        let headers = trace_headers();
+        let headers = current_trace_headers();
 
         let extractor = HeaderMapExtractor(&headers);
         let extracted = TraceContextPropagator::new().extract(&extractor);

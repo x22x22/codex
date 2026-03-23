@@ -9,6 +9,7 @@ use codex_core::ResponseEvent;
 use codex_core::WireApi;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
@@ -18,10 +19,23 @@ use codex_protocol::protocol::SubAgentSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::test_codex::test_codex;
+use core_test_support::tracing::install_test_tracing;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use tracing::Instrument;
 use wiremock::matchers::header;
+
+fn trace_id(traceparent: Option<&str>) -> Option<&str> {
+    let traceparent = traceparent?;
+    let mut parts = traceparent.split('-');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(_version), Some(trace_id), Some(_span_id), Some(_flags)) if trace_id.len() == 32 => {
+            Some(trace_id)
+        }
+        _ => None,
+    }
+}
 
 #[tokio::test]
 async fn responses_stream_includes_subagent_header_on_review() {
@@ -133,6 +147,42 @@ async fn responses_stream_includes_subagent_header_on_review() {
         Some("review")
     );
     assert_eq!(request.header("x-codex-sandbox"), None);
+}
+
+#[tokio::test]
+async fn responses_stream_includes_traceparent_header() {
+    core_test_support::skip_if_no_network!();
+
+    let _trace_test_context = install_test_tracing("responses-headers-trace");
+    let server = responses::start_mock_server().await;
+    let request_recorder = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex().build(&server).await.expect("build test codex");
+    let expected_trace = async {
+        let expected_trace =
+            current_span_w3c_trace_context().expect("current span should have trace context");
+        test.submit_turn("hello").await.expect("submit turn prompt");
+        expected_trace
+    }
+    .instrument(tracing::info_span!("responses.headers.trace_request"))
+    .await;
+
+    let request = request_recorder.single_request();
+    assert_eq!(
+        trace_id(request.header("traceparent").as_deref()),
+        trace_id(expected_trace.traceparent.as_deref())
+    );
+    assert_eq!(
+        request.header("tracestate").as_deref(),
+        expected_trace.tracestate.as_deref()
+    );
 }
 
 #[tokio::test]

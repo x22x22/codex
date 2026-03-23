@@ -14,6 +14,7 @@ use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
 
+use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -36,6 +37,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
+use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use reqwest::Client;
@@ -48,8 +50,20 @@ use tokio::process::Child;
 use tokio::process::Command;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use tracing::Instrument;
 
 static OPENAI_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAD0AAAA9CAYAAAAeYmHpAAAE6klEQVR4Aeyau44UVxCGx1fZsmRLlm3Zoe0XcGQ5cUiCCIgJeS9CHgAhMkISQnIuGQgJEkBcxLW+nqnZ6uqqc+nuWRC7q/P3qetf9e+MtOwyX25O4Nep6JPyop++0qev9HrfgZ+F6r2DuB/vHOrt/UIkqdDHYvujOW6fO7h/CNEI+a5jc+pBR8uy0jVFsziYu5HtfSUk+Io34q921hLNctFSX0gwww+S8wce8K1LfCU+cYW4888aov8NxqvQILUPPReLOrm6zyLxa4i+6VZuFbJo8d1MOHZm+7VUtB/aIvhPWc/3SWg49JcwFLlHxuXKjtyloo+YNhuW3VS+WPBuUEMvCFKjEDVgFBQHXrnazpqiSxNZCkQ1kYiozsbm9Oz7l4i2Il7vGccGNWAc3XosDrZe/9P3ZnMmzHNEQw4smf8RQ87XEAMsC7Az0Au+dgXerfH4+sHvEc0SYGic8WBBUGqFH2gN7yDrazy7m2pbRTeRmU3+MjZmr1h6LJgPbGy23SI6GlYT0brQ71IY8Us4PNQCm+zepSbaD2BY9xCaAsD9IIj/IzFmKMSdHHonwdZATbTnYREf6/VZGER98N9yCWIvXQwXDoDdhZJoT8jwLnJXDB9w4Sb3e6nK5ndzlkTLnP3JBu4LKkbrYrU69gCVceV0JvpyuW1xlsUVngzhwMetn/XamtTORF9IO5YnWNiyeF9zCAfqR3fUW+vZZKLtgP+ts8BmQRBREAdRDhH3o8QuRh/YucNFz2BEjxbRN6LGzphfKmvP6v6QhqIQyZ8XNJ0W0X83MR1PEcJBNO2KC2Z1TW/v244scp9FwRViZxIOBF0Lctk7ZVSavdLvRlV1hz/ysUi9sr8CIcB3nvWBwA93ykTz18eAYxQ6N/K2DkPA1lv3iXCwmDUT7YkjIby9siXueIJj9H+pzSqJ9oIuJWTUgSSt4WO7o/9GGg0viR4VinNRUDoIj34xoCd6pxD3aK3zfdbnx5v1J3ZNNEJsE0sBG7N27ReDrJc4sFxz7dI/ZAbOmmiKvHBitQXpAdR6+F7v+/ol/tOouUV01EeMZQF2BoQDn6dP4XNr+j9GZEtEK1/L8pFw7bd3a53tsTa7WD+054jOFmPg1XBKPQgnqFfmFcy32ZRvjmiIIQTYFvyDxQ8nH8WIwwGwlyDjDznnilYyFr6njrlZwsKkBpO59A7OwgdzPEWRm+G+oeb7IfyNuzjEEVLrOVxJsxvxwF8kmCM6I2QYmJunz4u4TrADpfl7mlbRTWQ7VmrBzh3+C9f6Grc3YoGN9dg/SXFthpRsT6vobfXRs2VBlgBHXVMLHjDNbIZv1sZ9+X3hB09cXdH1JKViyG0+W9bWZDa/r2f9zAFR71sTzGpMSWz2iI4YssWjWo3REy1MDGjdwe5e0dFSiAC1JakBvu4/CUS8Eh6dqHdU0Or0ioY3W5ClSqDXAy7/6SRfgw8vt4I+tbvvNtFT2kVDhY5+IGb1rCqYaXNF08vSALsXCPmt0kQNqJT1p5eI1mkIV/BxCY1z85lOzeFbPBQHURkkPTlwTYK9gTVE25l84IbFFN+YJDHjdpn0gq6mrHht0dkcjbM4UL9283O5p77GN+SPW/QwVB4IUYg7Or+Kp7naR6qktP98LNF2UxWo9yObPIT9KYg+hK4i56no4rfnM0qeyFf6AwAAAP//trwR3wAAAAZJREFUAwBZ0sR75itw5gAAAABJRU5ErkJggg==";
+
+fn trace_id(traceparent: Option<&str>) -> Option<&str> {
+    let traceparent = traceparent?;
+    let mut parts = traceparent.split('-');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(_version), Some(trace_id), Some(_span_id), Some(_flags)) if trace_id.len() == 32 => {
+            Some(trace_id)
+        }
+        _ => None,
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
@@ -190,6 +204,146 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     server.verify().await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_test_value)]
+async fn stdio_tool_call_propagates_trace_context_in_meta() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let _trace_test_context = install_test_tracing("rmcp-stdio-trace");
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "trace-call-stdio";
+    let server_name = "rmcp_trace_stdio";
+    let tool_name = format!("mcp__{server_name}__trace_inspect");
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, &tool_name, "{}"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp stdio trace inspect completed."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let fixture = test_codex()
+        .with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        })
+        .build(&server)
+        .await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    let expected_trace = async {
+        let expected_trace =
+            current_span_w3c_trace_context().expect("current span should have trace context");
+        fixture
+            .codex
+            .submit(Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: "inspect the stdio mcp trace context".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                cwd: fixture.cwd.path().to_path_buf(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                model: session_model,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
+            .await?;
+        Ok::<_, anyhow::Error>(expected_trace)
+    }
+    .instrument(tracing::info_span!("rmcp.stdio.trace_request"))
+    .await?;
+
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+
+    let result = end
+        .result
+        .as_ref()
+        .expect("rmcp trace inspect tool should return success");
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    let Value::Object(map) = structured else {
+        panic!("structured content should be an object: {structured:?}");
+    };
+    let expected_session_id = fixture.session_configured.session_id.to_string();
+
+    assert_eq!(
+        trace_id(map.get("traceparent").and_then(Value::as_str)),
+        trace_id(expected_trace.traceparent.as_deref())
+    );
+    assert_eq!(
+        map.get("tracestate").and_then(Value::as_str),
+        expected_trace.tracestate.as_deref()
+    );
+    assert_eq!(
+        structured
+            .pointer("/turn_metadata/session_id")
+            .and_then(Value::as_str),
+        Some(expected_session_id.as_str())
+    );
+    assert!(
+        structured
+            .pointer("/turn_metadata/turn_id")
+            .and_then(Value::as_str)
+            .is_some_and(|turn_id| !turn_id.is_empty()),
+        "stdio trace inspect should include turn metadata turn_id: {map:?}"
+    );
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    server.verify().await;
     Ok(())
 }
 
@@ -835,6 +989,183 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    server.verify().await;
+
+    match http_server_child.try_wait() {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            let _ = http_server_child.kill().await;
+        }
+        Err(error) => {
+            eprintln!("failed to check streamable http server status: {error}");
+            let _ = http_server_child.kill().await;
+        }
+    }
+    if let Err(error) = http_server_child.wait().await {
+        eprintln!("failed to await streamable http server shutdown: {error}");
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_tool_call_propagates_trace_headers() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let _trace_test_context = install_test_tracing("rmcp-http-trace");
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "trace-call-http";
+    let server_name = "rmcp_http_trace";
+    let tool_name = format!("mcp__{server_name}__trace_inspect");
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, &tool_name, "{}"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message(
+                "msg-1",
+                "rmcp streamable http trace inspect completed.",
+            ),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_http_server_bin = match cargo_bin("test_streamable_http_server") {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("test_streamable_http_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    let bind_addr = format!("127.0.0.1:{port}");
+    let server_url = format!("http://{bind_addr}/mcp");
+
+    let mut http_server_child = Command::new(&rmcp_http_server_bin)
+        .kill_on_drop(true)
+        .env("MCP_STREAMABLE_HTTP_BIND_ADDR", &bind_addr)
+        .spawn()?;
+
+    wait_for_streamable_http_server(&mut http_server_child, &bind_addr, Duration::from_secs(5))
+        .await?;
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::StreamableHttp {
+                        url: server_url,
+                        bearer_token_env_var: None,
+                        http_headers: None,
+                        env_http_headers: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        })
+        .build(&server)
+        .await?;
+    let session_model = fixture.session_configured.model.clone();
+
+    let expected_trace = async {
+        let expected_trace =
+            current_span_w3c_trace_context().expect("current span should have trace context");
+        fixture
+            .codex
+            .submit(Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: "inspect the streamable http mcp trace context".into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                cwd: fixture.cwd.path().to_path_buf(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                model: session_model,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
+            .await?;
+        Ok::<_, anyhow::Error>(expected_trace)
+    }
+    .instrument(tracing::info_span!("rmcp.http.trace_request"))
+    .await?;
+
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+
+    let result = end
+        .result
+        .as_ref()
+        .expect("rmcp trace inspect tool should return success");
+    let structured = result
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    let Value::Object(map) = structured else {
+        panic!("structured content should be an object: {structured:?}");
+    };
+    let expected_session_id = fixture.session_configured.session_id.to_string();
+
+    assert_eq!(
+        trace_id(map.get("traceparent").and_then(Value::as_str)),
+        trace_id(expected_trace.traceparent.as_deref())
+    );
+    assert_eq!(
+        map.get("tracestate").and_then(Value::as_str),
+        expected_trace.tracestate.as_deref()
+    );
+    assert_eq!(
+        structured
+            .pointer("/turn_metadata/x-codex-turn-metadata/session_id")
+            .and_then(Value::as_str),
+        Some(expected_session_id.as_str())
+    );
+    assert!(
+        structured
+            .pointer("/turn_metadata/x-codex-turn-metadata/turn_id")
+            .and_then(Value::as_str)
+            .is_some_and(|turn_id| !turn_id.is_empty()),
+        "streamable http trace inspect should include turn metadata turn_id: {map:?}"
+    );
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     server.verify().await;
 
     match http_server_child.try_wait() {

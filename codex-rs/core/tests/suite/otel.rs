@@ -23,9 +23,11 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
+use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tracing::Level;
 use tracing_test::traced_test;
@@ -716,6 +718,173 @@ async fn record_responses_sets_span_fields_for_response_events() {
             );
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn responses_request_span_records_turn_correlation_fields() {
+    let buffer: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_level(true)
+        .with_ansi(false)
+        .with_max_level(Level::TRACE)
+        .with_span_events(FmtSpan::FULL)
+        .with_writer(MockWriter::new(buffer))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await.unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+    let line = logs
+        .lines()
+        .find(|line| line.contains("responses_http.request{"))
+        .expect("missing responses_http.request span");
+    assert!(
+        line.contains("otel.kind=\"client\"")
+            && line.contains("transport=\"responses_http\"")
+            && line.contains("conversation.id=")
+            && line.contains("session.id=")
+            && line.contains("turn.id="),
+        "responses_http.request span is missing expected correlation fields\nlogs:\n{logs}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn mcp_tool_call_span_records_server_and_tool_fields() {
+    let buffer: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_level(true)
+        .with_ansi(false)
+        .with_max_level(Level::TRACE)
+        .with_span_events(FmtSpan::FULL)
+        .with_writer(MockWriter::new(buffer))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let server = start_mock_server().await;
+    let call_id = "mcp-span-call";
+    let server_name = "rmcp_span";
+    let tool_name = format!("mcp__{server_name}__echo");
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin().expect("test stdio server binary");
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = test_codex()
+        .with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                codex_core::config::types::McpServerConfig {
+                    transport: codex_core::config::types::McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: Some(HashMap::from([(
+                            "MCP_TEST_VALUE".to_string(),
+                            "span-test".to_string(),
+                        )])),
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        })
+        .build(&server)
+        .await
+        .unwrap();
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp echo tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+    let line = logs
+        .lines()
+        .find(|line| line.contains("mcp.tools.call{"))
+        .expect("missing mcp.tools.call span");
+    assert!(
+        line.contains("otel.kind=\"client\"")
+            && line.contains("rpc.system=\"jsonrpc\"")
+            && line.contains("rpc.method=\"tools/call\"")
+            && line.contains(&format!("mcp.server.name=\"{server_name}\""))
+            && line.contains("mcp.transport=\"stdio\"")
+            && line.contains("tool.name=\"echo\"")
+            && line.contains(&format!("tool.call_id=\"{call_id}\""))
+            && line.contains("turn.id="),
+        "mcp.tools.call span is missing expected MCP fields\nlogs:\n{logs}"
+    );
 }
 
 #[tokio::test]

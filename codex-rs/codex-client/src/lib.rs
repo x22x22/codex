@@ -19,6 +19,7 @@ pub use crate::custom_ca::build_reqwest_client_with_custom_ca;
 pub use crate::custom_ca::maybe_build_rustls_client_config_with_custom_ca;
 pub use crate::default_client::CodexHttpClient;
 pub use crate::default_client::CodexRequestBuilder;
+pub use crate::default_client::current_trace_headers;
 pub use crate::error::StreamError;
 pub use crate::error::TransportError;
 pub use crate::request::Request;
