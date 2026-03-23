@@ -1,6 +1,5 @@
 use super::*;
 use crate::CodexAuth;
-use crate::ForkSnapshot;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -16,6 +15,7 @@ use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_core::ForkSnapshot;
 use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
