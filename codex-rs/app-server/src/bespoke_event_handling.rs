@@ -2925,7 +2925,7 @@ mod tests {
             "turn-from-event",
             &GuardianAssessmentEvent {
                 id: "item-1".to_string(),
-                parent_tool_item_id: None,
+                parent_tool_item_id: Some("item-1".to_string()),
                 turn_id: String::new(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
                 risk_score: None,
@@ -2941,7 +2941,7 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-event");
                 assert_eq!(payload.target_item_id, "item-1");
                 assert_eq!(payload.review_id.as_deref(), Some("item-1"));
-                assert_eq!(payload.parent_tool_item_id, None);
+                assert_eq!(payload.parent_tool_item_id.as_deref(), Some("item-1"));
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -2967,7 +2967,7 @@ mod tests {
             "turn-from-event",
             &GuardianAssessmentEvent {
                 id: "item-2".to_string(),
-                parent_tool_item_id: None,
+                parent_tool_item_id: Some("item-2".to_string()),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_score: Some(91),
@@ -2983,7 +2983,7 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-2");
                 assert_eq!(payload.review_id.as_deref(), Some("item-2"));
-                assert_eq!(payload.parent_tool_item_id, None);
+                assert_eq!(payload.parent_tool_item_id.as_deref(), Some("item-2"));
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(payload.review.risk_score, Some(91));
                 assert_eq!(

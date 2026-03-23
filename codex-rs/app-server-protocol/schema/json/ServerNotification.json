@@ -1354,6 +1354,7 @@
         "action": true,
         "parentToolItemId": {
           "default": null,
+          "description": "Reviewed parent tool item identifier. For direct tool reviews this matches `review_id`; attributed `network_access` reviews may differ, and unattributed `network_access` reviews may omit it.",
           "type": [
             "string",
             "null"
@@ -1395,6 +1396,7 @@
         "action": true,
         "parentToolItemId": {
           "default": null,
+          "description": "Reviewed parent tool item identifier. For direct tool reviews this matches `review_id`; attributed `network_access` reviews may differ, and unattributed `network_access` reviews may omit it.",
           "type": [
             "string",
             "null"

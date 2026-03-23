@@ -20,4 +20,10 @@ targetItemId: string,
 /**
  * Stable guardian review identifier for matching started/completed events.
  */
-reviewId: string | null, parentToolItemId: string | null, review: GuardianApprovalReview, action: JsonValue | null, };
+reviewId: string | null, 
+/**
+ * Reviewed parent tool item identifier. For direct tool reviews this
+ * matches `review_id`; attributed `network_access` reviews may differ,
+ * and unattributed `network_access` reviews may omit it.
+ */
+parentToolItemId: string | null, review: GuardianApprovalReview, action: JsonValue | null, };
