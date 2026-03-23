@@ -3359,7 +3359,7 @@ impl Session {
 
     async fn stamp_tool_approval_metadata(
         &self,
-        _turn_context: &TurnContext,
+        turn_context: &TurnContext,
         response_item: ResponseItem,
     ) -> ResponseItem {
         if !self.enabled(Feature::ItemMetadata) {
@@ -4083,7 +4083,7 @@ impl Session {
             stamp_user_message_type_on_input_item(&mut input_item, UserMessageType::PromptSteering);
             stamp_sandbox_policy_on_input_item(
                 &mut input_item,
-                sandbox_policy_to_metadata(active_turn_context.sandbox_policy.get()),
+                sandbox_policy_to_metadata(active_turn_context.turn_context.sandbox_policy.get()),
             );
         }
 
@@ -4100,10 +4100,9 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
-                let sandbox_policy = at
-                    .tasks
-                    .first()
-                    .map(|(_, task)| sandbox_policy_to_metadata(task.sandbox_policy.get()));
+                let sandbox_policy = at.tasks.first().map(|(_, task)| {
+                    sandbox_policy_to_metadata(task.turn_context.sandbox_policy.get())
+                });
                 let mut ts = at.turn_state.lock().await;
                 for mut item in input {
                     if self.enabled(Feature::ItemMetadata)

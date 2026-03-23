@@ -11,7 +11,6 @@ use tokio_util::task::AbortOnDropHandle;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ReviewDecisionMetadata;
-use codex_protocol::models::UserMessageType;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
