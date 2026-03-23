@@ -1,5 +1,7 @@
 #![expect(clippy::expect_used)]
 
+pub use codex_core;
+
 use anyhow::Context as _;
 use anyhow::ensure;
 use codex_arg0::Arg0PathEntryGuard;

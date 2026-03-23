@@ -15,7 +15,6 @@ use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
-use codex_core::ForkSnapshot;
 use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -80,6 +79,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::W3cTraceContext;
+use core_test_support::codex_core::ForkSnapshot;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
