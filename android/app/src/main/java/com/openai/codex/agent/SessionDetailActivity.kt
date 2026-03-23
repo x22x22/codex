@@ -193,6 +193,7 @@ class SessionDetailActivity : Activity() {
         val topLevelSession = viewState.topLevelSession
         val selectedChildSession = viewState.selectedChildSession
         val actionableSession = selectedChildSession ?: topLevelSession
+        val canStartStandaloneHomeSession = canStartStandaloneHomeSession(viewState)
         val executionSettings = sessionController.executionSettingsForSession(topLevelSession.sessionId)
         val summary = buildString {
             append(
@@ -255,7 +256,9 @@ class SessionDetailActivity : Activity() {
                 "Deleting the top-level session removes it and its child sessions from the Agent UI."
             }
         } else {
-            if (isTopLevelActive) {
+            if (canStartStandaloneHomeSession) {
+                "This app-scoped session is ready to start. Enter a prompt below to begin."
+            } else if (isTopLevelActive) {
                 "This app-scoped session is still active."
             } else {
                 "Deleting this app-scoped session consumes its framework presentation and removes it from the Agent UI."
@@ -274,16 +277,27 @@ class SessionDetailActivity : Activity() {
         findViewById<Button>(R.id.session_detail_attach_button).visibility =
             if (canAttach) View.VISIBLE else View.GONE
         val supportsInPlaceContinuation = topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT
-        val continueVisibility =
-            if (!isTopLevelActive && supportsInPlaceContinuation) View.VISIBLE else View.GONE
+        val continueVisibility = if (canStartStandaloneHomeSession || (!isTopLevelActive && supportsInPlaceContinuation)) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
         findViewById<TextView>(R.id.session_detail_follow_up_label).apply {
             visibility = continueVisibility
-            text = "Continue Same Session"
+            text = if (canStartStandaloneHomeSession) {
+                "Ask Codex About This App"
+            } else {
+                "Continue Same Session"
+            }
         }
         findViewById<EditText>(R.id.session_detail_follow_up_prompt).visibility = continueVisibility
         findViewById<Button>(R.id.session_detail_follow_up_button).apply {
             visibility = continueVisibility
-            text = "Send Continuation Prompt"
+            text = if (canStartStandaloneHomeSession) {
+                "Start Session"
+            } else {
+                "Send Continuation Prompt"
+            }
         }
         findViewById<TextView>(R.id.session_detail_follow_up_note).visibility =
             if (!isTopLevelActive && !supportsInPlaceContinuation) View.VISIBLE else View.GONE
@@ -528,12 +542,40 @@ class SessionDetailActivity : Activity() {
     private fun sendFollowUpPrompt() {
         val promptInput = findViewById<EditText>(R.id.session_detail_follow_up_prompt)
         val prompt = promptInput.text.toString().trim()
+        val viewState = resolveViewState(latestSnapshot) ?: return
+        val isStandaloneHomeStart = canStartStandaloneHomeSession(viewState)
         if (prompt.isEmpty()) {
-            promptInput.error = "Enter a follow-up prompt"
+            promptInput.error = if (isStandaloneHomeStart) {
+                "Enter a prompt"
+            } else {
+                "Enter a follow-up prompt"
+            }
             return
         }
         promptInput.text.clear()
-        continueSessionInPlaceAsync(prompt, latestSnapshot)
+        if (isStandaloneHomeStart) {
+            startStandaloneHomeSessionAsync(prompt, viewState)
+        } else {
+            continueSessionInPlaceAsync(prompt, latestSnapshot)
+        }
+    }
+
+    private fun startStandaloneHomeSessionAsync(
+        prompt: String,
+        viewState: SessionViewState,
+    ) {
+        thread {
+            runCatching {
+                startStandaloneHomeSessionOnce(prompt, viewState)
+            }.onFailure { err ->
+                showToast("Failed to start session: ${err.message}")
+            }.onSuccess { result ->
+                showToast("Started session")
+                runOnUiThread {
+                    startActivity(intentForSession(result.parentSessionId))
+                }
+            }
+        }
     }
 
     private fun continueSessionInPlaceAsync(
@@ -574,6 +616,28 @@ class SessionDetailActivity : Activity() {
             selectedSession = selectedSession,
             prompt = prompt,
             sessionController = sessionController,
+        )
+    }
+
+    private fun startStandaloneHomeSessionOnce(
+        prompt: String,
+        viewState: SessionViewState,
+    ): SessionStartResult {
+        val topLevelSession = viewState.topLevelSession
+        check(canStartStandaloneHomeSession(viewState)) {
+            "This app-scoped session is not ready to start"
+        }
+        val targetPackage = checkNotNull(topLevelSession.targetPackage) {
+            "No target package available for this session"
+        }
+        return sessionController.startExistingHomeSession(
+            sessionId = topLevelSession.sessionId,
+            targetPackage = targetPackage,
+            prompt = prompt,
+            allowDetachedMode = true,
+            finalPresentationPolicy = topLevelSession.requiredFinalPresentationPolicy
+                ?: SessionFinalPresentationPolicy.AGENT_CHOICE,
+            executionSettings = sessionController.executionSettingsForSession(topLevelSession.sessionId),
         )
     }
 
@@ -631,6 +695,13 @@ class SessionDetailActivity : Activity() {
             childSessions = visibleChildSessions,
             selectedChildSession = resolvedSelectedChildSession,
         )
+    }
+
+    private fun canStartStandaloneHomeSession(viewState: SessionViewState): Boolean {
+        val topLevelSession = viewState.topLevelSession
+        return topLevelSession.anchor == AgentSessionInfo.ANCHOR_HOME &&
+            topLevelSession.state == AgentSessionInfo.STATE_CREATED &&
+            viewState.childSessions.isEmpty()
     }
 
     private fun updateSessionUiLease(sessionId: String?) {

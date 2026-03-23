@@ -235,6 +235,53 @@ class AgentSessionController(context: Context) {
         }
     }
 
+    fun startExistingHomeSession(
+        sessionId: String,
+        targetPackage: String,
+        prompt: String,
+        allowDetachedMode: Boolean,
+        finalPresentationPolicy: SessionFinalPresentationPolicy,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+    ): SessionStartResult {
+        val manager = requireAgentManager()
+        check(canStartSessionForTarget(targetPackage)) {
+            "Target package $targetPackage is not eligible for session start"
+        }
+        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
+            ?: throw IllegalStateException("No GENIE role holder configured")
+        presentationPolicyStore.savePolicy(sessionId, finalPresentationPolicy)
+        executionSettingsStore.saveSettings(sessionId, executionSettings)
+        try {
+            manager.publishTrace(
+                sessionId,
+                "Starting Codex app-scoped session for $targetPackage with required final presentation ${finalPresentationPolicy.wireValue}.",
+            )
+            manager.startGenieSession(
+                sessionId,
+                geniePackage,
+                buildDelegatedPrompt(
+                    AgentDelegationTarget(
+                        packageName = targetPackage,
+                        objective = prompt,
+                        finalPresentationPolicy = finalPresentationPolicy,
+                    ),
+                ),
+                allowDetachedMode,
+            )
+            return SessionStartResult(
+                parentSessionId = sessionId,
+                childSessionIds = listOf(sessionId),
+                plannedTargets = listOf(targetPackage),
+                geniePackage = geniePackage,
+                anchor = AgentSessionInfo.ANCHOR_HOME,
+            )
+        } catch (err: RuntimeException) {
+            presentationPolicyStore.removePolicy(sessionId)
+            executionSettingsStore.removeSettings(sessionId)
+            throw err
+        }
+    }
+
     fun continueDirectSessionInPlace(
         parentSessionId: String,
         target: AgentDelegationTarget,
