@@ -1,5 +1,6 @@
 use super::*;
 use crate::CodexAuth;
+use crate::ForkSnapshot;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
