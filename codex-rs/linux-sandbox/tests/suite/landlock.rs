@@ -6,8 +6,11 @@ use codex_core::error::Result;
 use codex_core::error::SandboxErr;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
+use codex_core::exec::ExecToolCallOutput;
+use codex_core::exec::StreamOutput;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
+use codex_core::landlock::create_linux_sandbox_command_args_for_policies;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -22,7 +25,11 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::NamedTempFile;
+use tokio::process::Command;
 
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
@@ -112,31 +119,66 @@ async fn run_cmd_result_with_policies(
     use_legacy_landlock: bool,
 ) -> Result<codex_core::exec::ExecToolCallOutput> {
     let cwd = std::env::current_dir().expect("cwd should exist");
-    let sandbox_cwd = cwd.clone();
-    let params = ExecParams {
-        command: cmd.iter().copied().map(str::to_owned).collect(),
-        cwd,
-        expiration: timeout_ms.into(),
-        capture_policy: ExecCapturePolicy::ShellTool,
-        env: create_env_from_core_vars(),
-        network: None,
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        windows_sandbox_private_desktop: false,
-        justification: None,
-        arg0: None,
-    };
-
-    process_exec_tool_call(
-        params,
+    let args = create_linux_sandbox_command_args_for_policies(
+        cmd.iter().copied().map(str::to_owned).collect(),
+        cwd.as_path(),
         &sandbox_policy,
         &file_system_sandbox_policy,
         network_sandbox_policy,
-        sandbox_cwd.as_path(),
+        cwd.as_path(),
         use_legacy_landlock,
-        None,
-    )
-    .await
+        /*allow_network_for_proxy*/ false,
+    );
+
+    run_linux_sandbox_command(args, cwd, timeout_ms).await
+}
+
+async fn run_linux_sandbox_command(
+    args: Vec<String>,
+    cwd: PathBuf,
+    timeout_ms: u64,
+) -> Result<ExecToolCallOutput> {
+    let start = Instant::now();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+    command
+        .args(args)
+        .current_dir(cwd)
+        .env_clear()
+        .envs(create_env_from_core_vars())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output =
+        match tokio::time::timeout(Duration::from_millis(timeout_ms), command.output()).await {
+            Ok(output) => output.map_err(CodexErr::Io)?,
+            Err(_) => {
+                let exec_output = ExecToolCallOutput {
+                    exit_code: 124,
+                    stdout: StreamOutput::new(String::new()),
+                    stderr: StreamOutput::new(String::new()),
+                    aggregated_output: StreamOutput::new(String::new()),
+                    duration: start.elapsed(),
+                    timed_out: true,
+                };
+                return Err(CodexErr::Sandbox(SandboxErr::Timeout {
+                    output: Box::new(exec_output),
+                }));
+            }
+        };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let aggregated_output = format!("{stdout}{stderr}");
+
+    Ok(ExecToolCallOutput {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: StreamOutput::new(stdout),
+        stderr: StreamOutput::new(stderr),
+        aggregated_output: StreamOutput::new(aggregated_output),
+        duration: start.elapsed(),
+        timed_out: false,
+    })
 }
 
 fn is_bwrap_unavailable_output(output: &codex_core::exec::ExecToolCallOutput) -> bool {
