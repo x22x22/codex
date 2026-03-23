@@ -156,9 +156,17 @@ echo "Granting Agent notification permission"
 
 if [[ $skip_auth -eq 0 && -f "$auth_file" ]]; then
   echo "Seeding Agent auth from $auth_file"
-  "${adb_cmd[@]}" shell run-as "$agent_package" sh -c \
-    'mkdir -p files/codex-home && cat > files/codex-home/auth.json && chmod 600 files/codex-home/auth.json' \
-    < "$auth_file"
+  remote_auth_tmp="/data/local/tmp/codex-agent-auth-${user_id}-$$.json"
+  cleanup_remote_auth_tmp() {
+    "${adb_cmd[@]}" shell rm -f "$remote_auth_tmp" >/dev/null 2>&1 || true
+  }
+  trap cleanup_remote_auth_tmp EXIT
+  "${adb_cmd[@]}" push "$auth_file" "$remote_auth_tmp" >/dev/null
+  "${adb_cmd[@]}" shell run-as "$agent_package" mkdir -p files/codex-home
+  "${adb_cmd[@]}" shell \
+    "run-as $agent_package sh -c 'cat $remote_auth_tmp > files/codex-home/auth.json && chmod 600 files/codex-home/auth.json'"
+  cleanup_remote_auth_tmp
+  trap - EXIT
 elif [[ $skip_auth -eq 0 ]]; then
   echo "Auth file not found; skipping auth seed: $auth_file"
 fi
