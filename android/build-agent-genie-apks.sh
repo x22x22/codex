@@ -6,10 +6,10 @@ usage() {
 Build the packaged Codex binary plus the Android Agent and Genie debug APKs.
 
 Usage:
-  build-agent-genie-apks.sh [--stub-sdk-zip PATH] [--skip-lto]
+  build-agent-genie-apks.sh [--agent-sdk-zip PATH] [--skip-lto]
 
 Options:
-  --stub-sdk-zip PATH  Path to android-agent-platform-stub-sdk.zip.
+  --agent-sdk-zip PATH Path to android-agent-platform-stub-sdk.zip.
                        Defaults to $ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP.
   --skip-lto           Set CODEX_ANDROID_SKIP_LTO=1 for faster local builds.
   -h, --help           Show this help text.
@@ -27,9 +27,9 @@ stub_sdk_zip="${ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --stub-sdk-zip)
+    --agent-sdk-zip)
       shift
-      [[ $# -gt 0 ]] || fail "--stub-sdk-zip requires a path"
+      [[ $# -gt 0 ]] || fail "--agent-sdk-zip requires a path"
       stub_sdk_zip="$1"
       ;;
     --skip-lto)

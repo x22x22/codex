@@ -51,7 +51,7 @@ Or use the helper script from `android/`:
 
 ```bash
 cd android
-./build-agent-genie-apks.sh
+./build-agent-genie-apks.sh --agent-sdk-zip /path/to/android-agent-platform-stub-sdk.zip
 ```
 
 If you prefer the system Gradle install, use `gradle :app:assembleDebug` from
