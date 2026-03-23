@@ -380,12 +380,12 @@ pub(crate) fn guardian_request_parent_tool_item_id(
             parent_tool_item_id,
             ..
         } => parent_tool_item_id.as_deref(),
-        GuardianApprovalRequest::Shell { .. }
-        | GuardianApprovalRequest::ExecCommand { .. }
-        | GuardianApprovalRequest::ApplyPatch { .. }
-        | GuardianApprovalRequest::McpToolCall { .. } => None,
+        GuardianApprovalRequest::Shell { id, .. }
+        | GuardianApprovalRequest::ExecCommand { id, .. }
+        | GuardianApprovalRequest::ApplyPatch { id, .. }
+        | GuardianApprovalRequest::McpToolCall { id, .. } => Some(id),
         #[cfg(unix)]
-        GuardianApprovalRequest::Execve { .. } => None,
+        GuardianApprovalRequest::Execve { id, .. } => Some(id),
     }
 }
 

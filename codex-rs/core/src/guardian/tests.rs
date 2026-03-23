@@ -1,3 +1,4 @@
+use super::approval_request::guardian_request_parent_tool_item_id;
 use super::*;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -370,6 +371,14 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
     assert_eq!(
         guardian_request_turn_id(&apply_patch, "fallback-turn"),
         "fallback-turn"
+    );
+    assert_eq!(
+        guardian_request_parent_tool_item_id(&network_access),
+        Some("command-1")
+    );
+    assert_eq!(
+        guardian_request_parent_tool_item_id(&apply_patch),
+        Some("patch-1")
     );
 }
 

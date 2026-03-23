@@ -4879,6 +4879,9 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
     /// Stable guardian review identifier for matching started/completed events.
     #[serde(default)]
     pub review_id: Option<String>,
+    /// Reviewed parent tool item identifier. For direct tool reviews this
+    /// matches `review_id`; attributed `network_access` reviews may differ,
+    /// and unattributed `network_access` reviews may omit it.
     #[serde(default)]
     pub parent_tool_item_id: Option<String>,
     pub review: GuardianApprovalReview,
@@ -4902,6 +4905,9 @@ pub struct ItemGuardianApprovalReviewCompletedNotification {
     /// Stable guardian review identifier for matching started/completed events.
     #[serde(default)]
     pub review_id: Option<String>,
+    /// Reviewed parent tool item identifier. For direct tool reviews this
+    /// matches `review_id`; attributed `network_access` reviews may differ,
+    /// and unattributed `network_access` reviews may omit it.
     #[serde(default)]
     pub parent_tool_item_id: Option<String>,
     pub review: GuardianApprovalReview,
