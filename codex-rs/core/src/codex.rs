@@ -5677,6 +5677,7 @@ pub(crate) async fn run_turn(
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
         let pending_input = sess.get_pending_input().await;
+
         let mut blocked_pending_input = false;
         let mut blocked_pending_input_contexts = Vec::new();
         let mut requeued_pending_input = false;
