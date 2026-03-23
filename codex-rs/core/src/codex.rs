@@ -83,6 +83,11 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::item_metadata::response_item_tool_call_id;
+use codex_protocol::item_metadata::stamp_message_metadata_on_input_item;
+use codex_protocol::item_metadata::stamp_tool_metadata_on_response_item;
+use codex_protocol::item_metadata::tool_call_metadata_or_default;
+use codex_protocol::item_metadata::user_message_metadata_patch;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -1007,35 +1012,6 @@ fn local_time_context() -> (String, String) {
     }
 }
 
-fn stamp_message_metadata_on_input_item(
-    item: &mut ResponseInputItem,
-    patch: &ResponseItemMessageMetadata,
-) {
-    let ResponseInputItem::Message { role, metadata, .. } = item else {
-        return;
-    };
-    if role != "user" {
-        return;
-    }
-    match metadata {
-        Some(existing) => {
-            if patch.user_message_type.is_some() {
-                existing.user_message_type = patch.user_message_type.clone();
-            }
-        }
-        None => {
-            *metadata = Some(patch.clone());
-        }
-    }
-}
-
-fn user_message_metadata_patch(kind: UserMessageType) -> ResponseItemMessageMetadata {
-    ResponseItemMessageMetadata {
-        user_message_type: Some(kind),
-        ..ResponseItemMessageMetadata::new(/*user_message_type*/ None)
-    }
-}
-
 fn approval_source_for_turn(turn_context: &TurnContext) -> ApprovalSourceMetadata {
     if routes_approval_to_guardian(turn_context) {
         ApprovalSourceMetadata::Guardian
@@ -1043,57 +1019,6 @@ fn approval_source_for_turn(turn_context: &TurnContext) -> ApprovalSourceMetadat
         ApprovalSourceMetadata::User
     }
 }
-
-fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
-    match item {
-        ResponseItem::LocalShellCall {
-            call_id: Some(call_id),
-            ..
-        } => Some(call_id),
-        ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
-        ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
-        _ => None,
-    }
-}
-
-fn tool_call_metadata_slot_mut(
-    item: &mut ResponseItem,
-) -> Option<&mut Option<ResponseItemMetadata>> {
-    match item {
-        ResponseItem::LocalShellCall { metadata, .. }
-        | ResponseItem::FunctionCall { metadata, .. }
-        | ResponseItem::CustomToolCall { metadata, .. } => Some(metadata),
-        _ => None,
-    }
-}
-
-fn stamp_tool_metadata_on_response_item(
-    mut item: ResponseItem,
-    patch: ResponseItemMetadata,
-) -> ResponseItem {
-    if patch.is_empty() {
-        return item;
-    }
-    let Some(metadata_slot) = tool_call_metadata_slot_mut(&mut item) else {
-        return item;
-    };
-    let mut metadata = metadata_slot.take().unwrap_or_default();
-    metadata.merge_from(patch);
-    *metadata_slot = (!metadata.is_empty()).then_some(metadata);
-    item
-}
-
-fn tool_call_metadata_or_default(item: &ResponseItem) -> Option<ResponseItemMetadata> {
-    match item {
-        ResponseItem::LocalShellCall { metadata, .. }
-        | ResponseItem::FunctionCall { metadata, .. }
-        | ResponseItem::CustomToolCall { metadata, .. } => {
-            Some(metadata.clone().unwrap_or_default())
-        }
-        _ => None,
-    }
-}
-
 #[derive(Clone, Debug, Default)]
 struct ToolApprovalMetadataSnapshot {
     approval_outcomes_by_call_id: HashMap<String, ApprovalOutcomeMetadata>,
