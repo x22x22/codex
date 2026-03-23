@@ -72,6 +72,13 @@ pub(crate) struct ApprovalOutcomeMetadata {
 }
 
 impl ApprovalOutcomeMetadata {
+    pub(crate) fn policy() -> Self {
+        Self {
+            review_decision: None,
+            approval_source: ApprovalSourceMetadata::Policy,
+        }
+    }
+
     pub(crate) fn reviewed(
         decision: &ReviewDecision,
         approval_source: ApprovalSourceMetadata,

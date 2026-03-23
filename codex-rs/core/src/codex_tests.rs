@@ -4598,6 +4598,26 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_stamps_policy_source_without_review_decision_when_feature_enabled() {
+    let (sess, tc, rx) = setup_tool_call_metadata_runtime_test().await;
+
+    sess.record_call_approval_outcome(
+        "call-policy-1".to_string(),
+        ApprovalOutcomeMetadata::policy(),
+    )
+    .await;
+    sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-policy-1"))
+        .await;
+    assert_next_emitted_function_call_metadata(
+        &rx,
+        true,
+        None,
+        Some(codex_protocol::models::ApprovalSourceMetadata::Policy),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
     let (sess, tc, rx) = setup_tool_call_metadata_runtime_test().await;
 
