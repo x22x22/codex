@@ -47,6 +47,13 @@ cd android
 ./gradlew :genie:assembleDebug :app:assembleDebug
 ```
 
+Or use the helper script from `android/`:
+
+```bash
+cd android
+./build-agent-genie-apks.sh
+```
+
 If you prefer the system Gradle install, use `gradle :app:assembleDebug` from
 `android/`.
 
@@ -55,6 +62,14 @@ The Agent/Genie prototype modules also require
 Gradle can compile against the stub SDK jar. The Agent APK and Genie APK both
 package the Android `codex` binary as `libcodex.so`, so `just android-build`
 must run before `:app:assembleDebug` and `:genie:assembleDebug`.
+
+To install both APKs, assign the AGENT/GENIE roles, grant notifications, and
+optionally seed `auth.json` into the Agent sandbox:
+
+```bash
+cd android
+./install-and-provision-agent-genie.sh --serial emulator-5554
+```
 
 If `cargo-ndk` cannot find your NDK, set:
 
