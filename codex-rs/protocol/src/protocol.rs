@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::AgentPath;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ApprovalsReviewer;
@@ -1537,6 +1538,15 @@ pub enum AgentStatus {
     NotFound,
 }
 
+/// Turn kinds that reject same-turn steering.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum NonSteerableTurnKind {
+    Review,
+    Compact,
+}
+
 /// Codex errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -1564,6 +1574,11 @@ pub enum CodexErrorInfo {
     ResponseTooManyFailedAttempts {
         http_status_code: Option<u16>,
     },
+    /// Returned when `turn/start` or `turn/steer` is submitted while the current active turn
+    /// cannot accept same-turn steering, for example `/review` or manual `/compact`.
+    ActiveTurnNotSteerable {
+        turn_kind: NonSteerableTurnKind,
+    },
     ThreadRollbackFailed,
     Other,
 }
@@ -1572,7 +1587,7 @@ impl CodexErrorInfo {
     /// Whether this error should mark the current turn as failed when replaying history.
     pub fn affects_turn_status(&self) -> bool {
         match self {
-            Self::ThreadRollbackFailed => false,
+            Self::ThreadRollbackFailed | Self::ActiveTurnNotSteerable { .. } => false,
             Self::ContextWindowExceeded
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
@@ -2288,6 +2303,8 @@ pub enum SubAgentSource {
         parent_thread_id: ThreadId,
         depth: i32,
         #[serde(default)]
+        agent_path: Option<AgentPath>,
+        #[serde(default)]
         agent_nickname: Option<String>,
         #[serde(default, alias = "agent_type")]
         agent_role: Option<String>,
@@ -2351,6 +2368,16 @@ impl SessionSource {
             _ => None,
         }
     }
+
+    pub fn get_agent_path(&self) -> Option<AgentPath> {
+        match self {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
+                agent_path.clone()
+            }
+            _ => None,
+        }
+    }
+
     pub fn restriction_product(&self) -> Option<Product> {
         match self {
             SessionSource::Custom(source) => Product::from_session_source_name(source),
@@ -2411,6 +2438,9 @@ pub struct SessionMeta {
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
     #[serde(default, alias = "agent_type", skip_serializing_if = "Option::is_none")]
     pub agent_role: Option<String>,
+    /// Optional canonical agent path assigned to an AgentControl-spawned sub-agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_path: Option<String>,
     pub model_provider: Option<String>,
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
@@ -2434,6 +2464,7 @@ impl Default for SessionMeta {
             source: SessionSource::default(),
             agent_nickname: None,
             agent_role: None,
+            agent_path: None,
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
@@ -2962,6 +2993,14 @@ pub enum Product {
     Atlas,
 }
 impl Product {
+    pub fn to_app_platform(self) -> &'static str {
+        match self {
+            Self::Chatgpt => "chat",
+            Self::Codex => "codex",
+            Self::Atlas => "atlas",
+        }
+    }
+
     pub fn from_session_source_name(value: &str) -> Option<Self> {
         let normalized = value.trim().to_ascii_lowercase();
         match normalized.as_str() {
@@ -4183,6 +4222,17 @@ mod tests {
         let event = ErrorEvent {
             message: "rollback failed".into(),
             codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+        };
+        assert!(!event.affects_turn_status());
+    }
+
+    #[test]
+    fn active_turn_not_steerable_error_does_not_affect_turn_status() {
+        let event = ErrorEvent {
+            message: "cannot steer a review turn".into(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Review,
+            }),
         };
         assert!(!event.affects_turn_status());
     }
