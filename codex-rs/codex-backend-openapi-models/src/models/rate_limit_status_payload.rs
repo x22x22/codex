@@ -81,4 +81,6 @@ pub enum PlanType {
     Enterprise,
     #[serde(rename = "edu")]
     Edu,
+    #[serde(rename = "self_serve_business_usage_based")]
+    SelfServeBusinessUsage,
 }

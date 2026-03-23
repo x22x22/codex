@@ -460,9 +460,7 @@ impl std::fmt::Display for UsageLimitReachedError {
                 "You've hit your usage limit.{}",
                 retry_suffix(self.resets_at.as_ref())
             ),
-            Some(PlanType::Unknown(plan))
-                if plan.eq_ignore_ascii_case("self_serve_business_usage_based") =>
-            {
+            Some(PlanType::SelfServeBusinessUsage) => {
                 match self
                     .rate_limits
                     .as_ref()

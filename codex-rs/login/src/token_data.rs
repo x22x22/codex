@@ -39,6 +39,7 @@ impl IdTokenInfo {
     pub fn get_chatgpt_plan_type(&self) -> Option<String> {
         self.chatgpt_plan_type.as_ref().map(|t| match t {
             PlanType::Known(plan) => format!("{plan:?}"),
+            PlanType::SelfServeBusinessUsage => "self_serve_business_usage_based".to_string(),
             PlanType::Unknown(s) => s.clone(),
         })
     }
@@ -48,15 +49,15 @@ impl IdTokenInfo {
             self.chatgpt_plan_type,
             Some(PlanType::Known(
                 KnownPlan::Team | KnownPlan::Business | KnownPlan::Enterprise | KnownPlan::Edu
-            ))
+            ) | PlanType::SelfServeBusinessUsage)
         )
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanType {
     Known(KnownPlan),
+    SelfServeBusinessUsage,
     Unknown(String),
 }
 
@@ -71,8 +72,43 @@ impl PlanType {
             "business" => Self::Known(KnownPlan::Business),
             "enterprise" => Self::Known(KnownPlan::Enterprise),
             "education" | "edu" => Self::Known(KnownPlan::Edu),
+            "self_serve_business_usage_based" => Self::SelfServeBusinessUsage,
             _ => Self::Unknown(raw.to_string()),
         }
+    }
+}
+
+impl Serialize for PlanType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = match self {
+            Self::Known(plan) => match plan {
+                KnownPlan::Free => "free",
+                KnownPlan::Go => "go",
+                KnownPlan::Plus => "plus",
+                KnownPlan::Pro => "pro",
+                KnownPlan::Team => "team",
+                KnownPlan::Business => "business",
+                KnownPlan::Enterprise => "enterprise",
+                KnownPlan::Edu => "edu",
+            },
+            Self::SelfServeBusinessUsage => "self_serve_business_usage_based",
+            Self::Unknown(raw) => raw,
+        };
+
+        serializer.serialize_str(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for PlanType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self::from_raw_value(&raw))
     }
 }
 

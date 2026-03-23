@@ -275,6 +275,9 @@ impl CodexAuth {
                 .chatgpt_plan_type
                 .map(|pt| match pt {
                     InternalPlanType::Known(k) => map_known(&k),
+                    InternalPlanType::SelfServeBusinessUsage => {
+                        AccountPlanType::SelfServeBusinessUsage
+                    }
                     InternalPlanType::Unknown(_) => AccountPlanType::Unknown,
                 })
                 .unwrap_or(AccountPlanType::Unknown)
