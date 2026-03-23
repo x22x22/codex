@@ -3943,21 +3943,7 @@ impl Session {
         }
     }
 
-    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.take_pending_input()
-            }
-            None => Vec::with_capacity(0),
-        }
-    }
-
-    pub(crate) async fn prepend_pending_input(
-        &self,
-        input: Vec<ResponseInputItem>,
-    ) -> Result<(), ()> {
+    pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
@@ -3966,6 +3952,17 @@ impl Session {
                 Ok(())
             }
             None => Err(()),
+        }
+    }
+
+    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.take_pending_input()
+            }
+            None => Vec::with_capacity(0),
         }
     }
 
@@ -5679,13 +5676,13 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_response_items = sess.get_pending_input().await;
+        let pending_input = sess.get_pending_input().await;
         let mut blocked_pending_input = false;
         let mut blocked_pending_input_contexts = Vec::new();
         let mut requeued_pending_input = false;
         let mut accepted_pending_input = Vec::new();
-        if !pending_response_items.is_empty() {
-            let mut pending_input_iter = pending_response_items.into_iter();
+        if !pending_input.is_empty() {
+            let mut pending_input_iter = pending_input.into_iter();
             while let Some(pending_input_item) = pending_input_iter.next() {
                 match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
