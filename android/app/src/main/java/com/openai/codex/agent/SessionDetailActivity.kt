@@ -376,6 +376,14 @@ class SessionDetailActivity : Activity() {
                 showToast("Failed to answer question: ${err.message}")
             }.onSuccess {
                 answerInput.post { answerInput.text.clear() }
+                topLevelSession(latestSnapshot)?.let { topLevelSession ->
+                    SessionNotificationCoordinator.acknowledgeSessionTree(
+                        context = this,
+                        sessionController = sessionController,
+                        topLevelSessionId = topLevelSession.sessionId,
+                        sessionIds = listOf(topLevelSession.sessionId, selectedSession.sessionId),
+                    )
+                }
                 showToast("Answered ${selectedSession.sessionId}")
                 refreshSnapshot(force = true)
             }
@@ -412,6 +420,12 @@ class SessionDetailActivity : Activity() {
             }.onFailure { err ->
                 showToast("Failed to cancel session: ${err.message}")
             }.onSuccess {
+                SessionNotificationCoordinator.acknowledgeSessionTree(
+                    context = this,
+                    sessionController = sessionController,
+                    topLevelSessionId = topLevelSession.sessionId,
+                    sessionIds = listOf(topLevelSession.sessionId) + childSessions(latestSnapshot).map(AgentSessionDetails::sessionId),
+                )
                 showToast(
                     if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT) {
                         "Cancelled active child sessions"
@@ -445,6 +459,12 @@ class SessionDetailActivity : Activity() {
                 childSessions(latestSnapshot).forEach { childSession ->
                     dismissedSessionStore.dismiss(childSession.sessionId)
                 }
+                SessionNotificationCoordinator.acknowledgeSessionTree(
+                    context = this,
+                    sessionController = sessionController,
+                    topLevelSessionId = topLevelSession.sessionId,
+                    sessionIds = listOf(topLevelSession.sessionId) + childSessions(latestSnapshot).map(AgentSessionDetails::sessionId),
+                )
             }.onFailure { err ->
                 showToast("Failed to delete session: ${err.message}")
             }.onSuccess {
@@ -468,6 +488,14 @@ class SessionDetailActivity : Activity() {
             }.onFailure { err ->
                 showToast("Failed to cancel child session: ${err.message}")
             }.onSuccess {
+                topLevelSession(latestSnapshot)?.let { topLevelSession ->
+                    SessionNotificationCoordinator.acknowledgeSessionTree(
+                        context = this,
+                        sessionController = sessionController,
+                        topLevelSessionId = topLevelSession.sessionId,
+                        sessionIds = listOf(selectedChildSession.sessionId),
+                    )
+                }
                 showToast("Cancelled ${selectedChildSession.sessionId}")
                 refreshSnapshot(force = true)
             }
@@ -482,6 +510,14 @@ class SessionDetailActivity : Activity() {
             }.onFailure { err ->
                 showToast("Failed to delete child session: ${err.message}")
             }.onSuccess {
+                topLevelSession(latestSnapshot)?.let { topLevelSession ->
+                    SessionNotificationCoordinator.acknowledgeSessionTree(
+                        context = this,
+                        sessionController = sessionController,
+                        topLevelSessionId = topLevelSession.sessionId,
+                        sessionIds = listOf(selectedChildSession.sessionId),
+                    )
+                }
                 selectedChildSessionId = null
                 showToast("Deleted child session")
                 refreshSnapshot(force = true)

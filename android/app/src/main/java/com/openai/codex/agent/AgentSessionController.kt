@@ -56,6 +56,17 @@ class AgentSessionController(context: Context) {
         agentManager?.unregisterSessionUiLease(parentSessionId, token)
     }
 
+    fun acknowledgeSessionUi(parentSessionId: String) {
+        val manager = agentManager ?: return
+        val token = Binder()
+        runCatching {
+            manager.registerSessionUiLease(parentSessionId, token)
+        }
+        runCatching {
+            manager.unregisterSessionUiLease(parentSessionId, token)
+        }
+    }
+
     fun loadSnapshot(focusedSessionId: String?): AgentSnapshot {
         val manager = agentManager ?: return AgentSnapshot.unavailable
         val roleHolders = manager.getGenieRoleHolders(currentUserId())

@@ -125,6 +125,62 @@ fi
 
 "${adb_cmd[@]}" get-state >/dev/null 2>&1 || fail "adb device is not available"
 
+purge_existing_agent_sessions() {
+  local sessions_output line session_id parent_session_id initiator_package state top_level_session_id
+  local -a all_session_ids=()
+  local -a top_level_session_ids=()
+  local -a home_session_specs=()
+
+  sessions_output="$(${adb_cmd[@]} shell cmd agent list-sessions "$user_id" 2>/dev/null | tr -d '\r')"
+  [[ -n "$sessions_output" ]] || return 0
+
+  while IFS= read -r line; do
+    [[ "$line" == AgentSessionInfo\{* ]] || continue
+    session_id="$(printf '%s\n' "$line" | sed -n 's/.*sessionId=\([^,}]*\).*/\1/p')"
+    parent_session_id="$(printf '%s\n' "$line" | sed -n 's/.*parentSessionId=\([^,}]*\).*/\1/p')"
+    initiator_package="$(printf '%s\n' "$line" | sed -n 's/.*initiatorPackage=\([^,}]*\).*/\1/p')"
+    state="$(printf '%s\n' "$line" | sed -n 's/.*state=\([0-9][0-9]*\).*/\1/p')"
+    [[ -n "$session_id" ]] || continue
+    all_session_ids+=("$session_id")
+    if [[ "$parent_session_id" == "null" ]]; then
+      top_level_session_ids+=("$session_id")
+      if [[ "$initiator_package" != "null" ]] && printf '%s\n' "$line" | grep -q 'targetPackage=' && ! printf '%s\n' "$line" | grep -q 'targetPackage=null'; then
+        home_session_specs+=("$initiator_package:$session_id:$state")
+      fi
+    fi
+  done <<<"$sessions_output"
+
+  if [[ ${#all_session_ids[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "Purging existing framework sessions"
+  for session_id in "${all_session_ids[@]}"; do
+    "${adb_cmd[@]}" shell cmd agent cancel-session "$session_id" >/dev/null 2>&1 || true
+  done
+
+  if (( ${#top_level_session_ids[@]} > 0 )); then
+    for top_level_session_id in "${top_level_session_ids[@]}"; do
+      local lease_id="codex-install-${top_level_session_id}"
+      "${adb_cmd[@]}" shell cmd agent register-ui-lease "$top_level_session_id" "$lease_id" >/dev/null 2>&1 || true
+      "${adb_cmd[@]}" shell cmd agent unregister-ui-lease "$top_level_session_id" "$lease_id" >/dev/null 2>&1 || true
+    done
+  fi
+
+  if (( ${#home_session_specs[@]} > 0 )); then
+    for home_spec in "${home_session_specs[@]}"; do
+      IFS=':' read -r initiator_package session_id state <<<"$home_spec"
+      if [[ "$state" == "4" ]]; then
+        "${adb_cmd[@]}" shell cmd agent consume-completed-home-session "$initiator_package" "$session_id" >/dev/null 2>&1 || true
+      else
+        "${adb_cmd[@]}" shell cmd agent consume-home-session "$initiator_package" "$session_id" >/dev/null 2>&1 || true
+      fi
+    done
+  fi
+}
+
+purge_existing_agent_sessions
+
 echo "Stopping existing Agent/Genie processes"
 for package_name in \
   "$agent_package" \

@@ -4,7 +4,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.agent.AgentManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -39,8 +38,8 @@ object AgentQuestionNotifier {
         val contentIntent = PendingIntent.getActivity(
             context,
             notificationId(sessionId),
-            Intent(context, MainActivity::class.java).apply {
-                putExtra(AgentManager.EXTRA_SESSION_ID, sessionId)
+            Intent(context, SessionDetailActivity::class.java).apply {
+                putExtra(SessionDetailActivity.EXTRA_SESSION_ID, sessionId)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
