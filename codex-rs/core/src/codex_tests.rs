@@ -4819,6 +4819,7 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
         content: vec![ContentItem::InputText {
             text: "queued before wake".to_string(),
         }],
+        metadata: None,
     };
 
     sess.queue_response_items_for_next_turn(vec![queued_item.clone()])
