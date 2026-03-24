@@ -235,6 +235,7 @@ use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::state_db::StateDbHandle;
+use codex_core::state_db::init;
 use codex_core::state_db::reconcile_rollout;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
@@ -384,7 +385,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     background_tasks: TaskTracker,
-    state_db: StateDbHandle,
+    state_db: Option<StateDbHandle>,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
 }
@@ -431,10 +432,17 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
-    pub(crate) state_db: StateDbHandle,
+    pub(crate) state_db: Option<StateDbHandle>,
 }
 
 impl CodexMessageProcessor {
+    async fn shared_state_db(&self) -> Option<StateDbHandle> {
+        match self.state_db.as_ref() {
+            Some(state_db) => Some(state_db.clone()),
+            None => init(self.config.as_ref()).await,
+        }
+    }
+
     pub(crate) fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
@@ -2241,10 +2249,11 @@ impl CodexMessageProcessor {
             }
         };
 
+        let state_db = self.shared_state_db().await;
         let rollout_path = match find_thread_path_by_id_str(
             &self.config.codex_home,
             &thread_id.to_string(),
-            Some(self.state_db.clone()),
+            state_db,
         )
         .await
         {
@@ -2395,10 +2404,11 @@ impl CodexMessageProcessor {
             return;
         }
 
+        let state_db = self.shared_state_db().await;
         let thread_exists = match find_thread_path_by_id_str(
             &self.config.codex_home,
             &thread_id.to_string(),
-            Some(self.state_db.clone()),
+            state_db,
         )
         .await
         {
@@ -2485,7 +2495,7 @@ impl CodexMessageProcessor {
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         if state_db_ctx.is_none() {
-            state_db_ctx = Some(self.state_db.clone());
+            state_db_ctx = self.shared_state_db().await;
         }
         let Some(state_db_ctx) = state_db_ctx else {
             self.send_internal_error(
@@ -2761,10 +2771,11 @@ impl CodexMessageProcessor {
             }
         };
 
+        let state_db = self.shared_state_db().await;
         let archived_path = match find_archived_thread_path_by_id_str(
             &self.config.codex_home,
             &thread_id.to_string(),
-            Some(self.state_db.clone()),
+            state_db,
         )
         .await
         {
@@ -2791,7 +2802,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = Some(self.state_db.clone());
+        let state_db_ctx = self.shared_state_db().await;
         let archived_folder = self
             .config
             .codex_home
@@ -3274,7 +3285,7 @@ impl CodexMessageProcessor {
         let state_db = if loaded_thread_state_db.is_some() {
             None
         } else {
-            Some(self.state_db.clone())
+            self.shared_state_db().await
         };
         let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
             read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
@@ -3678,7 +3689,7 @@ impl CodexMessageProcessor {
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
-        let state_db_ctx = &self.state_db;
+        let state_db_ctx = self.shared_state_db().await?;
         let persisted_metadata = state_db_ctx
             .get_thread(resumed_history.conversation_id)
             .await
@@ -3707,6 +3718,7 @@ impl CodexMessageProcessor {
                 return true;
             }
 
+            let shared_state_db = self.shared_state_db().await;
             let rollout_path = if let Some(path) = existing_thread.rollout_path() {
                 if path.exists() {
                     path
@@ -3716,7 +3728,7 @@ impl CodexMessageProcessor {
                         &existing_thread_id.to_string(),
                         existing_thread
                             .state_db()
-                            .or_else(|| Some(self.state_db.clone())),
+                            .or_else(|| shared_state_db.clone()),
                     )
                     .await
                     {
@@ -3745,7 +3757,7 @@ impl CodexMessageProcessor {
                     &existing_thread_id.to_string(),
                     existing_thread
                         .state_db()
-                        .or_else(|| Some(self.state_db.clone())),
+                        .or_else(|| shared_state_db.clone()),
                 )
                 .await
                 {
@@ -3902,10 +3914,11 @@ impl CodexMessageProcessor {
                 }
             };
 
+            let state_db = self.shared_state_db().await;
             match find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &existing_thread_id.to_string(),
-                Some(self.state_db.clone()),
+                state_db,
             )
             .await
             {
@@ -4035,10 +4048,11 @@ impl CodexMessageProcessor {
                 }
             };
 
+            let state_db = self.shared_state_db().await;
             match find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &existing_thread_id.to_string(),
-                Some(self.state_db.clone()),
+                state_db,
             )
             .await
             {
@@ -4062,9 +4076,9 @@ impl CodexMessageProcessor {
             }
         };
 
-        let state_db = &self.state_db;
+        let state_db = self.shared_state_db().await;
         let history_cwd = read_history_cwd_from_state_db(
-            Some(state_db),
+            state_db.as_ref(),
             source_thread_id,
             rollout_path.as_path(),
         )
@@ -4290,10 +4304,10 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: GetConversationSummaryParams,
     ) {
-        let state_db = &self.state_db;
+        let state_db = self.shared_state_db().await;
         if let GetConversationSummaryParams::ThreadId { conversation_id } = &params
             && let Some(summary) =
-                read_summary_from_state_db_by_thread_id(Some(state_db), *conversation_id).await
+                read_summary_from_state_db_by_thread_id(state_db.as_ref(), *conversation_id).await
         {
             let response = GetConversationSummaryResponse { summary };
             self.outgoing.send_response(request_id, response).await;
@@ -4309,10 +4323,11 @@ impl CodexMessageProcessor {
                 }
             }
             GetConversationSummaryParams::ThreadId { conversation_id } => {
+                let state_db = self.shared_state_db().await;
                 match find_thread_path_by_id_str(
                     &self.config.codex_home,
                     &conversation_id.to_string(),
-                    Some(self.state_db.clone()),
+                    state_db,
                 )
                 .await
                 {
@@ -4395,7 +4410,7 @@ impl CodexMessageProcessor {
         let fallback_provider = self.config.model_provider_id.clone();
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
-        let state_db_ctx = Some(self.state_db.clone());
+        let state_db_ctx = self.shared_state_db().await;
         let normalized_cwd = cwd
             .as_ref()
             .and_then(|cwd| normalize_for_path_comparison(cwd).ok());
@@ -5253,7 +5268,7 @@ impl CodexMessageProcessor {
         self.finalize_thread_teardown(thread_id).await;
 
         if state_db_ctx.is_none() {
-            state_db_ctx = Some(self.state_db.clone());
+            state_db_ctx = self.shared_state_db().await;
         }
 
         // Move the rollout file to archived.
@@ -6604,12 +6619,15 @@ impl CodexMessageProcessor {
         let rollout_path = if let Some(path) = parent_thread.rollout_path() {
             path
         } else {
+            let state_db = if let Some(state_db) = parent_thread.state_db() {
+                Some(state_db)
+            } else {
+                self.shared_state_db().await
+            };
             find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &parent_thread_id.to_string(),
-                parent_thread
-                    .state_db()
-                    .or_else(|| Some(self.state_db.clone())),
+                state_db,
             )
             .await
             .map_err(|err| JSONRPCErrorError {
@@ -7214,10 +7232,10 @@ impl CodexMessageProcessor {
             if let Some(log_db) = self.log_db.as_ref() {
                 log_db.flush().await;
             }
-            match conversation_id {
-                Some(conversation_id) => {
+            match (self.shared_state_db().await, conversation_id) {
+                (Some(state_db), Some(conversation_id)) => {
                     let thread_id_text = conversation_id.to_string();
-                    match self.state_db.query_feedback_logs(&thread_id_text).await {
+                    match state_db.query_feedback_logs(&thread_id_text).await {
                         Ok(logs) if logs.is_empty() => None,
                         Ok(logs) => Some(logs),
                         Err(err) => {
@@ -7228,7 +7246,7 @@ impl CodexMessageProcessor {
                         }
                     }
                 }
-                None => None,
+                _ => None,
             }
         } else {
             None
@@ -7366,14 +7384,17 @@ impl CodexMessageProcessor {
     async fn resolve_rollout_path(&self, conversation_id: ThreadId) -> Option<PathBuf> {
         match self.thread_manager.get_thread(conversation_id).await {
             Ok(conv) => conv.rollout_path(),
-            Err(_) => find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &conversation_id.to_string(),
-                Some(self.state_db.clone()),
-            )
-            .await
-            .ok()
-            .flatten(),
+            Err(_) => {
+                let state_db = self.shared_state_db().await;
+                find_thread_path_by_id_str(
+                    &self.config.codex_home,
+                    &conversation_id.to_string(),
+                    state_db,
+                )
+                .await
+                .ok()
+                .flatten()
+            }
         }
     }
 }

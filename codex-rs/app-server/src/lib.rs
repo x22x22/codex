@@ -12,7 +12,6 @@ use codex_core::state_db::init;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
@@ -491,12 +490,13 @@ pub async fn run_main_with_transport(
     }
 
     let feedback = CodexFeedback::new();
-    let state_db = init(&config).await.ok_or_else(|| {
-        IoError::other(format!(
-            "failed to initialize state db at {}",
+    let state_db = init(&config).await;
+    if state_db.is_none() {
+        warn!(
+            "sqlite state db unavailable at startup for {}; continuing without sqlite-backed app-server state",
             config.sqlite_home.display()
-        ))
-    })?;
+        );
+    }
 
     let otel = codex_core::otel_init::build_provider(
         &config,
@@ -530,7 +530,7 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = Some(log_db::start(Arc::clone(&state_db)));
+    let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));

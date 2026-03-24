@@ -245,7 +245,7 @@ async fn build_test_processor(
         cloud_requirements: CloudRequirementsLoader::default(),
         feedback: CodexFeedback::new(),
         log_db: None,
-        state_db,
+        state_db: Some(state_db),
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         enable_codex_api_key_env: false,

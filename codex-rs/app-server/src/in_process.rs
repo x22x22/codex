@@ -327,12 +327,13 @@ impl InProcessClientHandle {
 /// the runtime is shut down and an `InvalidData` error is returned.
 pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
     let initialize = args.initialize.clone();
-    let state_db = init(args.config.as_ref()).await.ok_or_else(|| {
-        IoError::other(format!(
-            "failed to initialize state db at {}",
+    let state_db = init(args.config.as_ref()).await;
+    if state_db.is_none() {
+        warn!(
+            "sqlite state db unavailable at startup for {}; continuing without sqlite-backed app-server state",
             args.config.sqlite_home.display()
-        ))
-    })?;
+        );
+    }
     let client = start_uninitialized(args, state_db);
 
     let initialize_response = client
@@ -353,7 +354,10 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
     Ok(client)
 }
 
-fn start_uninitialized(args: InProcessStartArgs, state_db: StateDbHandle) -> InProcessClientHandle {
+fn start_uninitialized(
+    args: InProcessStartArgs,
+    state_db: Option<StateDbHandle>,
+) -> InProcessClientHandle {
     let channel_capacity = args.channel_capacity.max(1);
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
