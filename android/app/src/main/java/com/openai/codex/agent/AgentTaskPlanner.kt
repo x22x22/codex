@@ -145,17 +145,35 @@ object AgentTaskPlanner {
                 allowDetachedMode = allowDetachedMode,
             )
         }
-        val request = planSession(
-            context = context,
-            userObjective = userObjective,
+        val pendingSession = sessionController.createPendingDirectSession(
+            objective = userObjective,
             executionSettings = executionSettings,
-            sessionController = sessionController,
-            requestUserInputHandler = requestUserInputHandler,
         )
-        val sessionStartResult = sessionController.startDirectSession(
-            plan = request.plan,
-            allowDetachedMode = allowDetachedMode && request.allowDetachedMode,
-        )
+        val sessionStartResult = try {
+            val request = planSession(
+                context = context,
+                userObjective = userObjective,
+                executionSettings = executionSettings,
+                sessionController = sessionController,
+                requestUserInputHandler = requestUserInputHandler,
+                frameworkSessionId = pendingSession.parentSessionId,
+                keepForeground = true,
+            )
+            sessionController.startDirectSessionChildren(
+                parentSessionId = pendingSession.parentSessionId,
+                geniePackage = pendingSession.geniePackage,
+                plan = request.plan,
+                allowDetachedMode = allowDetachedMode && request.allowDetachedMode,
+                executionSettings = executionSettings,
+                cancelParentOnFailure = true,
+            )
+        } catch (err: IOException) {
+            runCatching { sessionController.cancelSession(pendingSession.parentSessionId) }
+            throw err
+        } catch (err: RuntimeException) {
+            runCatching { sessionController.cancelSession(pendingSession.parentSessionId) }
+            throw err
+        }
         Log.i(TAG, "Planner sessionStartResult=$sessionStartResult")
         return sessionStartResult
     }
@@ -166,6 +184,8 @@ object AgentTaskPlanner {
         executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
         sessionController: AgentSessionController,
         requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
+        frameworkSessionId: String? = null,
+        keepForeground: Boolean = false,
     ): AgentFrameworkToolBridge.StartDirectSessionRequest {
         Log.i(TAG, "Planning Agent session for objective=${userObjective.take(160)}")
         val isEligibleTargetPackage = { packageName: String ->
@@ -193,6 +213,8 @@ object AgentTaskPlanner {
                 requestUserInputHandler = requestUserInputHandler,
                 executionSettings = executionSettings,
                 requestTimeoutMs = PLANNER_REQUEST_TIMEOUT_MS,
+                frameworkSessionId = frameworkSessionId,
+                keepForeground = keepForeground,
             )
             Log.i(TAG, "Planner response=${plannerResponse.take(400)}")
             previousPlannerResponse = plannerResponse

@@ -318,6 +318,7 @@ class CodexAgentService : AgentService() {
                 }
                 toolResult
             },
+            frameworkSessionId = session.sessionId,
         ).trim()
         if (answered) {
             return AutoAnswerResult.Answered

@@ -1,5 +1,6 @@
 package com.openai.codex.agent
 
+import android.app.agent.AgentManager
 import android.content.Context
 import android.util.Log
 import com.openai.codex.bridge.HostedCodexConfig
@@ -60,6 +61,8 @@ object AgentCodexAppServerClient {
     private var cachedRuntimeStatus: RuntimeStatus? = null
     @Volatile
     private var applicationContext: Context? = null
+    @Volatile
+    private var activeFrameworkSessionId: String? = null
     private val runtimeStatusRefreshInFlight = AtomicBoolean(false)
 
     fun currentRuntimeStatus(): RuntimeStatus? = cachedRuntimeStatus
@@ -103,8 +106,15 @@ object AgentCodexAppServerClient {
         requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
         executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
         requestTimeoutMs: Long = REQUEST_TIMEOUT_MS,
+        frameworkSessionId: String? = null,
+        keepForeground: Boolean = false,
     ): String = synchronized(lifecycleLock) {
+        if (keepForeground) {
+            AgentRuntimeForegroundService.start(context.applicationContext)
+        }
         ensureStarted(context.applicationContext)
+        val previousFrameworkSessionId = activeFrameworkSessionId
+        activeFrameworkSessionId = frameworkSessionId?.trim()?.ifEmpty { null }
         activeRequests.incrementAndGet()
         updateClientCount()
         try {
@@ -131,6 +141,10 @@ object AgentCodexAppServerClient {
         } finally {
             activeRequests.decrementAndGet()
             updateClientCount()
+            activeFrameworkSessionId = previousFrameworkSessionId
+            if (keepForeground) {
+                AgentRuntimeForegroundService.stop(context.applicationContext)
+            }
         }
     }
 
@@ -233,7 +247,7 @@ object AgentCodexAppServerClient {
         pendingResponses.clear()
         val codexHome = File(context.filesDir, "codex-home").apply(File::mkdirs)
         localProxy = AgentLocalCodexProxy { requestBody ->
-            AgentResponsesProxy.sendResponsesRequest(context, requestBody)
+            forwardResponsesRequest(context, requestBody)
         }.also(AgentLocalCodexProxy::start)
         val proxyBaseUrl = localProxy?.baseUrl
             ?: throw IOException("local Agent proxy did not start")
@@ -270,6 +284,40 @@ object AgentCodexAppServerClient {
         process = null
         initialized = false
         updateCachedRuntimeStatus(null)
+    }
+
+    private fun forwardResponsesRequest(
+        context: Context,
+        requestBody: String,
+    ): AgentResponsesProxy.HttpResponse {
+        val frameworkSessionId = activeFrameworkSessionId
+        if (frameworkSessionId.isNullOrBlank()) {
+            return AgentResponsesProxy.sendResponsesRequest(context, requestBody)
+        }
+        val agentManager = context.getSystemService(AgentManager::class.java)
+            ?: throw IOException("AgentManager unavailable for framework session transport")
+        return runCatching {
+            AgentResponsesProxy.sendResponsesRequestThroughFramework(
+                agentManager = agentManager,
+                sessionId = frameworkSessionId,
+                context = context,
+                requestBody = requestBody,
+            )
+        }.getOrElse { err ->
+            if (!shouldFallbackToDirectResponsesProxy(err)) {
+                throw err
+            }
+            Log.i(
+                TAG,
+                "Falling back to direct Agent /responses proxy for $frameworkSessionId: ${err.message}",
+            )
+            AgentResponsesProxy.sendResponsesRequest(context, requestBody)
+        }
+    }
+
+    private fun shouldFallbackToDirectResponsesProxy(err: Throwable): Boolean {
+        return err is SecurityException &&
+            err.message?.contains("Only the active Genie runtime may open framework HTTP exchanges") == true
     }
 
     private fun initialize() {

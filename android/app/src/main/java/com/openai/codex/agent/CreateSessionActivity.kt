@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Drawable
 import android.os.Bundle
+import android.os.Binder
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -24,11 +25,20 @@ import kotlin.concurrent.thread
 class CreateSessionActivity : Activity() {
     companion object {
         private const val TAG = "CodexCreateSession"
+        const val ACTION_CREATE_SESSION = "com.openai.codex.agent.action.CREATE_SESSION"
+        const val EXTRA_INITIAL_PROMPT = "com.openai.codex.agent.extra.INITIAL_PROMPT"
         private const val EXTRA_EXISTING_SESSION_ID = "existingSessionId"
         private const val EXTRA_TARGET_PACKAGE = "targetPackage"
         private const val EXTRA_LOCK_TARGET = "lockTarget"
         private const val EXTRA_INITIAL_MODEL = "initialModel"
         private const val EXTRA_INITIAL_REASONING_EFFORT = "initialReasoningEffort"
+
+        fun externalCreateSessionIntent(initialPrompt: String): Intent {
+            return Intent(ACTION_CREATE_SESSION).apply {
+                addCategory(Intent.CATEGORY_DEFAULT)
+                putExtra(EXTRA_INITIAL_PROMPT, initialPrompt)
+            }
+        }
 
         fun newSessionIntent(
             context: Context,
@@ -56,12 +66,15 @@ class CreateSessionActivity : Activity() {
     }
 
     private val sessionController by lazy { AgentSessionController(this) }
+    private val sessionUiLeaseToken = Binder()
     private var availableModels: List<AgentModelOption> = emptyList()
     @Volatile
     private var modelsRefreshInFlight = false
     private val pendingModelCallbacks = mutableListOf<() -> Unit>()
 
     private var existingSessionId: String? = null
+    private var leasedSessionId: String? = null
+    private var uiActive = false
     private var selectedPackage: InstalledApp? = null
     private var targetLocked = false
 
@@ -86,6 +99,27 @@ class CreateSessionActivity : Activity() {
         bindViews()
         loadInitialState()
         refreshModelsIfNeeded(force = true)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        loadInitialState()
+        if (availableModels.isNotEmpty()) {
+            applyModelOptions()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        uiActive = true
+        updateSessionUiLease(existingSessionId)
+    }
+
+    override fun onPause() {
+        uiActive = false
+        updateSessionUiLease(null)
+        super.onPause()
     }
 
     private fun bindViews() {
@@ -125,7 +159,7 @@ class CreateSessionActivity : Activity() {
             updatePackageSummary()
         }
         findViewById<Button>(R.id.create_session_cancel_button).setOnClickListener {
-            finish()
+            cancelAndFinish()
         }
         startButton.setOnClickListener {
             startSession()
@@ -134,12 +168,24 @@ class CreateSessionActivity : Activity() {
     }
 
     private fun loadInitialState() {
+        updateSessionUiLease(null)
+        existingSessionId = null
+        selectedPackage = null
+        targetLocked = false
+        titleView.text = "New Session"
+        statusView.visibility = View.GONE
+        statusView.text = "Loading session…"
+        startButton.isEnabled = true
+        unlockTargetSelection()
+        updatePackageSummary()
+
         existingSessionId = intent.getStringExtra(EXTRA_EXISTING_SESSION_ID)?.trim()?.ifEmpty { null }
         initialSettings = SessionExecutionSettings(
             model = intent.getStringExtra(EXTRA_INITIAL_MODEL)?.trim()?.ifEmpty { null },
             reasoningEffort = intent.getStringExtra(EXTRA_INITIAL_REASONING_EFFORT)?.trim()?.ifEmpty { null },
         )
-        promptInput.setText("")
+        promptInput.setText(intent.getStringExtra(EXTRA_INITIAL_PROMPT).orEmpty())
+        promptInput.setSelection(promptInput.text.length)
         val explicitTarget = intent.getStringExtra(EXTRA_TARGET_PACKAGE)?.trim()?.ifEmpty { null }
         targetLocked = intent.getBooleanExtra(EXTRA_LOCK_TARGET, false)
         if (explicitTarget != null) {
@@ -148,6 +194,9 @@ class CreateSessionActivity : Activity() {
             updatePackageSummary()
             if (targetLocked) {
                 lockTargetSelection()
+            }
+            if (uiActive) {
+                updateSessionUiLease(existingSessionId)
             }
             return
         }
@@ -185,6 +234,9 @@ class CreateSessionActivity : Activity() {
                     lockTargetSelection()
                     statusView.visibility = View.GONE
                     startButton.isEnabled = true
+                    if (uiActive) {
+                        updateSessionUiLease(existingSessionId)
+                    }
                     if (availableModels.isNotEmpty()) {
                         applyModelOptions()
                     }
@@ -193,9 +245,37 @@ class CreateSessionActivity : Activity() {
         }
     }
 
+    private fun cancelAndFinish() {
+        val sessionId = existingSessionId
+        if (sessionId == null) {
+            finish()
+            return
+        }
+        startButton.isEnabled = false
+        thread {
+            runCatching {
+                sessionController.cancelSession(sessionId)
+            }.onFailure { err ->
+                runOnUiThread {
+                    startButton.isEnabled = true
+                    showToast("Failed to cancel session: ${err.message}")
+                }
+            }.onSuccess {
+                runOnUiThread {
+                    finish()
+                }
+            }
+        }
+    }
+
     private fun lockTargetSelection() {
         packageButton.visibility = View.GONE
         clearPackageButton.visibility = View.GONE
+    }
+
+    private fun unlockTargetSelection() {
+        packageButton.visibility = View.VISIBLE
+        clearPackageButton.visibility = View.VISIBLE
     }
 
     private fun startSession() {
@@ -232,9 +312,11 @@ class CreateSessionActivity : Activity() {
                     showToast("Failed to start session: ${err.message}")
                 }
             }.onSuccess { result ->
-                showToast("Started session")
-                setResult(RESULT_OK, Intent().putExtra(SessionDetailActivity.EXTRA_SESSION_ID, result.parentSessionId))
-                finish()
+                runOnUiThread {
+                    showToast("Started session")
+                    setResult(RESULT_OK, Intent().putExtra(SessionDetailActivity.EXTRA_SESSION_ID, result.parentSessionId))
+                    finish()
+                }
             }
         }
     }
@@ -432,6 +514,26 @@ class CreateSessionActivity : Activity() {
                 it.state == AgentSessionInfo.STATE_CREATED &&
                 !hasChildren &&
                 !it.targetPackage.isNullOrBlank()
+        }
+    }
+
+    private fun updateSessionUiLease(sessionId: String?) {
+        if (leasedSessionId == sessionId) {
+            return
+        }
+        leasedSessionId?.let { previous ->
+            runCatching {
+                sessionController.unregisterSessionUiLease(previous, sessionUiLeaseToken)
+            }
+            leasedSessionId = null
+        }
+        sessionId?.let { current ->
+            val registered = runCatching {
+                sessionController.registerSessionUiLease(current, sessionUiLeaseToken)
+            }
+            if (registered.isSuccess) {
+                leasedSessionId = current
+            }
         }
     }
 

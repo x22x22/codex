@@ -188,6 +188,7 @@ class AgentSessionController(context: Context) {
         cancelParentOnFailure: Boolean = false,
     ): SessionStartResult {
         val manager = requireAgentManager()
+        requireActiveDirectParentSession(manager, parentSessionId)
         val detachedPolicyTargets = plan.targets.filter { it.finalPresentationPolicy.requiresDetachedMode() }
         check(allowDetachedMode || detachedPolicyTargets.isEmpty()) {
             "Detached final presentation requires detached mode for ${detachedPolicyTargets.joinToString(", ") { it.packageName }}"
@@ -202,6 +203,7 @@ class AgentSessionController(context: Context) {
                 manager.publishTrace(parentSessionId, "Planning rationale: $rationale")
             }
             plan.targets.forEach { target ->
+                requireActiveDirectParentSession(manager, parentSessionId)
                 val childSession = manager.createChildSession(parentSessionId, target.packageName)
                 childSessionIds += childSession.sessionId
                 presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
@@ -211,6 +213,7 @@ class AgentSessionController(context: Context) {
                     parentSessionId,
                     "Created child session ${childSession.sessionId} for ${target.packageName} with required final presentation ${target.finalPresentationPolicy.wireValue}.",
                 )
+                requireActiveDirectParentSession(manager, parentSessionId)
                 manager.startGenieSession(
                     childSession.sessionId,
                     geniePackage,
@@ -469,6 +472,21 @@ class AgentSessionController(context: Context) {
         Log.i(TAG, "Configured framework-owned /responses transport for $sessionId")
     }
 
+    private fun requireActiveDirectParentSession(
+        manager: AgentManager,
+        parentSessionId: String,
+    ) {
+        val parentSession = manager.getSessions(currentUserId()).firstOrNull { session ->
+            session.sessionId == parentSessionId
+        } ?: throw IllegalStateException("Parent session $parentSessionId is no longer available")
+        check(isDirectParentSession(parentSession)) {
+            "Session $parentSessionId is not an active direct parent session"
+        }
+        check(!isTerminalState(parentSession.state)) {
+            "Parent session $parentSessionId is no longer active"
+        }
+    }
+
     private fun shouldRetryAnswerQuestion(
         sessionId: String,
         err: Throwable,
@@ -672,6 +690,12 @@ class AgentSessionController(context: Context) {
     }
 
     private fun isDirectParentSession(session: AgentSessionDetails): Boolean {
+        return session.anchor == AgentSessionInfo.ANCHOR_AGENT &&
+            session.parentSessionId == null &&
+            session.targetPackage == null
+    }
+
+    private fun isDirectParentSession(session: AgentSessionInfo): Boolean {
         return session.anchor == AgentSessionInfo.ANCHOR_AGENT &&
             session.parentSessionId == null &&
             session.targetPackage == null

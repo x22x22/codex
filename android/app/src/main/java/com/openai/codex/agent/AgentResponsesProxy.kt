@@ -1,5 +1,6 @@
 package com.openai.codex.agent
 
+import android.app.agent.AgentManager
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
@@ -60,6 +61,49 @@ object AgentResponsesProxy {
             "Proxying /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode}, bytes=${requestBodyBytes.size})",
         )
         return executeRequest(upstreamUrl, requestBodyBytes, authSnapshot)
+    }
+
+    fun sendResponsesRequestThroughFramework(
+        agentManager: AgentManager,
+        sessionId: String,
+        context: Context,
+        requestBody: String,
+    ): HttpResponse {
+        val authSnapshot = loadAuthSnapshot(File(context.filesDir, "codex-home/auth.json"))
+        val requestBodyBytes = requestBody.toByteArray(StandardCharsets.UTF_8)
+        val transportTarget = buildFrameworkTransportTarget(
+            buildResponsesBaseUrl(upstreamBaseUrl = "provider-default", authMode = authSnapshot.authMode),
+        )
+        Log.i(
+            TAG,
+            "Proxying /v1/responses via framework session $sessionId -> ${transportTarget.baseUrl}${transportTarget.responsesPath} (auth_mode=${authSnapshot.authMode}, bytes=${requestBodyBytes.size})",
+        )
+        FrameworkSessionTransportCompat.setSessionNetworkConfig(
+            agentManager = agentManager,
+            sessionId = sessionId,
+            config = buildFrameworkSessionNetworkConfig(
+                context = context,
+                upstreamBaseUrl = "provider-default",
+            ),
+        )
+        val response = FrameworkSessionTransportCompat.executeStreamingRequest(
+            agentManager = agentManager,
+            sessionId = sessionId,
+            request = FrameworkSessionTransportCompat.HttpRequest(
+                method = "POST",
+                path = transportTarget.responsesPath,
+                headers = buildResponsesRequestHeaders(),
+                body = requestBodyBytes,
+            ),
+        )
+        Log.i(
+            TAG,
+            "Framework responses proxy completed status=${response.statusCode} response_bytes=${response.body.size}",
+        )
+        return HttpResponse(
+            statusCode = response.statusCode,
+            body = response.bodyString,
+        )
     }
 
     internal fun buildFrameworkSessionNetworkConfig(

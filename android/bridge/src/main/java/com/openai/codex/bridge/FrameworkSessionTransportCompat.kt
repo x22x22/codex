@@ -26,6 +26,9 @@ object FrameworkSessionTransportCompat {
     private const val OPEN_RESPONSE_BODY_INPUT_STREAM_METHOD = "openResponseBodyInputStream"
     private const val CANCEL_METHOD = "cancel"
     private const val SET_SESSION_NETWORK_CONFIG_METHOD = "setSessionNetworkConfig"
+    private const val AGENT_OPEN_EXCHANGE_METHOD = "openFrameworkHttpExchange"
+    private const val AGENT_AWAIT_RESPONSE_HEAD_METHOD = "awaitFrameworkHttpResponseHead"
+    private const val AGENT_CANCEL_EXCHANGE_METHOD = "cancelFrameworkHttpExchange"
     private const val STATUS_OK_FIELD_NAME = "STATUS_OK"
     private const val READ_BUFFER_BYTES = 8192
     private const val WRITE_BUFFER_BYTES = 8192
@@ -71,6 +74,10 @@ object FrameworkSessionTransportCompat {
         val setSessionNetworkConfigMethod: Method,
         val networkConfigConstructor: Constructor<*>,
         val requestHeadConstructor: Constructor<*>,
+        val exchangeGetIdMethod: Method?,
+        val agentOpenExchangeMethod: Method,
+        val agentAwaitResponseHeadMethod: Method,
+        val agentCancelMethod: Method,
         val openExchangeMethod: Method,
         val openRequestBodyOutputStreamMethod: Method,
         val awaitResponseHeadMethod: Method,
@@ -149,6 +156,54 @@ object FrameworkSessionTransportCompat {
         }
     }
 
+    fun executeStreamingRequest(
+        agentManager: AgentManager,
+        sessionId: String,
+        request: HttpRequest,
+    ): HttpResponse {
+        val exchange = openExchange(agentManager, sessionId, request)
+        var cancelExchange = true
+        try {
+            invokeChecked {
+                runtimeApi.openRequestBodyOutputStreamMethod.invoke(null, exchange.runtimeValue) as OutputStream
+            }.use { requestBody ->
+                writeAll(requestBody, request.body)
+            }
+            val responseHeadResult = awaitResponseHead(agentManager, sessionId, exchange)
+            if (responseHeadResult.status != runtimeApi.okStatus) {
+                val details = responseHeadResult.message?.takeIf(String::isNotBlank)
+                val suffix = if (details == null) "" else ": $details"
+                throw IOException(
+                    "Framework HTTP exchange failed with ${responseHeadResult.statusName}$suffix",
+                )
+            }
+            val responseHead = responseHeadResult.responseHead
+                ?: throw IOException("Framework HTTP exchange succeeded without a response head")
+            val responseBody = invokeChecked {
+                runtimeApi.openResponseBodyInputStreamMethod.invoke(null, exchange.runtimeValue) as InputStream
+            }.use(::readFully)
+            cancelExchange = false
+            return HttpResponse(
+                statusCode = responseHead.statusCode,
+                headers = responseHead.headers,
+                body = responseBody,
+                bodyString = responseBody.toString(StandardCharsets.UTF_8),
+            )
+        } finally {
+            if (cancelExchange) {
+                runCatching {
+                    invokeChecked {
+                        runtimeApi.agentCancelMethod.invoke(
+                            agentManager,
+                            sessionId,
+                            agentExchangeArgument(runtimeApi.agentCancelMethod, exchange),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     private fun openExchange(
         callback: GenieService.Callback,
         sessionId: String,
@@ -168,6 +223,25 @@ object FrameworkSessionTransportCompat {
         return HttpExchange(runtimeExchange)
     }
 
+    private fun openExchange(
+        agentManager: AgentManager,
+        sessionId: String,
+        request: HttpRequest,
+    ): HttpExchange {
+        val requestHead = invokeChecked {
+            runtimeApi.requestHeadConstructor.newInstance(
+                request.method,
+                request.path,
+                Bundle(request.headers),
+            )
+        }
+        val runtimeExchange = invokeChecked {
+            runtimeApi.agentOpenExchangeMethod.invoke(agentManager, sessionId, requestHead)
+                ?: throw IOException("Framework HTTP exchange opened with no exchange handle")
+        }
+        return HttpExchange(runtimeExchange)
+    }
+
     private fun awaitResponseHead(
         callback: GenieService.Callback,
         sessionId: String,
@@ -175,6 +249,51 @@ object FrameworkSessionTransportCompat {
     ): HttpResponseHeadResult {
         val resultObject = invokeChecked {
             runtimeApi.awaitResponseHeadMethod.invoke(null, callback, sessionId, exchange.runtimeValue)
+        }
+        val status = invokeChecked {
+            runtimeApi.responseHeadResultGetStatusMethod.invoke(resultObject) as Int
+        }
+        val responseHeadObject = invokeChecked {
+            runtimeApi.responseHeadResultGetResponseHeadMethod.invoke(resultObject)
+        }
+        val responseHead = if (responseHeadObject == null) {
+            null
+        } else {
+            val statusCode = invokeChecked {
+                runtimeApi.responseHeadGetStatusCodeMethod.invoke(responseHeadObject) as Int
+            }
+            val headers = invokeChecked {
+                runtimeApi.responseHeadGetHeadersMethod.invoke(responseHeadObject) as? Bundle
+            } ?: Bundle.EMPTY
+            HttpResponseHead(
+                statusCode = statusCode,
+                headers = Bundle(headers),
+            )
+        }
+        val message = runtimeApi.responseHeadResultGetMessageMethod?.let { method ->
+            invokeChecked {
+                method.invoke(resultObject) as? String
+            }
+        }?.ifBlank { null }
+        return HttpResponseHeadResult(
+            status = status,
+            statusName = runtimeApi.statusNamesByValue[status] ?: "STATUS_$status",
+            responseHead = responseHead,
+            message = message,
+        )
+    }
+
+    private fun awaitResponseHead(
+        agentManager: AgentManager,
+        sessionId: String,
+        exchange: HttpExchange,
+    ): HttpResponseHeadResult {
+        val resultObject = invokeChecked {
+            runtimeApi.agentAwaitResponseHeadMethod.invoke(
+                agentManager,
+                sessionId,
+                agentExchangeArgument(runtimeApi.agentAwaitResponseHeadMethod, exchange),
+            )
         }
         val status = invokeChecked {
             runtimeApi.responseHeadResultGetStatusMethod.invoke(resultObject) as Int
@@ -243,6 +362,33 @@ object FrameworkSessionTransportCompat {
                     String::class.java,
                     String::class.java,
                     Bundle::class.java,
+                ),
+                exchangeGetIdMethod = exchangeClass.methods.firstOrNull { method ->
+                    method.parameterCount == 0 &&
+                        method.returnType == String::class.java &&
+                        (method.name == "getExchangeId" || method.name == "getId")
+                },
+                agentOpenExchangeMethod = requireMethod(
+                    owner = AgentManager::class.java,
+                    name = AGENT_OPEN_EXCHANGE_METHOD,
+                    String::class.java,
+                    requestHeadClass,
+                ),
+                agentAwaitResponseHeadMethod = requireOneOfMethods(
+                    owner = AgentManager::class.java,
+                    name = AGENT_AWAIT_RESPONSE_HEAD_METHOD,
+                    listOf(
+                        arrayOf(String::class.java, exchangeClass),
+                        arrayOf(String::class.java, String::class.java),
+                    ),
+                ),
+                agentCancelMethod = requireOneOfMethods(
+                    owner = AgentManager::class.java,
+                    name = AGENT_CANCEL_EXCHANGE_METHOD,
+                    listOf(
+                        arrayOf(String::class.java, exchangeClass),
+                        arrayOf(String::class.java, String::class.java),
+                    ),
                 ),
                 openExchangeMethod = requireMethod(
                     owner = httpBridgeClass,
@@ -317,6 +463,49 @@ object FrameworkSessionTransportCompat {
         } ?: throw NoSuchMethodException(
             "${owner.name}#$name(${parameterTypes.joinToString { it.name }})",
         )
+    }
+
+    private fun requireOneOfMethods(
+        owner: Class<*>,
+        name: String,
+        parameterTypeOptions: List<Array<Class<*>>>,
+    ): Method {
+        return owner.methods.firstOrNull { method ->
+            method.name == name &&
+                parameterTypeOptions.any { option ->
+                    method.parameterCount == option.size &&
+                        method.parameterTypes.contentEquals(option)
+                }
+        } ?: throw NoSuchMethodException(
+            buildString {
+                append(owner.name)
+                append('#')
+                append(name)
+                append('(')
+                append(
+                    parameterTypeOptions.joinToString(" | ") { option ->
+                        option.joinToString(", ") { it.name }
+                    },
+                )
+                append(')')
+            },
+        )
+    }
+
+    private fun agentExchangeArgument(
+        agentMethod: Method,
+        exchange: HttpExchange,
+    ): Any {
+        return if (agentMethod.parameterTypes[1] == String::class.java) {
+            val exchangeIdMethod = runtimeApi.exchangeGetIdMethod
+                ?: throw IOException("Framework HTTP exchange does not expose an exchange id")
+            invokeChecked {
+                exchangeIdMethod.invoke(exchange.runtimeValue) as? String
+            }?.takeIf(String::isNotBlank)
+                ?: throw IOException("Framework HTTP exchange returned a blank exchange id")
+        } else {
+            exchange.runtimeValue
+        }
     }
 
     private fun writeAll(
