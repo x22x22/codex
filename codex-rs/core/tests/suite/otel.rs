@@ -747,7 +747,12 @@ async fn responses_request_span_records_turn_correlation_fields() {
         lines
             .iter()
             .find(|line| {
-                line.contains("responses_http.request{")
+                line.contains("turn{otel.name=\"session_task.turn\"")
+                    && line.contains("conversation.id=")
+                    && line.contains("thread.id=")
+                    && line.contains("turn.id=")
+                    && line.contains("model=")
+                    && line.contains("responses_http.request{")
                     && line.contains("otel.kind=\"client\"")
                     && line.contains("transport=\"responses_http\"")
                     && line.contains("conversation.id=")
@@ -756,7 +761,10 @@ async fn responses_request_span_records_turn_correlation_fields() {
             })
             .map(|_| Ok(()))
             .unwrap_or_else(|| {
-                Err("missing responses_http.request span with correlation fields".to_string())
+                Err(
+                    "missing responses_http.request span nested under session_task.turn"
+                        .to_string(),
+                )
             })
     });
 }

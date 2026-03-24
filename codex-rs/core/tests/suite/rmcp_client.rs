@@ -194,7 +194,12 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         lines
             .iter()
             .find(|line| {
-                line.contains("mcp.tools.call{")
+                line.contains("turn{otel.name=\"session_task.turn\"")
+                    && line.contains("conversation.id=")
+                    && line.contains("thread.id=")
+                    && line.contains("turn.id=")
+                    && line.contains("model=")
+                    && line.contains("mcp.tools.call{")
                     && line.contains("otel.kind=\"client\"")
                     && line.contains("rpc.system=\"jsonrpc\"")
                     && line.contains("rpc.method=\"tools/call\"")
@@ -205,7 +210,9 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                     && line.contains("turn.id=")
             })
             .map(|_| Ok(()))
-            .unwrap_or_else(|| Err("missing mcp.tools.call span with MCP fields".to_string()))
+            .unwrap_or_else(|| {
+                Err("missing mcp.tools.call span nested under session_task.turn".to_string())
+            })
     });
 
     server.verify().await;
