@@ -125,7 +125,10 @@ fn truncates_rollout_from_start_applies_thread_rollback_markers() {
 async fn ignores_session_prefix_messages_when_truncating_rollout_from_start() {
     let (session, turn_context) = make_session_and_context().await;
     let mut items = session
-        .build_initial_context(&turn_context, Vec::new())
+        .build_initial_context(
+            &turn_context,
+            /*additional_developer_sections*/ Vec::new(),
+        )
         .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));

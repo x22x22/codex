@@ -3649,8 +3649,11 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) {
-        self.record_context_updates_with_additional_developer_sections(turn_context, Vec::new())
-            .await;
+        self.record_context_updates_with_additional_developer_sections(
+            turn_context,
+            /*additional_developer_sections*/ Vec::new(),
+        )
+        .await;
     }
 
     // Some turn-local guidance, such as explicit plugin mention hints, belongs in the canonical
