@@ -121,7 +121,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -193,7 +193,7 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: text_elements.clone(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -282,7 +282,7 @@ async fn turn_start_accepts_text_at_limit_with_mention_item() -> Result<()> {
                     path: "app://demo-app".to_string(),
                 },
             ],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -346,7 +346,7 @@ async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
                     text_elements: Vec::new(),
                 },
             ],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -423,7 +423,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -473,7 +473,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
                 text_elements: Vec::new(),
             }],
             model: Some("mock-model-override".to_string()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -570,7 +570,7 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
             model: Some("mock-model-override".to_string()),
             effort: Some(ReasoningEffort::Low),
             summary: Some(ReasoningSummary::Auto),
-            user_message_type: None,
+            submission_type: None,
             output_schema: None,
             collaboration_mode: Some(collaboration_mode),
             ..Default::default()
@@ -658,7 +658,7 @@ async fn turn_start_uses_thread_feature_overrides_for_collaboration_mode_instruc
             model: Some("mock-model-override".to_string()),
             effort: Some(ReasoningEffort::Low),
             summary: Some(ReasoningSummary::Auto),
-            user_message_type: None,
+            submission_type: None,
             output_schema: None,
             collaboration_mode: Some(collaboration_mode),
             ..Default::default()
@@ -728,7 +728,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             personality: Some(Personality::Friendly),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -810,7 +810,7 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             personality: None,
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -835,7 +835,7 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             personality: Some(Personality::Friendly),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -938,7 +938,7 @@ async fn turn_start_uses_migrated_pragmatic_personality_without_override_v2() ->
                 text_elements: Vec::new(),
             }],
             personality: None,
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1007,7 +1007,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::LocalImage { path: image_path }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1095,7 +1095,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 text: "run python".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1165,7 +1165,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1239,7 +1239,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1408,7 +1408,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             summary: Some(ReasoningSummary::Auto),
             service_tier: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
             output_schema: None,
             collaboration_mode: None,
         })
@@ -1442,7 +1442,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             summary: Some(ReasoningSummary::Auto),
             service_tier: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
             output_schema: None,
             collaboration_mode: None,
         })
@@ -1545,7 +1545,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1763,7 +1763,7 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
                 text: PARENT_PROMPT.to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -1978,7 +1978,7 @@ config_file = "./custom-role.toml"
                 text: PARENT_PROMPT.to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -2125,7 +2125,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -2203,7 +2203,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -2307,7 +2307,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -2453,7 +2453,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;

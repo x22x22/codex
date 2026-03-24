@@ -248,7 +248,7 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;

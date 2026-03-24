@@ -206,9 +206,8 @@ pub struct ConversationTextParams {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum UserMessageType {
+pub enum SubmissionType {
     Prompt,
-    PromptSteering,
     PromptQueued,
 }
 
@@ -260,7 +259,7 @@ pub enum Op {
         final_output_json_schema: Option<Value>,
         /// Semantic classification of this submitted user input.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        user_message_type: Option<UserMessageType>,
+        submission_type: Option<SubmissionType>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -322,7 +321,7 @@ pub enum Op {
         /// Semantic classification of this submitted user message when known by
         /// the higher-level surface.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        user_message_type: Option<UserMessageType>,
+        submission_type: Option<SubmissionType>,
     },
 
     /// Inter-agent communication that should be recorded as assistant history

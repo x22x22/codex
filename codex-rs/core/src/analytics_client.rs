@@ -10,6 +10,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::SubmissionType;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -36,13 +37,6 @@ pub(crate) struct CodexTurnEvent {
     pub(crate) reasoning_summary: ReasoningSummary,
     pub(crate) service_tier: Option<ServiceTier>,
     pub(crate) collaboration_mode: ModeKind,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SubmissionType {
-    Prompt,
-    PromptQueued,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

@@ -17,7 +17,6 @@ use crate::analytics_client::AppInvocation;
 use crate::analytics_client::CodexTurnEvent;
 use crate::analytics_client::CodexTurnSteerEvent;
 use crate::analytics_client::InvocationType;
-use crate::analytics_client::SubmissionType;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -106,10 +105,10 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubmissionType;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
-use codex_protocol::protocol::UserMessageType as SubmittedUserMessageType;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -851,7 +850,7 @@ pub(crate) struct TurnContext {
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
-    pub(crate) user_message_type: Option<SubmittedUserMessageType>,
+    pub(crate) submission_type: Option<SubmissionType>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
@@ -948,7 +947,7 @@ impl TurnContext {
             provider: self.provider.clone(),
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
-            user_message_type: None,
+            submission_type: None,
             session_source: self.session_source.clone(),
             environment: Arc::clone(&self.environment),
             cwd: self.cwd.clone(),
@@ -1190,7 +1189,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
-    pub(crate) user_message_type: Option<SubmittedUserMessageType>,
+    pub(crate) submission_type: Option<SubmissionType>,
 }
 
 impl Session {
@@ -1409,7 +1408,7 @@ impl Session {
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
-            user_message_type: None,
+            submission_type: None,
             approval_policy: session_configuration.approval_policy.clone(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
@@ -2401,7 +2400,7 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
-                updates.user_message_type,
+                updates.submission_type,
                 sandbox_policy_changed,
             )
             .await)
@@ -2412,7 +2411,7 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        user_message_type: Option<SubmittedUserMessageType>,
+        submission_type: Option<SubmissionType>,
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
@@ -2480,7 +2479,7 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
-        turn_context.user_message_type = user_message_type;
+        turn_context.submission_type = submission_type;
         let turn_context = Arc::new(turn_context);
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
@@ -2585,7 +2584,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
-            /*user_message_type*/ None,
+            /*submission_type*/ None,
             /*sandbox_policy_changed*/ false,
         )
         .await
@@ -4590,7 +4589,7 @@ mod handlers {
                 items,
                 collaboration_mode,
                 personality,
-                user_message_type,
+                submission_type,
             } => {
                 let collaboration_mode = collaboration_mode.or_else(|| {
                     Some(CollaborationMode {
@@ -4616,7 +4615,7 @@ mod handlers {
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                         app_server_client_name: None,
-                        user_message_type,
+                        submission_type,
                     },
                 )
             }
@@ -4627,19 +4626,19 @@ mod handlers {
                 items,
                 SessionSettingsUpdate {
                     final_output_json_schema: Some(final_output_json_schema),
-                    user_message_type: None,
+                    submission_type: None,
                     ..Default::default()
                 },
             ),
             Op::UserInputWithMetadata {
                 items,
                 final_output_json_schema,
-                user_message_type,
+                submission_type,
             } => (
                 items,
                 SessionSettingsUpdate {
                     final_output_json_schema: Some(final_output_json_schema),
-                    user_message_type,
+                    submission_type,
                     ..Default::default()
                 },
             ),
@@ -5407,7 +5406,7 @@ async fn spawn_review_thread(
         provider: provider_for_context,
         reasoning_effort,
         reasoning_summary,
-        user_message_type: None,
+        submission_type: None,
         session_source,
         environment: Arc::clone(&parent_turn_context.environment),
         tools_config,
@@ -6020,16 +6019,15 @@ pub(crate) async fn run_turn(
     }
 
     if !input.is_empty() {
-        let user_message_type = turn_context
-            .user_message_type
-            .unwrap_or(SubmittedUserMessageType::Prompt);
+        let submission_type = turn_context
+            .submission_type
+            .unwrap_or(SubmissionType::Prompt);
         sess.services.analytics_events_client.track_turn_event(
             tracking,
             CodexTurnEvent {
-                submission_type: match user_message_type {
-                    SubmittedUserMessageType::Prompt => Some(SubmissionType::Prompt),
-                    SubmittedUserMessageType::PromptQueued => Some(SubmissionType::PromptQueued),
-                    SubmittedUserMessageType::PromptSteering => None,
+                submission_type: match submission_type {
+                    SubmissionType::Prompt => Some(SubmissionType::Prompt),
+                    SubmissionType::PromptQueued => Some(SubmissionType::PromptQueued),
                 },
                 sandbox_policy: turn_context.sandbox_policy.get().clone(),
                 reasoning_effort: turn_context.reasoning_effort,

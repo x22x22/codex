@@ -104,7 +104,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 

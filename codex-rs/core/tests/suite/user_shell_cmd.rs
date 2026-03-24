@@ -184,7 +184,7 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 

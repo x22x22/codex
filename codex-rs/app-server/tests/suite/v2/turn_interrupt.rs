@@ -78,7 +78,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(working_directory.clone()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -173,7 +173,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
                 text_elements: Vec::new(),
             }],
             cwd: Some(working_directory),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;

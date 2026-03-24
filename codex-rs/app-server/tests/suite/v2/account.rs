@@ -419,7 +419,7 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -526,7 +526,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -649,7 +649,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -765,7 +765,7 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;

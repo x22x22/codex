@@ -57,7 +57,7 @@ async fn request_user_input_round_trip() -> Result<()> {
             }],
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
-            user_message_type: None,
+            submission_type: None,
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Plan,
                 settings: Settings {

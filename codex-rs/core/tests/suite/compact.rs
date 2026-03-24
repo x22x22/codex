@@ -1666,7 +1666,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await
         .unwrap();
@@ -1758,7 +1758,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await
         .expect("submit first user turn");
@@ -1784,7 +1784,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await
         .expect("submit second user turn");
@@ -1896,7 +1896,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await
         .expect("submit pre-resume turn");
@@ -1946,7 +1946,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await
         .expect("submit resumed user turn");
@@ -3150,7 +3150,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await
         .expect("submit first user turn");
@@ -3176,7 +3176,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await
         .expect("submit second user turn");

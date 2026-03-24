@@ -82,9 +82,9 @@ use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
 use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
+use codex_protocol::protocol::SubmissionType;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
-use codex_protocol::protocol::UserMessageType;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -3919,7 +3919,7 @@ pub struct TurnStartParams {
     /// Classify the primary input message submitted with `turn/start`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
-    pub user_message_type: Option<UserMessageType>,
+    pub submission_type: Option<SubmissionType>,
     /// Optional JSON Schema used to constrain the final assistant message for
     /// this turn.
     #[ts(optional = nullable)]
@@ -8040,7 +8040,7 @@ mod tests {
             effort: None,
             summary: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
             output_schema: None,
             collaboration_mode: None,
         };

@@ -60,7 +60,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
                 text: "materialize".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
