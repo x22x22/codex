@@ -39,9 +39,6 @@ pub(crate) struct CodexTurnEvent {
     pub(crate) collaboration_mode: ModeKind,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct CodexTurnSteerEvent;
-
 pub(crate) fn build_track_events_context(
     model_slug: String,
     thread_id: String,
@@ -105,9 +102,6 @@ impl AnalyticsEventsQueue {
                     }
                     TrackEventsJob::TurnEvent(job) => {
                         send_track_turn_event(&auth_manager, job).await;
-                    }
-                    TrackEventsJob::TurnSteer(job) => {
-                        send_track_turn_steer(&auth_manager, job).await;
                     }
                     TrackEventsJob::PluginUsed(job) => {
                         send_track_plugin_used(&auth_manager, job).await;
@@ -235,19 +229,6 @@ impl AnalyticsEventsClient {
         );
     }
 
-    pub(crate) fn track_turn_steer(
-        &self,
-        tracking: TrackEventsContext,
-        turn_steer: CodexTurnSteerEvent,
-    ) {
-        track_turn_steer(
-            &self.queue,
-            Arc::clone(&self.config),
-            Some(tracking),
-            turn_steer,
-        );
-    }
-
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
@@ -290,7 +271,6 @@ enum TrackEventsJob {
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
     TurnEvent(TrackTurnEventJob),
-    TurnSteer(TrackTurnSteerJob),
     PluginUsed(TrackPluginUsedJob),
     PluginInstalled(TrackPluginManagementJob),
     PluginUninstalled(TrackPluginManagementJob),
@@ -320,12 +300,6 @@ struct TrackTurnEventJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
     turn_event: CodexTurnEvent,
-}
-
-struct TrackTurnSteerJob {
-    config: Arc<Config>,
-    tracking: TrackEventsContext,
-    turn_steer: CodexTurnSteerEvent,
 }
 
 struct TrackPluginUsedJob {
@@ -562,26 +536,6 @@ pub(crate) fn track_turn_event(
     queue.try_send(job);
 }
 
-pub(crate) fn track_turn_steer(
-    queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
-    tracking: Option<TrackEventsContext>,
-    turn_steer: CodexTurnSteerEvent,
-) {
-    if config.analytics_enabled == Some(false) {
-        return;
-    }
-    let Some(tracking) = tracking else {
-        return;
-    };
-    let job = TrackEventsJob::TurnSteer(TrackTurnSteerJob {
-        config,
-        tracking,
-        turn_steer,
-    });
-    queue.try_send(job);
-}
-
 pub(crate) fn track_plugin_used(
     queue: &AnalyticsEventsQueue,
     config: Arc<Config>,
@@ -721,20 +675,6 @@ async fn send_track_turn_event(auth_manager: &AuthManager, job: TrackTurnEventJo
     send_track_events(auth_manager, config, events).await;
 }
 
-async fn send_track_turn_steer(auth_manager: &AuthManager, job: TrackTurnSteerJob) {
-    let TrackTurnSteerJob {
-        config,
-        tracking,
-        turn_steer,
-    } = job;
-    let events = vec![TrackEventRequest::TurnEvent(CodexTurnEventRequest {
-        event_type: "codex_turn_event",
-        event_params: codex_turn_steer_event_params(&tracking, turn_steer),
-    })];
-
-    send_track_events(auth_manager, config, events).await;
-}
-
 async fn send_track_plugin_used(auth_manager: &AuthManager, job: TrackPluginUsedJob) {
     let TrackPluginUsedJob {
         config,
@@ -814,19 +754,6 @@ fn codex_turn_event_params(
         reasoning_summary: Some(turn_event.reasoning_summary.to_string()),
         service_tier: turn_event.service_tier.map(|value| value.to_string()),
         collaboration_mode: Some(collaboration_mode_mode(turn_event.collaboration_mode)),
-    }
-}
-
-fn codex_turn_steer_event_params(
-    tracking: &TrackEventsContext,
-    _turn_steer: CodexTurnSteerEvent,
-) -> CodexTurnEventParams {
-    CodexTurnEventParams {
-        thread_id: Some(tracking.thread_id.clone()),
-        turn_id: Some(tracking.turn_id.clone()),
-        product_client_id: Some(crate::default_client::originator().value),
-        model_slug: Some(tracking.model_slug.clone()),
-        ..Default::default()
     }
 }
 
