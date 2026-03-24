@@ -693,15 +693,21 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
         ]
     );
     assert_eq!(
-        reconstructed.previous_turn_settings,
+        reconstructed
+            .reference_turn_context_state
+            .previous_turn_settings(),
         Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.reference_context_item)
-            .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(
+            reconstructed
+                .reference_turn_context_state
+                .reference_context_item(),
+        )
+        .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected reference context item")
     );
