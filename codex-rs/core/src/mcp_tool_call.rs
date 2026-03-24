@@ -455,6 +455,7 @@ pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this se
 // real "Decline" answer, so this lets guardian denials round-trip distinctly from user cancel.
 // This is not a user-facing option.
 pub(crate) const MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC: &str = "__codex_mcp_decline__";
+pub(crate) const MCP_TOOL_APPROVAL_TIMED_OUT_SYNTHETIC: &str = "__codex_mcp_timed_out__";
 const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
@@ -1195,6 +1196,11 @@ fn parse_mcp_tool_approval_response(
         .any(|answer| answer == MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC)
     {
         McpToolApprovalDecision::Decline
+    } else if answers
+        .iter()
+        .any(|answer| answer == MCP_TOOL_APPROVAL_TIMED_OUT_SYNTHETIC)
+    {
+        McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
     } else if answers
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)

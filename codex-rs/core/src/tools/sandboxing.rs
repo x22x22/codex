@@ -7,7 +7,6 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
-use crate::guardian::GuardianApprovalDecision;
 #[cfg(test)]
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::ExecOptions;
@@ -20,6 +19,7 @@ use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxCommand;
@@ -74,11 +74,11 @@ pub(crate) async fn with_cached_approval<K, F, Fut>(
     tool_name: &str,
     keys: Vec<K>,
     fetch: F,
-) -> ReviewDecision
+) -> ApprovalOutcome
 where
     K: Serialize,
     F: FnOnce() -> Fut,
-    Fut: Future<Output = ReviewDecision>,
+    Fut: Future<Output = ApprovalOutcome>,
 {
     // To be defensive here, don't bother with checking the cache if keys are empty.
     if keys.is_empty() {
@@ -92,58 +92,33 @@ where
     };
 
     if already_approved {
-        return ReviewDecision::ApprovedForSession;
+        return ApprovalOutcome::from(ReviewDecision::ApprovedForSession);
     }
 
-    let decision = fetch().await;
+    let outcome = fetch().await;
 
     services.session_telemetry.counter(
         "codex.approval.requested",
         /*inc*/ 1,
         &[
             ("tool", tool_name),
-            ("approved", decision.to_opaque_string()),
+            ("approved", outcome.to_opaque_string()),
         ],
     );
 
-    if matches!(decision, ReviewDecision::ApprovedForSession) {
+    if matches!(
+        outcome,
+        ApprovalOutcome::Decision {
+            decision: ReviewDecision::ApprovedForSession,
+        }
+    ) {
         let mut store = services.tool_approvals.lock().await;
         for key in keys {
             store.put(key, ReviewDecision::ApprovedForSession);
         }
     }
 
-    decision
-}
-
-#[derive(Debug)]
-pub(crate) enum ApprovalOutcome {
-    Decision(ReviewDecision),
-    TimedOut,
-}
-
-impl ApprovalOutcome {
-    pub(crate) fn decision_for_telemetry(&self) -> ReviewDecision {
-        match self {
-            Self::Decision(decision) => decision.clone(),
-            Self::TimedOut => ReviewDecision::Denied,
-        }
-    }
-}
-
-impl From<ReviewDecision> for ApprovalOutcome {
-    fn from(value: ReviewDecision) -> Self {
-        Self::Decision(value)
-    }
-}
-
-impl From<GuardianApprovalDecision> for ApprovalOutcome {
-    fn from(value: GuardianApprovalDecision) -> Self {
-        match value {
-            GuardianApprovalDecision::TimedOut => Self::TimedOut,
-            decision => Self::Decision(decision.into_review_decision()),
-        }
-    }
+    outcome
 }
 
 #[derive(Clone)]

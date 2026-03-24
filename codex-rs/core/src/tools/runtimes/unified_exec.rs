@@ -23,7 +23,6 @@ use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalOutcome;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
@@ -40,6 +39,7 @@ use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_sandboxing::SandboxablePreference;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -160,7 +160,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     .await
             })
             .await
-            .into()
         })
     }
 

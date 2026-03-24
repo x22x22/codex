@@ -16,7 +16,6 @@ use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_sandbox_command;
-use crate::tools::sandboxing::ApprovalOutcome;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
@@ -31,6 +30,7 @@ use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
@@ -488,7 +488,6 @@ impl CoreShellActionProvider {
                         Some(available_decisions),
                     )
                     .await
-                    .into()
             })
             .await)
     }
@@ -555,17 +554,20 @@ impl CoreShellActionProvider {
                         ApprovalOutcome::TimedOut => {
                             EscalationDecision::deny(Some(GUARDIAN_TIMEOUT_MESSAGE.to_string()))
                         }
-                        ApprovalOutcome::Decision(
-                            ReviewDecision::Approved
-                            | ReviewDecision::ApprovedExecpolicyAmendment { .. },
-                        ) => {
+                        ApprovalOutcome::Decision {
+                            decision:
+                                ReviewDecision::Approved
+                                | ReviewDecision::ApprovedExecpolicyAmendment { .. },
+                        } => {
                             if needs_escalation {
                                 EscalationDecision::escalate(escalation_execution.clone())
                             } else {
                                 EscalationDecision::run()
                             }
                         }
-                        ApprovalOutcome::Decision(ReviewDecision::ApprovedForSession) => {
+                        ApprovalOutcome::Decision {
+                            decision: ReviewDecision::ApprovedForSession,
+                        } => {
                             // Currently, we only add session approvals for
                             // skill scripts because we are storing only the
                             // `program` whereas prefix rules may be restricted by a longer prefix.
@@ -592,9 +594,12 @@ impl CoreShellActionProvider {
                                 EscalationDecision::run()
                             }
                         }
-                        ApprovalOutcome::Decision(ReviewDecision::NetworkPolicyAmendment {
-                            network_policy_amendment,
-                        }) => match network_policy_amendment.action {
+                        ApprovalOutcome::Decision {
+                            decision:
+                                ReviewDecision::NetworkPolicyAmendment {
+                                    network_policy_amendment,
+                                },
+                        } => match network_policy_amendment.action {
                             NetworkPolicyRuleAction::Allow => {
                                 if needs_escalation {
                                     EscalationDecision::escalate(escalation_execution.clone())
@@ -606,12 +611,12 @@ impl CoreShellActionProvider {
                                 EscalationDecision::deny(Some("User denied execution".to_string()))
                             }
                         },
-                        ApprovalOutcome::Decision(ReviewDecision::Denied) => {
-                            EscalationDecision::deny(Some("User denied execution".to_string()))
-                        }
-                        ApprovalOutcome::Decision(ReviewDecision::Abort) => {
-                            EscalationDecision::deny(Some("User cancelled execution".to_string()))
-                        }
+                        ApprovalOutcome::Decision {
+                            decision: ReviewDecision::Denied,
+                        } => EscalationDecision::deny(Some("User denied execution".to_string())),
+                        ApprovalOutcome::Decision {
+                            decision: ReviewDecision::Abort,
+                        } => EscalationDecision::deny(Some("User cancelled execution".to_string())),
                     }
                 }
             }

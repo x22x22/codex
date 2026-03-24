@@ -25,7 +25,6 @@ use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalOutcome;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
@@ -37,6 +36,7 @@ use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_sandboxing::SandboxablePreference;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -191,7 +191,6 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     .await
             })
             .await
-            .into()
         })
     }
 

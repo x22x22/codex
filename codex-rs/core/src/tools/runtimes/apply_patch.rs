@@ -14,7 +14,6 @@ use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalOutcome;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
@@ -25,6 +24,7 @@ use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
@@ -144,7 +144,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                     .into();
             }
             if req.permissions_preapproved && retry_reason.is_none() {
-                return ApprovalOutcome::Decision(ReviewDecision::Approved);
+                return ApprovalOutcome::from(ReviewDecision::Approved);
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -156,7 +156,9 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         /*grant_root*/ None,
                     )
                     .await;
-                return ApprovalOutcome::Decision(rx_approve.await.unwrap_or_default());
+                return rx_approve
+                    .await
+                    .unwrap_or_else(|_| ApprovalOutcome::from(ReviewDecision::Abort));
             }
 
             with_cached_approval(
@@ -169,11 +171,12 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                             turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
                         )
                         .await;
-                    rx_approve.await.unwrap_or_default()
+                    rx_approve
+                        .await
+                        .unwrap_or_else(|_| ApprovalOutcome::from(ReviewDecision::Abort))
                 },
             )
             .await
-            .into()
         })
     }
 

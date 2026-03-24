@@ -19,7 +19,6 @@ use crate::tools::network_approval::begin_network_approval;
 use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::network_approval::finish_immediate_network_approval;
 use crate::tools::sandboxing::ApprovalCtx;
-use crate::tools::sandboxing::ApprovalOutcome;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxOverride;
@@ -28,6 +27,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
@@ -135,7 +135,12 @@ impl ToolOrchestrator {
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
-                otel.tool_decision(otel_tn, otel_ci, &ReviewDecision::Approved, otel_cfg);
+                otel.tool_decision(
+                    otel_tn,
+                    otel_ci,
+                    &ApprovalOutcome::from(ReviewDecision::Approved),
+                    otel_cfg,
+                );
             }
             ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason));
@@ -154,26 +159,29 @@ impl ToolOrchestrator {
                 } else {
                     otel_user.clone()
                 };
-                let decision = approval_outcome.decision_for_telemetry();
-
-                otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
+                otel.tool_decision(otel_tn, otel_ci, &approval_outcome, otel_source);
 
                 match approval_outcome {
                     ApprovalOutcome::TimedOut => {
                         return Err(ToolError::Message(GUARDIAN_TIMEOUT_MESSAGE.to_string()));
                     }
-                    ApprovalOutcome::Decision(ReviewDecision::Denied)
-                    | ApprovalOutcome::Decision(ReviewDecision::Abort) => {
+                    ApprovalOutcome::Decision {
+                        decision: ReviewDecision::Denied | ReviewDecision::Abort,
+                    } => {
                         return Err(approval_denial_tool_error(turn_ctx));
                     }
-                    ApprovalOutcome::Decision(
-                        ReviewDecision::Approved
-                        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                        | ReviewDecision::ApprovedForSession,
-                    ) => {}
-                    ApprovalOutcome::Decision(ReviewDecision::NetworkPolicyAmendment {
-                        network_policy_amendment,
-                    }) => match network_policy_amendment.action {
+                    ApprovalOutcome::Decision {
+                        decision:
+                            ReviewDecision::Approved
+                            | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                            | ReviewDecision::ApprovedForSession,
+                    } => {}
+                    ApprovalOutcome::Decision {
+                        decision:
+                            ReviewDecision::NetworkPolicyAmendment {
+                                network_policy_amendment,
+                            },
+                    } => match network_policy_amendment.action {
                         NetworkPolicyRuleAction::Allow => {}
                         NetworkPolicyRuleAction::Deny => {
                             return Err(ToolError::Rejected("rejected by user".to_string()));
@@ -310,25 +318,29 @@ impl ToolOrchestrator {
                     } else {
                         otel_user
                     };
-                    let decision = approval_outcome.decision_for_telemetry();
-                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
+                    otel.tool_decision(otel_tn, otel_ci, &approval_outcome, otel_source);
 
                     match approval_outcome {
                         ApprovalOutcome::TimedOut => {
                             return Err(ToolError::Message(GUARDIAN_TIMEOUT_MESSAGE.to_string()));
                         }
-                        ApprovalOutcome::Decision(ReviewDecision::Denied)
-                        | ApprovalOutcome::Decision(ReviewDecision::Abort) => {
+                        ApprovalOutcome::Decision {
+                            decision: ReviewDecision::Denied | ReviewDecision::Abort,
+                        } => {
                             return Err(approval_denial_tool_error(turn_ctx));
                         }
-                        ApprovalOutcome::Decision(
-                            ReviewDecision::Approved
-                            | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                            | ReviewDecision::ApprovedForSession,
-                        ) => {}
-                        ApprovalOutcome::Decision(ReviewDecision::NetworkPolicyAmendment {
-                            network_policy_amendment,
-                        }) => match network_policy_amendment.action {
+                        ApprovalOutcome::Decision {
+                            decision:
+                                ReviewDecision::Approved
+                                | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                                | ReviewDecision::ApprovedForSession,
+                        } => {}
+                        ApprovalOutcome::Decision {
+                            decision:
+                                ReviewDecision::NetworkPolicyAmendment {
+                                    network_policy_amendment,
+                                },
+                        } => match network_policy_amendment.action {
                             NetworkPolicyRuleAction::Allow => {}
                             NetworkPolicyRuleAction::Deny => {
                                 return Err(ToolError::Rejected("rejected by user".to_string()));

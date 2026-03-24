@@ -17,6 +17,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -420,12 +421,18 @@ impl NetworkApprovalService {
                 )
                 .await
             {
-                ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-                    PendingApprovalDecision::AllowOnce
-                }
-                ReviewDecision::ApprovedForSession => PendingApprovalDecision::AllowForSession,
-                ReviewDecision::NetworkPolicyAmendment {
-                    network_policy_amendment,
+                ApprovalOutcome::Decision {
+                    decision:
+                        ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. },
+                } => PendingApprovalDecision::AllowOnce,
+                ApprovalOutcome::Decision {
+                    decision: ReviewDecision::ApprovedForSession,
+                } => PendingApprovalDecision::AllowForSession,
+                ApprovalOutcome::Decision {
+                    decision:
+                        ReviewDecision::NetworkPolicyAmendment {
+                            network_policy_amendment,
+                        },
                 } => match network_policy_amendment.action {
                     NetworkPolicyRuleAction::Allow => {
                         match session
@@ -496,11 +503,25 @@ impl NetworkApprovalService {
                         PendingApprovalDecision::Deny
                     }
                 },
-                ReviewDecision::Denied | ReviewDecision::Abort => {
+                ApprovalOutcome::Decision {
+                    decision: ReviewDecision::Denied | ReviewDecision::Abort,
+                } => {
                     if let Some(owner_call) = owner_call.as_ref() {
                         self.record_call_outcome(
                             &owner_call.registration_id,
                             NetworkApprovalOutcome::DeniedByUser,
+                        )
+                        .await;
+                    }
+                    PendingApprovalDecision::Deny
+                }
+                ApprovalOutcome::TimedOut => {
+                    if let Some(owner_call) = owner_call.as_ref() {
+                        self.record_call_outcome(
+                            &owner_call.registration_id,
+                            NetworkApprovalOutcome::TimedOutByReviewer(
+                                GUARDIAN_TIMEOUT_MESSAGE.to_string(),
+                            ),
                         )
                         .await;
                     }

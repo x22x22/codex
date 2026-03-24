@@ -2213,7 +2213,9 @@ async fn on_patch_approval_response(
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
                     id: call_id.clone(),
-                    decision: ReviewDecision::Denied,
+                    outcome: codex_protocol::protocol::ApprovalOutcome::from(
+                        ReviewDecision::Denied,
+                    ),
                 })
                 .await
             {
@@ -2226,7 +2228,9 @@ async fn on_patch_approval_response(
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
                     id: call_id.clone(),
-                    decision: ReviewDecision::Denied,
+                    outcome: codex_protocol::protocol::ApprovalOutcome::from(
+                        ReviewDecision::Denied,
+                    ),
                 })
                 .await
             {
@@ -2247,7 +2251,7 @@ async fn on_patch_approval_response(
     if let Err(err) = codex
         .submit(Op::PatchApproval {
             id: call_id,
-            decision: response.decision,
+            outcome: codex_protocol::protocol::ApprovalOutcome::from(response.decision),
         })
         .await
     {
@@ -2290,7 +2294,7 @@ async fn on_exec_approval_response(
         .submit(Op::ExecApproval {
             id: call_id,
             turn_id: Some(turn_id),
-            decision: response.decision,
+            outcome: codex_protocol::protocol::ApprovalOutcome::from(response.decision),
         })
         .await
     {
@@ -2612,7 +2616,7 @@ async fn on_file_change_request_approval_response(
     if let Err(err) = codex
         .submit(Op::PatchApproval {
             id: item_id,
-            decision,
+            outcome: codex_protocol::protocol::ApprovalOutcome::from(decision),
         })
         .await
     {
@@ -2736,7 +2740,7 @@ async fn on_command_execution_request_approval_response(
         .submit(Op::ExecApproval {
             id: approval_id.unwrap_or_else(|| item_id.clone()),
             turn_id: Some(event_turn_id),
-            decision,
+            outcome: codex_protocol::protocol::ApprovalOutcome::from(decision),
         })
         .await
     {

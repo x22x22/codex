@@ -848,6 +848,26 @@ fn synthetic_decline_request_user_input_response_stays_decline() {
 }
 
 #[test]
+fn synthetic_timeout_request_user_input_response_stays_timed_out() {
+    let response = parse_mcp_tool_approval_response(
+        Some(RequestUserInputResponse {
+            answers: HashMap::from([(
+                "approval".to_string(),
+                RequestUserInputAnswer {
+                    answers: vec![MCP_TOOL_APPROVAL_TIMED_OUT_SYNTHETIC.to_string()],
+                },
+            )]),
+        }),
+        "approval",
+    );
+
+    assert_eq!(
+        response,
+        McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
+    );
+}
+
+#[test]
 fn accepted_elicitation_response_uses_always_persist_meta() {
     let response = parse_mcp_tool_approval_elicitation_response(
         Some(ElicitationResponse {

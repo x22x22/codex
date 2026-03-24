@@ -3529,7 +3529,12 @@ async fn exec_approval_uses_approval_id_when_present() {
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp {
-            op: Op::ExecApproval { id, decision, .. },
+            op:
+                Op::ExecApproval {
+                    id,
+                    outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision },
+                    ..
+                },
             ..
         } = app_ev
         {
@@ -11647,7 +11652,11 @@ async fn apply_patch_approval_sends_op_with_call_id() {
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp {
-            op: Op::PatchApproval { id, decision },
+            op:
+                Op::PatchApproval {
+                    id,
+                    outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision },
+                },
             ..
         } = app_ev
         {
@@ -11698,7 +11707,10 @@ async fn apply_patch_full_flow_integration_like() {
         .try_recv()
         .expect("expected op forwarded to codex channel");
     match forwarded {
-        Op::PatchApproval { id, decision } => {
+        Op::PatchApproval {
+            id,
+            outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision },
+        } => {
             assert_eq!(id, "call-1");
             assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
         }
