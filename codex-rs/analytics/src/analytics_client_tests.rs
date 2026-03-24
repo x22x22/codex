@@ -214,7 +214,7 @@ fn turn_event_serializes_expected_shape() {
         thread_id: "thread-2".to_string(),
         turn_id: "turn-2".to_string(),
     };
-    let event = TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
+    let event = TrackEventRequest::TurnEvent(CodexTurnEventRequest {
         event_type: "codex_turn_event",
         event_params: codex_turn_event_params(
             &tracking,
@@ -253,7 +253,7 @@ fn turn_event_serializes_expected_shape() {
                 completed_at: None,
             },
         ),
-    }));
+    });
 
     let payload = serde_json::to_value(&event).expect("serialize turn event");
 
