@@ -384,6 +384,111 @@
         }
       ]
     },
+    "BrowserReplayFrame": {
+      "properties": {
+        "browserState": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrowserSessionState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "imageUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sequenceNumber": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sourceItemId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/DynamicToolCallStatus"
+        },
+        "textSnapshot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "textSnapshotFormat": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrowserReplayTextSnapshotFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequenceNumber",
+        "sourceItemId",
+        "status",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "BrowserReplayRenderMode": {
+      "enum": [
+        "animation",
+        "frames",
+        "textOnly"
+      ],
+      "type": "string"
+    },
+    "BrowserReplayTextSnapshotFormat": {
+      "enum": [
+        "plain",
+        "json"
+      ],
+      "type": "string"
+    },
+    "BrowserSessionArtifacts": {
+      "properties": {
+        "replayFrameCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "replayFrameDurationMs": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "replayGifImageUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screenshotImageUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "BrowserSessionState": {
       "properties": {
         "selectedTabId": {
@@ -404,6 +509,16 @@
     },
     "BrowserSessionUpdatedNotification": {
       "properties": {
+        "artifacts": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrowserSessionArtifacts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "browserSessionId": {
           "type": "string"
         },
@@ -2758,6 +2873,51 @@
             "type"
           ],
           "title": "DynamicToolCallThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "animationImageUrl": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "frameDurationMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "frames": {
+              "items": {
+                "$ref": "#/definitions/BrowserReplayFrame"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "renderMode": {
+              "$ref": "#/definitions/BrowserReplayRenderMode"
+            },
+            "type": {
+              "enum": [
+                "browserReplay"
+              ],
+              "title": "BrowserReplayThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "frames",
+            "id",
+            "renderMode",
+            "type"
+          ],
+          "title": "BrowserReplayThreadItem",
           "type": "object"
         },
         {

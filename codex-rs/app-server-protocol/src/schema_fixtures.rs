@@ -5,6 +5,7 @@ use crate::ServerRequest;
 use crate::export::GENERATED_TS_HEADER;
 use crate::export::filter_experimental_ts_tree;
 use crate::export::generate_index_ts_tree;
+use crate::export::normalize_typescript_text;
 use crate::protocol::common::visit_client_response_types;
 use crate::protocol::common::visit_server_response_types;
 use anyhow::Context;
@@ -129,11 +130,9 @@ fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
         return Ok(normalized);
     }
     if path.extension().is_some_and(|ext| ext == "ts") {
-        // Windows checkouts (and some generators) may produce CRLF; normalize so the
-        // fixture test is platform-independent.
         let text = String::from_utf8(bytes)
             .with_context(|| format!("expected UTF-8 TypeScript in {}", path.display()))?;
-        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let text = normalize_typescript_text(&text);
         // Fixture comparisons care about schema content, not whether the generator
         // re-prepended the standard banner to every TypeScript file.
         let text = text
@@ -276,10 +275,7 @@ fn collect_typescript_fixture_file<T: TS + 'static + ?Sized>(
 
     let contents = T::export_to_string().context("export TypeScript fixture content")?;
     let output_path = normalize_relative_fixture_path(&output_path);
-    files.insert(
-        output_path,
-        contents.replace("\r\n", "\n").replace('\r', "\n"),
-    );
+    files.insert(output_path, normalize_typescript_text(&contents));
 
     let mut visitor = TypeScriptFixtureCollector {
         files,

@@ -1,4 +1,6 @@
+use crate::atlas_command::merge_atlas_command_dynamic_tool;
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::browser_replay::augment_turns_with_browser_replays;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
 use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
@@ -1992,7 +1994,9 @@ impl CodexMessageProcessor {
         };
 
         let dynamic_tools = if listener_task_context.remote_browser_api.is_configured() {
-            merge_remote_browser_dynamic_tools(dynamic_tools.unwrap_or_default())
+            let dynamic_tools =
+                merge_remote_browser_dynamic_tools(dynamic_tools.unwrap_or_default());
+            merge_atlas_command_dynamic_tool(dynamic_tools)
         } else {
             dynamic_tools.unwrap_or_default()
         };
@@ -3299,11 +3303,28 @@ impl CodexMessageProcessor {
         self.attach_thread_name(thread_uuid, &mut thread).await;
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
-            match read_rollout_items_from_rollout(rollout_path).await {
-                Ok(items) => {
-                    thread.turns = build_turns_from_rollout_items(&items);
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let active_turn = if loaded_thread.is_some() {
+                let state = self.thread_state_manager.thread_state(thread_uuid).await;
+                let state = state.lock().await;
+                state.active_turn_snapshot()
+            } else {
+                None
+            };
+
+            if let Err(message) = populate_thread_turns(
+                &mut thread,
+                ThreadTurnSource::RolloutPath(rollout_path),
+                active_turn.as_ref(),
+            )
+            .await
+            {
+                let missing_rollout_message = format!(
+                    "failed to load rollout `{}` for thread {thread_uuid}: ",
+                    rollout_path.display()
+                );
+                if message.contains(&missing_rollout_message)
+                    && message.contains("No such file or directory")
+                {
                     self.send_invalid_request_error(
                         request_id,
                         format!(
@@ -3313,17 +3334,9 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
-                Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!(
-                            "failed to load rollout `{}` for thread {thread_uuid}: {err}",
-                            rollout_path.display()
-                        ),
-                    )
-                    .await;
-                    return;
-                }
+
+                self.send_internal_error(request_id, message).await;
+                return;
             }
         }
 
@@ -7473,6 +7486,7 @@ async fn populate_thread_turns(
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
     }
+    augment_turns_with_browser_replays(&mut turns);
     thread.turns = turns;
     Ok(())
 }

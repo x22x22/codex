@@ -116,6 +116,10 @@ impl RemoteBrowserCommandOutcome {
             .map(|encoded| format!("data:image/png;base64,{encoded}"))
     }
 
+    pub(crate) fn screenshot_base64(&self) -> Option<String> {
+        self.artifacts.screenshot_base64.clone()
+    }
+
     pub(crate) fn replay_gif_data_url(&self) -> Option<String> {
         self.artifacts
             .replay_gif_base64

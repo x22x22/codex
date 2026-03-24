@@ -4,6 +4,119 @@
     "AgentPath": {
       "type": "string"
     },
+    "BrowserReplayFrame": {
+      "properties": {
+        "browserState": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrowserSessionState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "imageUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sequenceNumber": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "sourceItemId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/DynamicToolCallStatus"
+        },
+        "textSnapshot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "textSnapshotFormat": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BrowserReplayTextSnapshotFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequenceNumber",
+        "sourceItemId",
+        "status",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "BrowserReplayRenderMode": {
+      "enum": [
+        "animation",
+        "frames",
+        "textOnly"
+      ],
+      "type": "string"
+    },
+    "BrowserReplayTextSnapshotFormat": {
+      "enum": [
+        "plain",
+        "json"
+      ],
+      "type": "string"
+    },
+    "BrowserSessionState": {
+      "properties": {
+        "selectedTabId": {
+          "type": "string"
+        },
+        "tabs": {
+          "items": {
+            "$ref": "#/definitions/BrowserTabState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "selectedTabId",
+        "tabs"
+      ],
+      "type": "object"
+    },
+    "BrowserTabState": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "selected": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "selected",
+        "title",
+        "url"
+      ],
+      "type": "object"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -1275,6 +1388,51 @@
             "type"
           ],
           "title": "DynamicToolCallThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "animationImageUrl": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "frameDurationMs": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "frames": {
+              "items": {
+                "$ref": "#/definitions/BrowserReplayFrame"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "renderMode": {
+              "$ref": "#/definitions/BrowserReplayRenderMode"
+            },
+            "type": {
+              "enum": [
+                "browserReplay"
+              ],
+              "title": "BrowserReplayThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "frames",
+            "id",
+            "renderMode",
+            "type"
+          ],
+          "title": "BrowserReplayThreadItem",
           "type": "object"
         },
         {

@@ -4335,6 +4335,19 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    BrowserReplay {
+        id: String,
+        frames: Vec<BrowserReplayFrame>,
+        render_mode: BrowserReplayRenderMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional = nullable)]
+        animation_image_url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional = nullable)]
+        frame_duration_ms: Option<u32>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     CollabAgentToolCall {
         /// Unique identifier for this collab tool call.
         id: String,
@@ -4396,6 +4409,45 @@ pub struct HookPromptFragment {
     pub hook_run_id: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct BrowserReplayFrame {
+    pub sequence_number: u32,
+    pub source_item_id: String,
+    pub tool: String,
+    pub status: DynamicToolCallStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub text_snapshot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub text_snapshot_format: Option<BrowserReplayTextSnapshotFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub browser_state: Option<BrowserSessionState>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum BrowserReplayRenderMode {
+    Animation,
+    Frames,
+    TextOnly,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum BrowserReplayTextSnapshotFormat {
+    Plain,
+    Json,
+}
+
 impl ThreadItem {
     pub fn id(&self) -> &str {
         match self {
@@ -4408,6 +4460,7 @@ impl ThreadItem {
             | ThreadItem::FileChange { id, .. }
             | ThreadItem::McpToolCall { id, .. }
             | ThreadItem::DynamicToolCall { id, .. }
+            | ThreadItem::BrowserReplay { id, .. }
             | ThreadItem::CollabAgentToolCall { id, .. }
             | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
@@ -8007,6 +8060,104 @@ mod tests {
                     }
                 ],
                 "success": true,
+            })
+        );
+    }
+
+    #[test]
+    fn browser_replay_thread_item_serializes_animation_fields() {
+        let value = serde_json::to_value(ThreadItem::BrowserReplay {
+            id: "browser-replay-turn-1".to_string(),
+            frames: vec![BrowserReplayFrame {
+                sequence_number: 1,
+                source_item_id: "tool-call-1".to_string(),
+                tool: "create_tab".to_string(),
+                status: DynamicToolCallStatus::Completed,
+                image_url: Some("data:image/png;base64,AAA".to_string()),
+                text_snapshot: Some("Opened Hacker News".to_string()),
+                text_snapshot_format: Some(BrowserReplayTextSnapshotFormat::Plain),
+                browser_state: Some(BrowserSessionState {
+                    selected_tab_id: "tab_123".to_string(),
+                    tabs: vec![BrowserTabState {
+                        id: "tab_123".to_string(),
+                        title: "Hacker News".to_string(),
+                        url: "https://news.ycombinator.com/".to_string(),
+                        selected: true,
+                    }],
+                }),
+            }],
+            render_mode: BrowserReplayRenderMode::Animation,
+            animation_image_url: Some("data:image/gif;base64,R0lGODlh".to_string()),
+            frame_duration_ms: Some(700),
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "type": "browserReplay",
+                "id": "browser-replay-turn-1",
+                "renderMode": "animation",
+                "frames": [{
+                    "sequenceNumber": 1,
+                    "sourceItemId": "tool-call-1",
+                    "tool": "create_tab",
+                    "status": "completed",
+                    "imageUrl": "data:image/png;base64,AAA",
+                    "textSnapshot": "Opened Hacker News",
+                    "textSnapshotFormat": "plain",
+                    "browserState": {
+                        "selectedTabId": "tab_123",
+                        "tabs": [{
+                            "id": "tab_123",
+                            "title": "Hacker News",
+                            "url": "https://news.ycombinator.com/",
+                            "selected": true
+                        }]
+                    }
+                }],
+                "animationImageUrl": "data:image/gif;base64,R0lGODlh",
+                "frameDurationMs": 700
+            })
+        );
+    }
+
+    #[test]
+    fn browser_replay_thread_item_serializes_text_only_fields() {
+        let value = serde_json::to_value(ThreadItem::BrowserReplay {
+            id: "browser-replay-turn-2".to_string(),
+            frames: vec![BrowserReplayFrame {
+                sequence_number: 1,
+                source_item_id: "tool-call-2".to_string(),
+                tool: "tabs_content".to_string(),
+                status: DynamicToolCallStatus::Completed,
+                image_url: None,
+                text_snapshot: Some(
+                    "{\n  \"tree\": {\n    \"role\": \"document\"\n  }\n}".to_string(),
+                ),
+                text_snapshot_format: Some(BrowserReplayTextSnapshotFormat::Json),
+                browser_state: None,
+            }],
+            render_mode: BrowserReplayRenderMode::TextOnly,
+            animation_image_url: None,
+            frame_duration_ms: None,
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "type": "browserReplay",
+                "id": "browser-replay-turn-2",
+                "renderMode": "textOnly",
+                "frames": [{
+                    "sequenceNumber": 1,
+                    "sourceItemId": "tool-call-2",
+                    "tool": "tabs_content",
+                    "status": "completed",
+                    "textSnapshot": "{\n  \"tree\": {\n    \"role\": \"document\"\n  }\n}",
+                    "textSnapshotFormat": "json",
+                }],
             })
         );
     }

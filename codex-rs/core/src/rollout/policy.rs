@@ -128,9 +128,9 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabAgentInteractionEnd(_)
         | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseEnd(_)
-        | EventMsg::CollabResumeEnd(_)
-        | EventMsg::DynamicToolCallRequest(_)
-        | EventMsg::DynamicToolCallResponse(_) => Some(EventPersistenceMode::Extended),
+        | EventMsg::CollabResumeEnd(_) => Some(EventPersistenceMode::Extended),
+        EventMsg::DynamicToolCallResponse(_) => Some(EventPersistenceMode::Limited),
+        EventMsg::DynamicToolCallRequest(_) => Some(EventPersistenceMode::Extended),
         EventMsg::Warning(_)
         | EventMsg::RealtimeConversationStarted(_)
         | EventMsg::RealtimeConversationRealtime(_)
@@ -188,8 +188,11 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
 mod tests {
     use super::EventPersistenceMode;
     use super::should_persist_event_msg;
+    use codex_protocol::dynamic_tools::DynamicToolCallRequest;
+    use codex_protocol::protocol::DynamicToolCallResponseEvent;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ImageGenerationEndEvent;
+    use std::time::Duration;
 
     #[test]
     fn persists_image_generation_end_events_in_limited_mode() {
@@ -204,6 +207,44 @@ mod tests {
         assert!(should_persist_event_msg(
             &event,
             EventPersistenceMode::Limited
+        ));
+    }
+
+    #[test]
+    fn persists_dynamic_tool_responses_in_limited_mode() {
+        let event = EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+            call_id: "dyn_123".into(),
+            turn_id: "turn_123".into(),
+            tool: "create_tab".into(),
+            arguments: serde_json::json!({ "url": "https://example.com" }),
+            content_items: Vec::new(),
+            success: true,
+            error: None,
+            duration: Duration::from_millis(250),
+        });
+
+        assert!(should_persist_event_msg(
+            &event,
+            EventPersistenceMode::Limited
+        ));
+    }
+
+    #[test]
+    fn does_not_persist_dynamic_tool_requests_in_limited_mode() {
+        let event = EventMsg::DynamicToolCallRequest(DynamicToolCallRequest {
+            call_id: "dyn_123".into(),
+            turn_id: "turn_123".into(),
+            tool: "create_tab".into(),
+            arguments: serde_json::json!({ "url": "https://example.com" }),
+        });
+
+        assert!(!should_persist_event_msg(
+            &event,
+            EventPersistenceMode::Limited
+        ));
+        assert!(should_persist_event_msg(
+            &event,
+            EventPersistenceMode::Extended
         ));
     }
 }

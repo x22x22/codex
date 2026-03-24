@@ -179,6 +179,10 @@ pub fn generate_ts_with_options(
         }
     }
 
+    if !ts_files.is_empty() {
+        normalize_generated_ts_files(&ts_files)?;
+    }
+
     Ok(())
 }
 
@@ -1904,6 +1908,41 @@ fn prepend_header_if_missing(path: &Path) -> Result<()> {
         .with_context(|| format!("Failed to write header to {}", path.display()))?;
     f.write_all(content.as_bytes())
         .with_context(|| format!("Failed to write content to {}", path.display()))?;
+    Ok(())
+}
+
+pub(crate) fn normalize_typescript_text(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let had_trailing_newline = normalized.ends_with('\n');
+    let mut result = normalized
+        .split('\n')
+        .map(|line| line.trim_end_matches([' ', '\t']))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if had_trailing_newline && !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
+fn normalize_generated_ts_files(paths: &[PathBuf]) -> Result<()> {
+    for path in paths {
+        if !path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name == "ThreadItem.ts")
+        {
+            continue;
+        }
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read generated TypeScript {}", path.display()))?;
+        let normalized = normalize_typescript_text(&content);
+        if normalized == content {
+            continue;
+        }
+        fs::write(path, normalized)
+            .with_context(|| format!("Failed to normalize {}", path.display()))?;
+    }
     Ok(())
 }
 

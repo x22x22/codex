@@ -52,6 +52,7 @@ codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
+image = { workspace = true, features = ["gif", "jpeg", "png", "webp"] }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }

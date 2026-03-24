@@ -57,7 +57,9 @@ use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
 mod app_server_tracing;
+mod atlas_command;
 mod bespoke_event_handling;
+mod browser_replay;
 mod codex_message_processor;
 mod command_exec;
 mod config_api;

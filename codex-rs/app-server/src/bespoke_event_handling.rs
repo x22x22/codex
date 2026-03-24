@@ -1,3 +1,5 @@
+use crate::atlas_command::execute_atlas_command;
+use crate::atlas_command::is_atlas_command_dynamic_tool;
 use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
@@ -284,6 +286,42 @@ async fn handle_remote_browser_dynamic_tool_request(
     };
 
     submit_dynamic_tool_response(conversation, call_id, response).await;
+}
+
+async fn handle_atlas_command_dynamic_tool_request(
+    call_id: String,
+    arguments: JsonValue,
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+    outgoing: ThreadScopedOutgoingMessageSender,
+    remote_browser_api: RemoteBrowserApi,
+) {
+    let browser_session_id = { thread_state.lock().await.remote_browser_session_id.clone() };
+    let outcome = execute_atlas_command(&remote_browser_api, browser_session_id, arguments).await;
+
+    if let Some(browser_session_id) = outcome.browser_session_id.clone() {
+        let mut state = thread_state.lock().await;
+        state.remote_browser_session_id = Some(browser_session_id);
+    }
+
+    if let Some(browser_state) = outcome.browser_state {
+        outgoing
+            .send_server_notification(ServerNotification::BrowserSessionUpdated(
+                BrowserSessionUpdatedNotification {
+                    browser_session_id: outcome.browser_session_id.unwrap_or_default(),
+                    browser_state,
+                    artifacts: outcome.artifacts,
+                },
+            ))
+            .await;
+    }
+
+    submit_dynamic_tool_response(
+        conversation,
+        call_id,
+        to_core_dynamic_tool_response(outcome.response),
+    )
+    .await;
 }
 
 fn guardian_auto_approval_review_notification(
@@ -1013,7 +1051,18 @@ pub(crate) async fn apply_bespoke_event_handling(
                 outgoing
                     .send_server_notification(ServerNotification::ItemStarted(notification))
                     .await;
-                if remote_browser_api.is_configured() && is_remote_browser_dynamic_tool(&tool) {
+                if remote_browser_api.is_configured() && is_atlas_command_dynamic_tool(&tool) {
+                    tokio::spawn(handle_atlas_command_dynamic_tool_request(
+                        call_id,
+                        arguments,
+                        conversation,
+                        thread_state.clone(),
+                        outgoing.clone(),
+                        remote_browser_api.clone(),
+                    ));
+                } else if remote_browser_api.is_configured()
+                    && is_remote_browser_dynamic_tool(&tool)
+                {
                     tokio::spawn(handle_remote_browser_dynamic_tool_request(
                         call_id,
                         tool,

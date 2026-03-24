@@ -1,6 +1,39 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "BrowserSessionArtifacts": {
+      "properties": {
+        "replayFrameCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "replayFrameDurationMs": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "replayGifImageUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screenshotImageUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "BrowserSessionState": {
       "properties": {
         "selectedTabId": {
@@ -44,6 +77,16 @@
     }
   },
   "properties": {
+    "artifacts": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BrowserSessionArtifacts"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "browserSessionId": {
       "type": "string"
     },

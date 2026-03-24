@@ -5,6 +5,8 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use codex_app_server_protocol::BrowserReplayRenderMode;
+use codex_app_server_protocol::BrowserReplayTextSnapshotFormat;
 use codex_app_server_protocol::BrowserSessionArtifacts;
 use codex_app_server_protocol::BrowserSessionUpdatedNotification;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
@@ -19,6 +21,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -38,6 +42,7 @@ use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_json;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -255,6 +260,655 @@ async fn thread_start_auto_injects_remote_browser_tools_when_endpoint_is_configu
     assert!(find_tool(body, "create_tab").is_some());
     assert!(find_tool(body, "tabs_content").is_some());
     assert!(find_tool(body, "playwright_screenshot").is_some());
+    assert!(find_tool(body, "atlas_command").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn atlas_command_dynamic_tool_calls_are_handled_internally() -> Result<()> {
+    let call_id = "dyn-atlas-1";
+    let tool_name = "atlas_command";
+    let tool_args = json!({
+        "payload": {
+            "type": "create_tab"
+        }
+    });
+    let tool_call_arguments = serde_json::to_string(&tool_args)?;
+
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            responses::ev_completed("resp-1"),
+        ]),
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let remote_browser_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/remote_browser"))
+        .and(body_json(json!({
+            "browserSessionId": null,
+            "command": "create_tab",
+            "arguments": {
+                "select": true
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "browserSessionId": "sess_atlas_123",
+            "result": {
+                "tab_id": "tab_123",
+                "selected_tab_id": "tab_123"
+            },
+            "browserState": {
+                "selectedTabId": "tab_123",
+                "tabs": [{
+                    "id": "tab_123",
+                    "title": "New Tab",
+                    "url": "about:blank",
+                    "selected": true
+                }]
+            }
+        })))
+        .expect(1)
+        .mount(&remote_browser_server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let remote_browser_endpoint = format!("{}/remote_browser", remote_browser_server.uri());
+    let mut mcp = McpProcess::new_with_args(
+        codex_home.path(),
+        &["--remote-browser-endpoint", &remote_browser_endpoint],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let thread_id = thread.id.clone();
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "use atlas".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let turn_id = turn.id.clone();
+
+    let started = wait_for_dynamic_tool_started(&mut mcp, call_id).await?;
+    assert_eq!(started.thread_id, thread_id);
+    assert_eq!(started.turn_id, turn_id.clone());
+
+    assert!(
+        timeout(
+            Duration::from_millis(500),
+            mcp.read_stream_until_request_message()
+        )
+        .await
+        .is_err(),
+        "atlas_command tool call should not be forwarded back to the client"
+    );
+
+    let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.browser_session_id, "sess_atlas_123");
+    assert_eq!(browser_update.browser_state.selected_tab_id, "tab_123");
+    assert_eq!(browser_update.browser_state.tabs.len(), 1);
+    assert_eq!(browser_update.browser_state.tabs[0].title, "New Tab");
+    assert_eq!(browser_update.artifacts, None);
+
+    let completed = wait_for_dynamic_tool_completed(&mut mcp, call_id).await?;
+    let ThreadItem::DynamicToolCall {
+        status,
+        content_items,
+        success,
+        ..
+    } = completed.item
+    else {
+        panic!("expected dynamic tool call item");
+    };
+    assert_eq!(status, DynamicToolCallStatus::Completed);
+    assert_eq!(success, Some(true));
+    assert_eq!(
+        content_items,
+        Some(vec![DynamicToolCallOutputContentItem::InputText {
+            text: serde_json::to_string(&json!({
+                "type": "codex_repl",
+                "command_output": {
+                    "id": "tab_123"
+                }
+            }))?,
+        }])
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let bodies = responses_bodies(&server).await?;
+    let payload = bodies
+        .iter()
+        .find_map(|body| function_call_output_payload(body, call_id))
+        .context("expected function_call_output in follow-up request")?;
+    assert_eq!(
+        payload.body,
+        FunctionCallOutputBody::Text(serde_json::to_string(&json!({
+            "type": "codex_repl",
+            "command_output": {
+                "id": "tab_123"
+            }
+        }))?)
+    );
+    assert_eq!(payload.success, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn atlas_command_tabs_content_uses_background_tabs() -> Result<()> {
+    let call_id = "dyn-atlas-tabs-1";
+    let tool_name = "atlas_command";
+    let tool_args = json!({
+        "payload": {
+            "type": "tabs_content",
+            "urls": ["https://news.ycombinator.com/"],
+            "content_type": "text"
+        }
+    });
+    let tool_call_arguments = serde_json::to_string(&tool_args)?;
+
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            responses::ev_completed("resp-1"),
+        ]),
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let remote_browser_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/remote_browser"))
+        .and(body_json(json!({
+            "browserSessionId": null,
+            "command": "create_tab",
+            "arguments": {
+                "url": "https://news.ycombinator.com/",
+                "select": false
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "browserSessionId": "sess_atlas_tabs_123",
+            "result": {
+                "tab_id": "tab_bg_123"
+            },
+            "browserState": {
+                "selectedTabId": "tab_main",
+                "tabs": [
+                    {
+                        "id": "tab_main",
+                        "title": "Workspace",
+                        "url": "http://localhost:3000/",
+                        "selected": true
+                    },
+                    {
+                        "id": "tab_bg_123",
+                        "title": "Hacker News",
+                        "url": "https://news.ycombinator.com/",
+                        "selected": false
+                    }
+                ]
+            }
+        })))
+        .expect(1)
+        .mount(&remote_browser_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/remote_browser"))
+        .and(body_json(json!({
+            "browserSessionId": "sess_atlas_tabs_123",
+            "command": "tabs_content",
+            "arguments": {
+                "tab_ids": ["tab_bg_123"]
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "browserSessionId": "sess_atlas_tabs_123",
+            "result": {
+                "tabs": [{
+                    "url": "https://news.ycombinator.com/",
+                    "title": "Hacker News",
+                    "content": "Top stories"
+                }]
+            },
+            "browserState": {
+                "selectedTabId": "tab_main",
+                "tabs": [
+                    {
+                        "id": "tab_main",
+                        "title": "Workspace",
+                        "url": "http://localhost:3000/",
+                        "selected": true
+                    },
+                    {
+                        "id": "tab_bg_123",
+                        "title": "Hacker News",
+                        "url": "https://news.ycombinator.com/",
+                        "selected": false
+                    }
+                ]
+            }
+        })))
+        .expect(1)
+        .mount(&remote_browser_server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let remote_browser_endpoint = format!("{}/remote_browser", remote_browser_server.uri());
+    let mut mcp = McpProcess::new_with_args(
+        codex_home.path(),
+        &["--remote-browser-endpoint", &remote_browser_endpoint],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "read the page".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let _started = wait_for_dynamic_tool_started(&mut mcp, call_id).await?;
+    let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.browser_session_id, "sess_atlas_tabs_123");
+    assert_eq!(browser_update.browser_state.selected_tab_id, "tab_main");
+
+    let completed = wait_for_dynamic_tool_completed(&mut mcp, call_id).await?;
+    let ThreadItem::DynamicToolCall {
+        content_items,
+        success,
+        ..
+    } = completed.item
+    else {
+        panic!("expected dynamic tool call item");
+    };
+    assert_eq!(success, Some(true));
+    assert_eq!(
+        content_items,
+        Some(vec![DynamicToolCallOutputContentItem::InputText {
+            text: serde_json::to_string(&json!({
+                "type": "codex_repl",
+                "command_output": {
+                    "results": [{
+                        "url": "https://news.ycombinator.com/",
+                        "title": "Hacker News",
+                        "content": "Top stories"
+                    }]
+                }
+            }))?,
+        }])
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn atlas_command_locator_count_passes_through_to_remote_browser() -> Result<()> {
+    let call_id = "dyn-atlas-locator-count-1";
+    let tool_name = "atlas_command";
+    let tool_args = json!({
+        "payload": {
+            "type": "playwright_locator_count",
+            "tab_id": "tab_123",
+            "selector": "span.titleline > a"
+        }
+    });
+    let tool_call_arguments = serde_json::to_string(&tool_args)?;
+
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            responses::ev_completed("resp-1"),
+        ]),
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let remote_browser_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/remote_browser"))
+        .and(body_json(json!({
+            "browserSessionId": null,
+            "command": "playwright_locator_count",
+            "arguments": {
+                "tab_id": "tab_123",
+                "selector": "span.titleline > a"
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "browserSessionId": "sess_atlas_count_123",
+            "result": {
+                "count": 5
+            },
+            "browserState": {
+                "selectedTabId": "tab_123",
+                "tabs": [{
+                    "id": "tab_123",
+                    "title": "Hacker News",
+                    "url": "https://news.ycombinator.com/",
+                    "selected": true
+                }]
+            }
+        })))
+        .expect(1)
+        .mount(&remote_browser_server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let remote_browser_endpoint = format!("{}/remote_browser", remote_browser_server.uri());
+    let mut mcp = McpProcess::new_with_args(
+        codex_home.path(),
+        &["--remote-browser-endpoint", &remote_browser_endpoint],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let thread_id = thread.id.clone();
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "count links".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let turn_id = turn.id.clone();
+
+    let started = wait_for_dynamic_tool_started(&mut mcp, call_id).await?;
+    assert_eq!(started.thread_id, thread_id);
+    assert_eq!(started.turn_id, turn_id.clone());
+
+    let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.browser_session_id, "sess_atlas_count_123");
+    assert_eq!(browser_update.browser_state.selected_tab_id, "tab_123");
+
+    let completed = wait_for_dynamic_tool_completed(&mut mcp, call_id).await?;
+    let ThreadItem::DynamicToolCall {
+        content_items,
+        success,
+        ..
+    } = completed.item
+    else {
+        panic!("expected dynamic tool call item");
+    };
+    assert_eq!(success, Some(true));
+    assert_eq!(
+        content_items,
+        Some(vec![DynamicToolCallOutputContentItem::InputText {
+            text: serde_json::to_string(&json!({
+                "type": "codex_repl",
+                "command_output": {
+                    "count": 5
+                }
+            }))?,
+        }])
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let bodies = responses_bodies(&server).await?;
+    let payload = bodies
+        .iter()
+        .find_map(|body| function_call_output_payload(body, call_id))
+        .context("expected function_call_output in follow-up request")?;
+    assert_eq!(
+        payload.body,
+        FunctionCallOutputBody::Text(serde_json::to_string(&json!({
+            "type": "codex_repl",
+            "command_output": {
+                "count": 5
+            }
+        }))?)
+    );
+    assert_eq!(payload.success, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn atlas_command_locator_click_passes_through_to_remote_browser() -> Result<()> {
+    let call_id = "dyn-atlas-locator-click-1";
+    let tool_name = "atlas_command";
+    let tool_args = json!({
+        "payload": {
+            "type": "playwright_locator_click",
+            "tab_id": "tab_123",
+            "selector": "[data-square=\"e2\"]",
+            "button": "left",
+            "timeout_ms": 1500
+        }
+    });
+    let tool_call_arguments = serde_json::to_string(&tool_args)?;
+
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            responses::ev_completed("resp-1"),
+        ]),
+        create_final_assistant_message_sse_response("Clicked")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let remote_browser_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/remote_browser"))
+        .and(body_json(json!({
+            "browserSessionId": null,
+            "command": "playwright_locator_click",
+            "arguments": {
+                "tab_id": "tab_123",
+                "selector": "[data-square=\"e2\"]",
+                "button": "left",
+                "timeout_ms": 1500
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "browserSessionId": "sess_atlas_click_123",
+            "result": {},
+            "browserState": {
+                "selectedTabId": "tab_123",
+                "tabs": [{
+                    "id": "tab_123",
+                    "title": "3D Chess",
+                    "url": "http://127.0.0.1:8123/",
+                    "selected": true
+                }]
+            },
+            "artifacts": {
+                "screenshotBase64": "AAA",
+                "replayGifBase64": "R0lGODlh",
+                "replayFrameCount": 3,
+                "replayFrameDurationMs": 700
+            }
+        })))
+        .expect(1)
+        .mount(&remote_browser_server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let remote_browser_endpoint = format!("{}/remote_browser", remote_browser_server.uri());
+    let mut mcp = McpProcess::new_with_args(
+        codex_home.path(),
+        &["--remote-browser-endpoint", &remote_browser_endpoint],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let thread_id = thread.id.clone();
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "click e2".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let turn_id = turn.id.clone();
+
+    let started = wait_for_dynamic_tool_started(&mut mcp, call_id).await?;
+    assert_eq!(started.thread_id, thread_id);
+    assert_eq!(started.turn_id, turn_id.clone());
+
+    let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.browser_session_id, "sess_atlas_click_123");
+    assert_eq!(browser_update.browser_state.selected_tab_id, "tab_123");
+    assert_eq!(
+        browser_update.artifacts,
+        Some(BrowserSessionArtifacts {
+            screenshot_image_url: Some("data:image/png;base64,AAA".to_string()),
+            replay_gif_image_url: Some("data:image/gif;base64,R0lGODlh".to_string()),
+            replay_frame_count: Some(3),
+            replay_frame_duration_ms: Some(700),
+        })
+    );
+
+    let completed = wait_for_dynamic_tool_completed(&mut mcp, call_id).await?;
+    let ThreadItem::DynamicToolCall {
+        content_items,
+        success,
+        ..
+    } = completed.item
+    else {
+        panic!("expected dynamic tool call item");
+    };
+    assert_eq!(success, Some(true));
+    assert_eq!(
+        content_items,
+        Some(vec![DynamicToolCallOutputContentItem::InputText {
+            text: serde_json::to_string(&json!({
+                "type": "codex_repl",
+                "command_output": {}
+            }))?,
+        }])
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let bodies = responses_bodies(&server).await?;
+    let payload = bodies
+        .iter()
+        .find_map(|body| function_call_output_payload(body, call_id))
+        .context("expected function_call_output in follow-up request")?;
+    assert_eq!(
+        payload.body,
+        FunctionCallOutputBody::Text(serde_json::to_string(&json!({
+            "type": "codex_repl",
+            "command_output": {}
+        }))?)
+    );
+    assert_eq!(payload.success, None);
 
     Ok(())
 }
@@ -472,6 +1126,269 @@ async fn remote_browser_dynamic_tool_calls_are_handled_internally() -> Result<()
                 "url": "https://news.ycombinator.com/"
             }
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_read_derives_browser_replay_from_remote_browser_tool_history() -> Result<()> {
+    let call_id = "dyn-browser-read-1";
+    let tool_name = "create_tab";
+    let tool_args = json!({ "url": "https://news.ycombinator.com/" });
+    let tool_call_arguments = serde_json::to_string(&tool_args)?;
+
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            responses::ev_completed("resp-1"),
+        ]),
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let remote_browser_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/remote_browser"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "browserSessionId": "sess_123",
+            "result": {
+                "tab_id": "tab_123",
+                "selected_tab_id": "tab_123"
+            },
+            "browserState": {
+                "selectedTabId": "tab_123",
+                "tabs": [{
+                    "id": "tab_123",
+                    "title": "Hacker News",
+                    "url": "https://news.ycombinator.com/",
+                    "selected": true
+                }]
+            },
+            "artifacts": {
+                "screenshotBase64": "AAA",
+                "replayGifBase64": "R0lGODlh",
+                "replayFrameCount": 2,
+                "replayFrameDurationMs": 700
+            }
+        })))
+        .mount(&remote_browser_server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let remote_browser_endpoint = format!("{}/remote_browser", remote_browser_server.uri());
+    let mut mcp = McpProcess::new_with_args(
+        codex_home.path(),
+        &["--remote-browser-endpoint", &remote_browser_endpoint],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "open Hacker News".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let read_req = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id.clone(),
+            include_turns: true,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_req)),
+    )
+    .await??;
+    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+
+    let turn = thread.turns.last().context("expected replay turn")?;
+    let replay = turn
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ThreadItem::BrowserReplay {
+                frames,
+                animation_image_url,
+                frame_duration_ms,
+                ..
+            } => Some((frames, animation_image_url, frame_duration_ms)),
+            _ => None,
+        })
+        .context("expected derived browser replay item")?;
+
+    assert_eq!(replay.0.len(), 1);
+    assert_eq!(replay.0[0].source_item_id, call_id);
+    assert_eq!(replay.0[0].tool, tool_name);
+    assert_eq!(
+        replay.0[0].image_url.as_deref(),
+        Some("data:image/png;base64,AAA")
+    );
+    assert_eq!(replay.1.as_deref(), Some("data:image/gif;base64,R0lGODlh"));
+    assert_eq!(*replay.2, Some(700));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_read_derives_text_only_browser_replay_from_remote_browser_tool_history()
+-> Result<()> {
+    let call_id = "dyn-browser-read-text-1";
+    let tool_name = "tabs_content";
+    let tool_args = json!({ "tabId": "tab_123" });
+    let tool_call_arguments = serde_json::to_string(&tool_args)?;
+
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            responses::ev_completed("resp-1"),
+        ]),
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let remote_browser_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/remote_browser"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "browserSessionId": "sess_123",
+            "result": {
+                "tree": {
+                    "role": "document",
+                    "name": "Hacker News"
+                }
+            },
+            "browserState": {
+                "selectedTabId": "tab_123",
+                "tabs": [{
+                    "id": "tab_123",
+                    "title": "Hacker News",
+                    "url": "https://news.ycombinator.com/",
+                    "selected": true
+                }]
+            }
+        })))
+        .mount(&remote_browser_server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let remote_browser_endpoint = format!("{}/remote_browser", remote_browser_server.uri());
+    let mut mcp = McpProcess::new_with_args(
+        codex_home.path(),
+        &["--remote-browser-endpoint", &remote_browser_endpoint],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "inspect the current page".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let read_req = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id.clone(),
+            include_turns: true,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_req)),
+    )
+    .await??;
+    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+
+    let turn = thread.turns.last().context("expected replay turn")?;
+    let replay = turn
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ThreadItem::BrowserReplay {
+                frames,
+                render_mode,
+                animation_image_url,
+                frame_duration_ms,
+                ..
+            } => Some((frames, render_mode, animation_image_url, frame_duration_ms)),
+            _ => None,
+        })
+        .context("expected derived browser replay item")?;
+
+    assert_eq!(replay.0.len(), 1);
+    assert_eq!(replay.0[0].source_item_id, call_id);
+    assert_eq!(replay.0[0].tool, tool_name);
+    assert_eq!(replay.1, &BrowserReplayRenderMode::TextOnly);
+    assert_eq!(replay.2, &None);
+    assert_eq!(replay.3, &None);
+    let text_snapshot = replay.0[0]
+        .text_snapshot
+        .as_deref()
+        .context("expected text snapshot")?;
+    assert!(text_snapshot.contains("\"role\": \"document\""));
+    assert!(text_snapshot.contains("\"name\": \"Hacker News\""));
+    assert_eq!(
+        replay.0[0].text_snapshot_format,
+        Some(BrowserReplayTextSnapshotFormat::Json)
     );
 
     Ok(())
