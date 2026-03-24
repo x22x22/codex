@@ -2102,6 +2102,52 @@ pub struct AppListUpdatedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct BrowserTabState {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub selected: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct BrowserSessionState {
+    pub selected_tab_id: String,
+    pub tabs: Vec<BrowserTabState>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct BrowserSessionCommandParams {
+    #[ts(optional = nullable)]
+    pub browser_session_id: Option<String>,
+    pub command: String,
+    #[ts(optional = nullable)]
+    pub arguments: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct BrowserSessionCommandResponse {
+    pub browser_session_id: String,
+    pub result: JsonValue,
+    pub browser_state: BrowserSessionState,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct BrowserSessionUpdatedNotification {
+    pub browser_session_id: String,
+    pub browser_state: BrowserSessionState,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct McpServerRefreshParams {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

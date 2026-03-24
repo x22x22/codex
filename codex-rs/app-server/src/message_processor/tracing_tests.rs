@@ -7,6 +7,11 @@ use crate::transport::AppServerTransport;
 use anyhow::Result;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_mock_responses_config_toml;
+use codex_app_server_protocol::BrowserSessionCommandParams;
+use codex_app_server_protocol::BrowserSessionCommandResponse;
+use codex_app_server_protocol::BrowserSessionState;
+use codex_app_server_protocol::BrowserSessionUpdatedNotification;
+use codex_app_server_protocol::BrowserTabState;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeCapabilities;
@@ -113,11 +118,11 @@ struct TracingHarness {
 }
 
 impl TracingHarness {
-    async fn new() -> Result<Self> {
+    async fn new(remote_browser_endpoint: Option<String>) -> Result<Self> {
         let server = create_mock_responses_server_repeating_assistant("Done").await;
         let codex_home = TempDir::new()?;
         let config = Arc::new(build_test_config(codex_home.path(), &server.uri()).await?);
-        let (processor, outgoing_rx) = build_test_processor(config);
+        let (processor, outgoing_rx) = build_test_processor(config, remote_browser_endpoint);
         let tracing = init_test_tracing();
         tracing.exporter.reset();
         tracing::callsite::rebuild_interest_cache();
@@ -226,6 +231,7 @@ async fn build_test_config(codex_home: &Path, server_uri: &str) -> Result<Config
 
 fn build_test_processor(
     config: Arc<Config>,
+    remote_browser_endpoint: Option<String>,
 ) -> (
     MessageProcessor,
     mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
@@ -246,6 +252,7 @@ fn build_test_processor(
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         enable_codex_api_key_env: false,
+        remote_browser_endpoint,
     });
     (processor, outgoing_rx)
 }
@@ -455,6 +462,30 @@ async fn read_thread_started_notification(
     }
 }
 
+async fn read_browser_session_updated_notification(
+    outgoing_rx: &mut mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
+) -> BrowserSessionUpdatedNotification {
+    loop {
+        let envelope = tokio::time::timeout(std::time::Duration::from_secs(5), outgoing_rx.recv())
+            .await
+            .expect("timed out waiting for browserSession/updated notification")
+            .expect("outgoing channel closed");
+        let message = match envelope {
+            crate::outgoing_message::OutgoingEnvelope::ToConnection { message, .. }
+            | crate::outgoing_message::OutgoingEnvelope::Broadcast { message } => message,
+        };
+        let crate::outgoing_message::OutgoingMessage::AppServerNotification(notification) = message
+        else {
+            continue;
+        };
+        if let codex_app_server_protocol::ServerNotification::BrowserSessionUpdated(notification) =
+            notification
+        {
+            return notification;
+        }
+    }
+}
+
 async fn wait_for_exported_spans<F>(tracing: &TestTracing, predicate: F) -> Vec<SpanData>
 where
     F: Fn(&[SpanData]) -> bool,
@@ -498,7 +529,7 @@ where
 #[tokio::test(flavor = "current_thread")]
 async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
     let _guard = tracing_test_guard().lock().await;
-    let mut harness = TracingHarness::new().await?;
+    let mut harness = TracingHarness::new(None).await?;
 
     let RemoteTrace {
         trace_id: remote_trace_id,
@@ -569,7 +600,7 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
 #[tokio::test(flavor = "current_thread")]
 async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
     let _guard = tracing_test_guard().lock().await;
-    let mut harness = TracingHarness::new().await?;
+    let mut harness = TracingHarness::new(None).await?;
     let thread_start_response = harness.start_thread(2, None).await;
     let thread_id = thread_start_response.thread.id.clone();
 
@@ -634,6 +665,80 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
     );
     assert_span_descends_from(&spans, core_turn_span, server_request_span);
     harness.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn browser_session_command_posts_and_emits_state_notification() -> Result<()> {
+    let _guard = tracing_test_guard().lock().await;
+    let remote_browser = wiremock::MockServer::start().await;
+    let browser_state = BrowserSessionState {
+        selected_tab_id: "tab_123".to_string(),
+        tabs: vec![BrowserTabState {
+            id: "tab_123".to_string(),
+            title: "Example".to_string(),
+            url: "https://example.com".to_string(),
+            selected: true,
+        }],
+    };
+    let response_body = serde_json::json!({
+        "browserSessionId": "sess_123",
+        "result": {
+            "ok": true,
+        },
+        "browserState": {
+            "selectedTabId": "tab_123",
+            "tabs": [{
+                "id": "tab_123",
+                "title": "Example",
+                "url": "https://example.com",
+                "selected": true,
+            }]
+        }
+    });
+
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/"))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "browserSessionId": "sess_123",
+            "command": "navigateTabUrl",
+            "arguments": {
+                "tabId": "tab_123",
+                "url": "https://example.com"
+            }
+        })))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(response_body))
+        .mount(&remote_browser)
+        .await;
+
+    let mut harness = TracingHarness::new(Some(remote_browser.uri())).await?;
+    let response: BrowserSessionCommandResponse = harness
+        .request(
+            ClientRequest::BrowserSessionCommand {
+                request_id: RequestId::Integer(4),
+                params: BrowserSessionCommandParams {
+                    browser_session_id: Some("sess_123".to_string()),
+                    command: "navigateTabUrl".to_string(),
+                    arguments: Some(serde_json::json!({
+                        "tabId": "tab_123",
+                        "url": "https://example.com",
+                    })),
+                },
+            },
+            None,
+        )
+        .await;
+    assert_eq!(response.browser_session_id, "sess_123");
+    assert_eq!(response.result, serde_json::json!({"ok": true}));
+    assert_eq!(response.browser_state, browser_state);
+
+    let notification = read_browser_session_updated_notification(&mut harness.outgoing_rx).await;
+    assert_eq!(notification.browser_session_id, "sess_123");
+    assert_eq!(notification.browser_state, browser_state);
+    harness.shutdown().await;
+
+    remote_browser.verify().await;
 
     Ok(())
 }

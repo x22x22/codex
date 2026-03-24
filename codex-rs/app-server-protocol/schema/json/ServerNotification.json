@@ -384,6 +384,62 @@
         }
       ]
     },
+    "BrowserSessionState": {
+      "properties": {
+        "selectedTabId": {
+          "type": "string"
+        },
+        "tabs": {
+          "items": {
+            "$ref": "#/definitions/BrowserTabState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "selectedTabId",
+        "tabs"
+      ],
+      "type": "object"
+    },
+    "BrowserSessionUpdatedNotification": {
+      "properties": {
+        "browserSessionId": {
+          "type": "string"
+        },
+        "browserState": {
+          "$ref": "#/definitions/BrowserSessionState"
+        }
+      },
+      "required": [
+        "browserSessionId",
+        "browserState"
+      ],
+      "type": "object"
+    },
+    "BrowserTabState": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "selected": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "selected",
+        "title",
+        "url"
+      ],
+      "type": "object"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -4392,6 +4448,26 @@
         "params"
       ],
       "title": "App/list/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "browserSession/updated"
+          ],
+          "title": "BrowserSession/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/BrowserSessionUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "BrowserSession/updatedNotification",
       "type": "object"
     },
     {

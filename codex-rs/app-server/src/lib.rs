@@ -71,6 +71,7 @@ pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod remote_browser_api;
 mod server_request_error;
 mod thread_state;
 mod thread_status;
@@ -329,6 +330,7 @@ pub async fn run_main(
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
+    remote_browser_endpoint: Option<String>,
 ) -> IoResult<()> {
     run_main_with_transport(
         arg0_paths,
@@ -337,6 +339,7 @@ pub async fn run_main(
         default_analytics_enabled,
         AppServerTransport::Stdio,
         SessionSource::VSCode,
+        remote_browser_endpoint,
     )
     .await
 }
@@ -348,6 +351,7 @@ pub async fn run_main_with_transport(
     default_analytics_enabled: bool,
     transport: AppServerTransport,
     session_source: SessionSource,
+    remote_browser_endpoint: Option<String>,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
@@ -625,6 +629,7 @@ pub async fn run_main_with_transport(
             config_warnings,
             session_source,
             enable_codex_api_key_env: false,
+            remote_browser_endpoint,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();

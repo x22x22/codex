@@ -31,6 +31,10 @@ struct AppServerArgs {
         value_parser = SessionSource::from_startup_arg
     )]
     session_source: SessionSource,
+
+    /// Optional HTTP endpoint that receives remote browser commands.
+    #[arg(long = "remote-browser-endpoint", value_name = "URL")]
+    remote_browser_endpoint: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -43,6 +47,7 @@ fn main() -> anyhow::Result<()> {
         };
         let transport = args.listen;
         let session_source = args.session_source;
+        let remote_browser_endpoint = args.remote_browser_endpoint;
 
         run_main_with_transport(
             arg0_paths,
@@ -51,6 +56,7 @@ fn main() -> anyhow::Result<()> {
             /*default_analytics_enabled*/ false,
             transport,
             session_source,
+            remote_browser_endpoint,
         )
         .await?;
         Ok(())

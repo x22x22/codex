@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "BrowserSessionState": {
+      "properties": {
+        "selectedTabId": {
+          "type": "string"
+        },
+        "tabs": {
+          "items": {
+            "$ref": "#/definitions/BrowserTabState"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "selectedTabId",
+        "tabs"
+      ],
+      "type": "object"
+    },
+    "BrowserTabState": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "selected": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "selected",
+        "title",
+        "url"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "browserSessionId": {
+      "type": "string"
+    },
+    "browserState": {
+      "$ref": "#/definitions/BrowserSessionState"
+    }
+  },
+  "required": [
+    "browserSessionId",
+    "browserState"
+  ],
+  "title": "BrowserSessionUpdatedNotification",
+  "type": "object"
+}

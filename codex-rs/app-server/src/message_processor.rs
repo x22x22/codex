@@ -15,8 +15,11 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
+use crate::remote_browser_api::RemoteBrowserApi;
 use crate::transport::AppServerTransport;
 use async_trait::async_trait;
+use codex_app_server_protocol::BrowserSessionCommandParams;
+use codex_app_server_protocol::BrowserSessionUpdatedNotification;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
@@ -151,6 +154,7 @@ pub(crate) struct MessageProcessor {
     config_api: ConfigApi,
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
+    remote_browser_api: RemoteBrowserApi,
     auth_manager: Arc<AuthManager>,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
@@ -179,6 +183,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) enable_codex_api_key_env: bool,
+    pub(crate) remote_browser_endpoint: Option<String>,
 }
 
 impl MessageProcessor {
@@ -199,6 +204,7 @@ impl MessageProcessor {
             config_warnings,
             session_source,
             enable_codex_api_key_env,
+            remote_browser_endpoint,
         } = args;
         let (auth_manager, thread_manager) = match (auth_manager, thread_manager) {
             (Some(auth_manager), Some(thread_manager)) => (auth_manager, thread_manager),
@@ -259,6 +265,7 @@ impl MessageProcessor {
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
         let fs_api = FsApi::default();
+        let remote_browser_api = RemoteBrowserApi::new(remote_browser_endpoint);
 
         Self {
             outgoing,
@@ -266,6 +273,7 @@ impl MessageProcessor {
             config_api,
             external_agent_config_api,
             fs_api,
+            remote_browser_api,
             auth_manager,
             config,
             config_warnings: Arc::new(config_warnings),
@@ -766,6 +774,16 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            ClientRequest::BrowserSessionCommand { request_id, params } => {
+                self.handle_browser_session_command(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
                 // inline the full `CodexMessageProcessor::process_request` future, which
@@ -914,6 +932,29 @@ impl MessageProcessor {
     async fn handle_fs_copy(&self, request_id: ConnectionRequestId, params: FsCopyParams) {
         match self.fs_api.copy(params).await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_browser_session_command(
+        &self,
+        request_id: ConnectionRequestId,
+        params: BrowserSessionCommandParams,
+    ) {
+        match self.remote_browser_api.command(params).await {
+            Ok(response) => {
+                self.outgoing
+                    .send_response(request_id, response.clone())
+                    .await;
+                self.outgoing
+                    .send_server_notification(ServerNotification::BrowserSessionUpdated(
+                        BrowserSessionUpdatedNotification {
+                            browser_session_id: response.browser_session_id.clone(),
+                            browser_state: response.browser_state.clone(),
+                        },
+                    ))
+                    .await;
+            }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }

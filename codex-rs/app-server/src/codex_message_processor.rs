@@ -722,6 +722,9 @@ impl CodexMessageProcessor {
                 self.apps_list(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::BrowserSessionCommand { .. } => {
+                unreachable!("browserSession/command is handled by MessageProcessor");
+            }
             ClientRequest::SkillsConfigWrite { request_id, params } => {
                 self.skills_config_write(to_connection_request_id(request_id), params)
                     .await;

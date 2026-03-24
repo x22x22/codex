@@ -308,6 +308,11 @@ client_request_definitions! {
         params: v2::AppsListParams,
         response: v2::AppsListResponse,
     },
+    #[experimental("browserSession/command")]
+    BrowserSessionCommand => "browserSession/command" {
+        params: v2::BrowserSessionCommandParams,
+        response: v2::BrowserSessionCommandResponse,
+    },
     FsReadFile => "fs/readFile" {
         params: v2::FsReadFileParams,
         response: v2::FsReadFileResponse,
@@ -909,6 +914,8 @@ server_notification_definitions! {
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
+    #[experimental("browserSession/updated")]
+    BrowserSessionUpdated => "browserSession/updated" (v2::BrowserSessionUpdatedNotification),
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
@@ -1610,6 +1617,75 @@ mod tests {
     }
 
     #[test]
+    fn serialize_browser_session_command_request() -> Result<()> {
+        let request = ClientRequest::BrowserSessionCommand {
+            request_id: RequestId::Integer(7),
+            params: v2::BrowserSessionCommandParams {
+                browser_session_id: Some("sess_123".to_string()),
+                command: "navigateTabUrl".to_string(),
+                arguments: Some(json!({
+                    "tabId": "tab_123",
+                    "url": "https://example.com",
+                })),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "browserSession/command",
+                "id": 7,
+                "params": {
+                    "browserSessionId": "sess_123",
+                    "command": "navigateTabUrl",
+                    "arguments": {
+                        "tabId": "tab_123",
+                        "url": "https://example.com"
+                    }
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_browser_session_updated_notification() -> Result<()> {
+        let notification =
+            ServerNotification::BrowserSessionUpdated(v2::BrowserSessionUpdatedNotification {
+                browser_session_id: "sess_123".to_string(),
+                browser_state: v2::BrowserSessionState {
+                    selected_tab_id: "tab_123".to_string(),
+                    tabs: vec![v2::BrowserTabState {
+                        id: "tab_123".to_string(),
+                        title: "Example".to_string(),
+                        url: "https://example.com".to_string(),
+                        selected: true,
+                    }],
+                },
+            });
+        assert_eq!(
+            json!({
+                "method": "browserSession/updated",
+                "params": {
+                    "browserSessionId": "sess_123",
+                    "browserState": {
+                        "selectedTabId": "tab_123",
+                        "tabs": [
+                            {
+                                "id": "tab_123",
+                                "title": "Example",
+                                "url": "https://example.com",
+                                "selected": true
+                            }
+                        ]
+                    }
+                }
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn mock_experimental_method_is_marked_experimental() {
         let request = ClientRequest::MockExperimentalMethod {
             request_id: RequestId::Integer(1),
@@ -1618,6 +1694,35 @@ mod tests {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("mock/experimentalMethod"));
     }
+
+    #[test]
+    fn browser_session_command_is_marked_experimental() {
+        let request = ClientRequest::BrowserSessionCommand {
+            request_id: RequestId::Integer(1),
+            params: v2::BrowserSessionCommandParams {
+                browser_session_id: None,
+                command: "ping".to_string(),
+                arguments: None,
+            },
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("browserSession/command"));
+    }
+
+    #[test]
+    fn browser_session_updated_is_marked_experimental() {
+        let notification =
+            ServerNotification::BrowserSessionUpdated(v2::BrowserSessionUpdatedNotification {
+                browser_session_id: "sess_123".to_string(),
+                browser_state: v2::BrowserSessionState {
+                    selected_tab_id: String::new(),
+                    tabs: Vec::new(),
+                },
+            });
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
+        assert_eq!(reason, Some("browserSession/updated"));
+    }
+
     #[test]
     fn thread_realtime_start_is_marked_experimental() {
         let request = ClientRequest::ThreadRealtimeStart {
