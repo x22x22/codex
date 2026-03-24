@@ -234,30 +234,32 @@ pub fn intersect_permission_profiles(
     requested: PermissionProfile,
     granted: PermissionProfile,
 ) -> PermissionProfile {
+    fn intersect_permission_paths(
+        requested_paths: Option<Vec<AbsolutePathBuf>>,
+        granted_paths: Vec<AbsolutePathBuf>,
+    ) -> Option<Vec<AbsolutePathBuf>> {
+        requested_paths.and_then(|requested_paths| {
+            let requested_was_explicit_empty = requested_paths.is_empty();
+            let intersected = requested_paths
+                .into_iter()
+                .filter(|path| granted_paths.contains(path))
+                .collect::<Vec<_>>();
+            (requested_was_explicit_empty || !intersected.is_empty()).then_some(intersected)
+        })
+    }
+
     let file_system = requested
         .file_system
         .map(|requested_file_system| {
             let granted_file_system = granted.file_system.unwrap_or_default();
-            let read = requested_file_system
-                .read
-                .map(|requested_read| {
-                    let granted_read = granted_file_system.read.unwrap_or_default();
-                    requested_read
-                        .into_iter()
-                        .filter(|path| granted_read.contains(path))
-                        .collect()
-                })
-                .filter(|paths: &Vec<_>| !paths.is_empty());
-            let write = requested_file_system
-                .write
-                .map(|requested_write| {
-                    let granted_write = granted_file_system.write.unwrap_or_default();
-                    requested_write
-                        .into_iter()
-                        .filter(|path| granted_write.contains(path))
-                        .collect()
-                })
-                .filter(|paths: &Vec<_>| !paths.is_empty());
+            let read = intersect_permission_paths(
+                requested_file_system.read,
+                granted_file_system.read.unwrap_or_default(),
+            );
+            let write = intersect_permission_paths(
+                requested_file_system.write,
+                granted_file_system.write.unwrap_or_default(),
+            );
             FileSystemPermissions { read, write }
         })
         .filter(|file_system| !file_system.is_empty());
