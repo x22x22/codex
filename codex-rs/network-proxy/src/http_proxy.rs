@@ -297,7 +297,7 @@ async fn http_connect_accept(
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
                 reason: REASON_MITM_REQUIRED.to_string(),
-                parent_tool_item_id: None,
+                parent_tool_item_id,
                 client: client.clone(),
                 method: Some("CONNECT".to_string()),
                 mode: Some(NetworkMode::Limited),
@@ -1053,15 +1053,36 @@ mod tests {
             .method(Method::CONNECT)
             .uri("https://example.com:443")
             .header("host", "example.com:443")
+            .header(header::PROXY_AUTHORIZATION, "Basic Y29tbWFuZC0xOg==")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(state);
+        req.extensions_mut().insert(Arc::clone(&state));
 
         let response = http_connect_accept(None, req).await.unwrap_err();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
             "blocked-by-mitm-required"
+        );
+        let blocked = state
+            .blocked_snapshot()
+            .await
+            .expect("blocked snapshot should succeed");
+        assert_eq!(
+            blocked,
+            vec![BlockedRequest {
+                host: "example.com".to_string(),
+                reason: REASON_MITM_REQUIRED.to_string(),
+                parent_tool_item_id: Some("command-1".to_string()),
+                client: None,
+                method: Some("CONNECT".to_string()),
+                mode: Some(NetworkMode::Limited),
+                protocol: "http-connect".to_string(),
+                decision: Some("deny".to_string()),
+                source: Some("mode_guard".to_string()),
+                port: Some(443),
+                timestamp: blocked[0].timestamp,
+            }]
         );
     }
 

@@ -80,7 +80,7 @@ pub enum HostBlockDecision {
     Blocked(HostBlockReason),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct BlockedRequest {
     pub host: String,
     pub reason: String,
