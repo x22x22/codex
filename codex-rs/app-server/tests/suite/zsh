@@ -1,9 +1,12 @@
 #!/usr/bin/env dotslash
 
-// This is the patched zsh fork built by
-// `.github/workflows/shell-tool-mcp.yml` for the shell-tool-mcp package.
+// This is the patched zsh fork corresponding to
+// `codex-rs/shell-escalation/patches/zsh-exec-wrapper.patch`.
 // Fetching the prebuilt version via DotSlash makes it easier to write
 // integration tests that exercise the zsh fork behavior in app-server tests.
+//
+// The release asset still comes from a historical `codex-shell-tool-mcp`
+// package because that is the latest published bundle containing this binary.
 //
 // TODO(mbolin): Currently, we use a .tgz artifact that includes binaries for
 // multiple platforms, but we could save a bit of space by making arch-specific
