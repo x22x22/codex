@@ -52,6 +52,10 @@ fn seatbelt_policy_arg(args: &[String]) -> &str {
         .expect("seatbelt args should include policy text")
 }
 
+fn sandbox_apply_failed(stderr: &[u8]) -> bool {
+    String::from_utf8_lossy(stderr).contains("sandbox-exec: sandbox_apply: Operation not permitted")
+}
+
 #[test]
 fn base_policy_allows_node_cpu_sysctls() {
     assert!(
@@ -271,6 +275,100 @@ sys.exit(0 if allowed else 13)
         output.status.code(),
         "lsopen should remain denied even with bundle-scoped automation\nstdout: {}\nstderr: {stderr}",
         String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+#[test]
+fn openpty_works_under_seatbelt() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        eprintln!("python3 not found in PATH, skipping test.");
+        return;
+    }
+
+    let cwd = std::env::current_dir().expect("getcwd");
+    let args = create_seatbelt_command_args_with_extensions(
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            r#"import os
+
+master, slave = os.openpty()
+os.write(slave, b"ping")
+assert os.read(master, 4) == b"ping""#
+                .to_string(),
+        ],
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.as_path(),
+        /*enforce_managed_network*/ false,
+        None,
+        /*extensions*/ None,
+    );
+    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+        .args(&args)
+        .current_dir(&cwd)
+        .output()
+        .expect("execute seatbelt command");
+    if sandbox_apply_failed(&output.stderr) {
+        return;
+    }
+
+    assert!(
+        output.status.success(),
+        "python exited with {:?}, stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn java_home_finds_runtime_under_seatbelt() {
+    let java_home_path = Path::new("/usr/libexec/java_home");
+    if !java_home_path.exists() {
+        eprintln!("/usr/libexec/java_home is not present, skipping test.");
+        return;
+    }
+
+    let baseline_output = Command::new(java_home_path)
+        .env_remove("JAVA_HOME")
+        .output()
+        .expect("invoke java_home outside seatbelt");
+    if !baseline_output.status.success() {
+        eprintln!(
+            "java_home exited with {:?} outside seatbelt, skipping test",
+            baseline_output.status
+        );
+        return;
+    }
+
+    let cwd = std::env::current_dir().expect("getcwd");
+    let args = create_seatbelt_command_args_with_extensions(
+        vec![java_home_path.to_string_lossy().to_string()],
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.as_path(),
+        /*enforce_managed_network*/ false,
+        None,
+        /*extensions*/ None,
+    );
+    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+        .args(&args)
+        .current_dir(&cwd)
+        .env_remove("JAVA_HOME")
+        .env_remove("CODEX_SANDBOX")
+        .output()
+        .expect("execute seatbelt command");
+    if sandbox_apply_failed(&output.stderr) {
+        return;
+    }
+
+    assert!(
+        output.status.success(),
+        "java_home under seatbelt exited with {:?}, stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).trim().is_empty(),
+        "java_home stdout unexpectedly empty under seatbelt"
     );
 }
 
