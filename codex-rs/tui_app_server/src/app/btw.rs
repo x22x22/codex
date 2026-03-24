@@ -151,13 +151,11 @@ impl App {
 
         let channel = self.thread_event_channels.get(&parent_thread_id)?;
         let store = channel.store.lock().await;
-        match store.session_configured.as_ref().map(|event| &event.msg) {
-            Some(EventMsg::SessionConfigured(session)) => session
-                .thread_name
-                .clone()
-                .filter(|name| !name.trim().is_empty()),
-            _ => None,
-        }
+        store
+            .session
+            .as_ref()
+            .and_then(|session| session.thread_name.clone())
+            .filter(|name| !name.trim().is_empty())
     }
 
     pub(super) async fn select_agent_thread_and_discard_btw_chain(
@@ -167,7 +165,7 @@ impl App {
         thread_id: ThreadId,
     ) -> Result<()> {
         let btw_threads_to_discard = self.btw_threads_to_discard_after_switch(thread_id);
-        self.select_agent_thread(tui, thread_id).await?;
+        self.select_agent_thread(tui, app_server, thread_id).await?;
         if self.active_thread_id == Some(thread_id) {
             for btw_thread_id in btw_threads_to_discard {
                 self.discard_btw_thread(app_server, btw_thread_id).await;
@@ -193,45 +191,16 @@ impl App {
 
         let mut fork_config = self.config.clone();
         fork_config.ephemeral = true;
-        let fork_result = match app_server.fork_thread(fork_config, parent_thread_id).await {
-            Ok(forked) => Ok(forked),
-            Err(err) => {
-                if self.current_displayed_thread_id() != Some(parent_thread_id) {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to fork BTW thread from {parent_thread_id}: {err}"
-                    ));
-                    return Ok(AppRunControl::Continue);
-                }
-                let Some(parent_rollout_path) =
-                    self.chat_widget.rollout_path().filter(|path| path.exists())
-                else {
-                    self.chat_widget.add_error_message(
-                        "A thread must contain at least one turn before /btw can fork it."
-                            .to_string(),
-                    );
-                    return Ok(AppRunControl::Continue);
-                };
-                let mut fork_config = self.config.clone();
-                fork_config.ephemeral = true;
-                app_server
-                    .fork_thread_from_path(fork_config, parent_thread_id, parent_rollout_path)
-                    .await
-            }
-        };
-
-        match fork_result {
+        match app_server.fork_thread(fork_config, parent_thread_id).await {
             Ok(forked) => {
-                let child_thread_id = forked.session_configured.session_id;
+                let child_thread_id = forked.session.thread_id;
                 let next_fork_banner_parent_label =
                     self.fork_banner_parent_label(parent_thread_id).await;
-                self.enqueue_thread_event(
-                    child_thread_id,
-                    Event {
-                        id: String::new(),
-                        msg: EventMsg::SessionConfigured(forked.session_configured),
-                    },
-                )
-                .await?;
+                let channel = self.ensure_thread_channel(child_thread_id);
+                {
+                    let mut store = channel.store.lock().await;
+                    store.set_session(forked.session, forked.turns);
+                }
                 self.btw_threads.insert(
                     child_thread_id,
                     BtwThreadState {
@@ -259,7 +228,7 @@ impl App {
             }
             Err(err) => {
                 self.chat_widget.add_error_message(format!(
-                    "Failed to start BTW thread from {parent_thread_id}: {err}"
+                    "Failed to fork BTW thread from {parent_thread_id}: {err}"
                 ));
             }
         }
