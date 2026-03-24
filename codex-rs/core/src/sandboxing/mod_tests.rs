@@ -454,7 +454,6 @@ async fn python_multiprocessing_lock_works_under_platform_sandbox() {
     )
     .await
     {
-        eprintln!("Skipping test: Landlock is not enforceable on this host.");
         return;
     }
 
@@ -463,7 +462,6 @@ async fn python_multiprocessing_lock_works_under_platform_sandbox() {
         .output()
         .is_err()
     {
-        eprintln!("python3 not found in PATH, skipping test.");
         return;
     }
 
@@ -532,7 +530,6 @@ async fn python_getpwuid_works_under_platform_sandbox() {
     )
     .await
     {
-        eprintln!("Skipping test: Landlock is not enforceable on this host.");
         return;
     }
 
@@ -541,7 +538,6 @@ async fn python_getpwuid_works_under_platform_sandbox() {
         .output()
         .is_err()
     {
-        eprintln!("python3 not found in PATH, skipping test.");
         return;
     }
 
