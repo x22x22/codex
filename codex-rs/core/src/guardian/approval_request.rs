@@ -253,6 +253,7 @@ pub(crate) fn guardian_approval_request_to_json(
             host,
             protocol,
             port,
+            ..
         } => Ok(serde_json::json!({
             "tool": "network_access",
             "target": target,
@@ -325,6 +326,7 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
             host,
             protocol,
             port,
+            ..
         } => serde_json::json!({
             "tool": "network_access",
             "target": target,
