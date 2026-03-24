@@ -4,6 +4,11 @@ use crate::default_client::create_client;
 use crate::git_info::collect_git_info;
 use crate::git_info::get_git_repo_root;
 use crate::plugins::PluginTelemetryMetadata;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
 use sha1::Digest;
@@ -21,6 +26,15 @@ pub(crate) struct TrackEventsContext {
     pub(crate) model_slug: String,
     pub(crate) thread_id: String,
     pub(crate) turn_id: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct TurnMetadata {
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) effort: Option<ReasoningEffort>,
+    pub(crate) summary: ReasoningSummary,
+    pub(crate) service_tier: Option<ServiceTier>,
+    pub(crate) collaboration_mode: ModeKind,
 }
 
 pub(crate) fn build_track_events_context(
@@ -83,6 +97,9 @@ impl AnalyticsEventsQueue {
                     }
                     TrackEventsJob::AppUsed(job) => {
                         send_track_app_used(&auth_manager, job).await;
+                    }
+                    TrackEventsJob::TurnMetadata(job) => {
+                        send_track_turn_metadata(&auth_manager, job).await;
                     }
                     TrackEventsJob::PluginUsed(job) => {
                         send_track_plugin_used(&auth_manager, job).await;
@@ -197,6 +214,19 @@ impl AnalyticsEventsClient {
         );
     }
 
+    pub(crate) fn track_turn_metadata(
+        &self,
+        tracking: TrackEventsContext,
+        turn_metadata: TurnMetadata,
+    ) {
+        track_turn_metadata(
+            &self.queue,
+            Arc::clone(&self.config),
+            Some(tracking),
+            turn_metadata,
+        );
+    }
+
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
@@ -238,6 +268,7 @@ enum TrackEventsJob {
     SkillInvocations(TrackSkillInvocationsJob),
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
+    TurnMetadata(TrackTurnMetadataJob),
     PluginUsed(TrackPluginUsedJob),
     PluginInstalled(TrackPluginManagementJob),
     PluginUninstalled(TrackPluginManagementJob),
@@ -261,6 +292,12 @@ struct TrackAppUsedJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
     app: AppInvocation,
+}
+
+struct TrackTurnMetadataJob {
+    config: Arc<Config>,
+    tracking: TrackEventsContext,
+    turn_metadata: TurnMetadata,
 }
 
 struct TrackPluginUsedJob {
@@ -297,6 +334,7 @@ enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    TurnMetadata(CodexTurnMetadataEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -343,6 +381,25 @@ struct CodexAppMentionedEventRequest {
 struct CodexAppUsedEventRequest {
     event_type: &'static str,
     event_params: CodexAppMetadata,
+}
+
+#[derive(Serialize)]
+struct CodexTurnMetadata {
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    product_client_id: Option<String>,
+    model_slug: Option<String>,
+    sandbox_policy: Option<&'static str>,
+    effort: Option<String>,
+    summary: Option<String>,
+    service_tier: Option<String>,
+    collaboration_mode: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct CodexTurnMetadataEventRequest {
+    event_type: &'static str,
+    event_params: CodexTurnMetadata,
 }
 
 #[derive(Serialize)]
@@ -442,6 +499,26 @@ pub(crate) fn track_app_used(
         config,
         tracking,
         app,
+    });
+    queue.try_send(job);
+}
+
+pub(crate) fn track_turn_metadata(
+    queue: &AnalyticsEventsQueue,
+    config: Arc<Config>,
+    tracking: Option<TrackEventsContext>,
+    turn_metadata: TurnMetadata,
+) {
+    if config.analytics_enabled == Some(false) {
+        return;
+    }
+    let Some(tracking) = tracking else {
+        return;
+    };
+    let job = TrackEventsJob::TurnMetadata(TrackTurnMetadataJob {
+        config,
+        tracking,
+        turn_metadata,
     });
     queue.try_send(job);
 }
@@ -571,6 +648,22 @@ async fn send_track_app_used(auth_manager: &AuthManager, job: TrackAppUsedJob) {
     send_track_events(auth_manager, config, events).await;
 }
 
+async fn send_track_turn_metadata(auth_manager: &AuthManager, job: TrackTurnMetadataJob) {
+    let TrackTurnMetadataJob {
+        config,
+        tracking,
+        turn_metadata,
+    } = job;
+    let events = vec![TrackEventRequest::TurnMetadata(
+        CodexTurnMetadataEventRequest {
+            event_type: "codex_turn_metadata",
+            event_params: codex_turn_metadata(&tracking, turn_metadata),
+        },
+    )];
+
+    send_track_events(auth_manager, config, events).await;
+}
+
 async fn send_track_plugin_used(auth_manager: &AuthManager, job: TrackPluginUsedJob) {
     let TrackPluginUsedJob {
         config,
@@ -632,6 +725,41 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
         product_client_id: Some(crate::default_client::originator().value),
         invoke_type: app.invocation_type,
         model_slug: Some(tracking.model_slug.clone()),
+    }
+}
+
+fn codex_turn_metadata(
+    tracking: &TrackEventsContext,
+    turn_metadata: TurnMetadata,
+) -> CodexTurnMetadata {
+    CodexTurnMetadata {
+        thread_id: Some(tracking.thread_id.clone()),
+        turn_id: Some(tracking.turn_id.clone()),
+        product_client_id: Some(crate::default_client::originator().value),
+        model_slug: Some(tracking.model_slug.clone()),
+        sandbox_policy: Some(sandbox_policy_mode(&turn_metadata.sandbox_policy)),
+        effort: turn_metadata.effort.map(|value| value.to_string()),
+        summary: Some(turn_metadata.summary.to_string()),
+        service_tier: turn_metadata.service_tier.map(|value| value.to_string()),
+        collaboration_mode: Some(collaboration_mode_mode(turn_metadata.collaboration_mode)),
+    }
+}
+
+fn sandbox_policy_mode(sandbox_policy: &SandboxPolicy) -> &'static str {
+    match sandbox_policy {
+        SandboxPolicy::DangerFullAccess => "full_access",
+        SandboxPolicy::ReadOnly { .. } => "read_only",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace_write",
+        SandboxPolicy::ExternalSandbox { .. } => "external_sandbox",
+    }
+}
+
+fn collaboration_mode_mode(mode: ModeKind) -> &'static str {
+    match mode {
+        ModeKind::Plan => "plan",
+        ModeKind::Default => "default",
+        ModeKind::PairProgramming => "pair_programming",
+        ModeKind::Execute => "execute",
     }
 }
 

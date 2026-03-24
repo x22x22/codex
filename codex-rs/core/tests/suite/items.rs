@@ -1,16 +1,22 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
+use codex_core::CodexAuth;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -35,8 +41,11 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
     fn sanitize(value: &str) -> String {
@@ -117,6 +126,93 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     .await;
     assert_eq!(legacy_message.message, "please inspect sample.txt");
     assert_eq!(legacy_message.text_elements, text_elements);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let TestCodex {
+        codex,
+        session_configured,
+        config,
+        ..
+    } = builder.build(&server).await?;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello turn metadata analytics".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: config.cwd.clone(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: session_configured.model.clone(),
+            effort: Some(ReasoningEffort::High),
+            summary: Some(ReasoningSummary::Detailed),
+            service_tier: Some(Some(ServiceTier::Flex)),
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings::default(),
+            }),
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let analytics_request = loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(request) = requests
+            .into_iter()
+            .find(|request| request.url.path() == "/codex/analytics-events/events")
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for turn analytics request");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    let payload: Value = serde_json::from_slice(&analytics_request.body)?;
+    let event = payload["events"]
+        .as_array()
+        .and_then(|events| {
+            events
+                .iter()
+                .find(|event| event["event_type"] == "codex_turn_metadata")
+        })
+        .expect("codex_turn_metadata event should be present");
+
+    let event_params = &event["event_params"];
+
+    assert_eq!(event_params["sandbox_policy"], "read_only");
+    assert_eq!(
+        event_params["product_client_id"],
+        serde_json::json!(codex_core::default_client::originator().value)
+    );
+    assert_eq!(event_params["model_slug"], session_configured.model);
+    assert_eq!(event_params["effort"], "high");
+    assert_eq!(event_params["summary"], "detailed");
+    assert_eq!(event_params["service_tier"], "flex");
+    assert_eq!(event_params["collaboration_mode"], "plan");
+    assert!(event_params["thread_id"].as_str().is_some());
+    assert!(event_params["turn_id"].as_str().is_some());
+
     Ok(())
 }
 
