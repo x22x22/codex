@@ -2003,7 +2003,6 @@ dependencies = [
  "codex-utils-oss",
  "codex-utils-sandbox-summary",
  "core_test_support",
- "libc",
  "opentelemetry",
  "opentelemetry_sdk",
  "owo-colors",
