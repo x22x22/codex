@@ -203,9 +203,9 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
         .and_then(|events| {
             events
                 .iter()
-                .find(|event| event["event_type"] == "codex_turn_metadata")
+                .find(|event| event["event_type"] == "codex_turn_event")
         })
-        .expect("codex_turn_metadata event should be present");
+        .expect("codex_turn_event should be present");
 
     let event_params = &event["event_params"];
 

@@ -14,8 +14,8 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
+use crate::analytics_client::CodexTurnEvent;
 use crate::analytics_client::InvocationType;
-use crate::analytics_client::TurnMetadata;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -5678,18 +5678,6 @@ pub(crate) async fn run_turn(
             .await;
         user_prompt_submit_outcome.additional_contexts
     };
-    if !input.is_empty() {
-        sess.services.analytics_events_client.track_turn_metadata(
-            tracking.clone(),
-            TurnMetadata {
-                sandbox_policy: turn_context.sandbox_policy.get().clone(),
-                reasoning_effort: turn_context.reasoning_effort,
-                reasoning_summary: turn_context.reasoning_summary,
-                service_tier: turn_context.config.service_tier,
-                collaboration_mode: turn_context.collaboration_mode.mode,
-            },
-        );
-    }
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -6001,6 +5989,19 @@ pub(crate) async fn run_turn(
                 break;
             }
         }
+    }
+
+    if !input.is_empty() {
+        sess.services.analytics_events_client.track_turn_event(
+            tracking,
+            CodexTurnEvent {
+                sandbox_policy: turn_context.sandbox_policy.get().clone(),
+                reasoning_effort: turn_context.reasoning_effort,
+                reasoning_summary: turn_context.reasoning_summary,
+                service_tier: turn_context.config.service_tier,
+                collaboration_mode: turn_context.collaboration_mode.mode,
+            },
+        );
     }
 
     last_agent_message

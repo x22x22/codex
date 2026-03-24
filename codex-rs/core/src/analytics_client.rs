@@ -29,7 +29,7 @@ pub(crate) struct TrackEventsContext {
 }
 
 #[derive(Clone)]
-pub(crate) struct TurnMetadata {
+pub(crate) struct CodexTurnEvent {
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
     pub(crate) reasoning_summary: ReasoningSummary,
@@ -98,8 +98,8 @@ impl AnalyticsEventsQueue {
                     TrackEventsJob::AppUsed(job) => {
                         send_track_app_used(&auth_manager, job).await;
                     }
-                    TrackEventsJob::TurnMetadata(job) => {
-                        send_track_turn_metadata(&auth_manager, job).await;
+                    TrackEventsJob::TurnEvent(job) => {
+                        send_track_turn_event(&auth_manager, job).await;
                     }
                     TrackEventsJob::PluginUsed(job) => {
                         send_track_plugin_used(&auth_manager, job).await;
@@ -214,16 +214,16 @@ impl AnalyticsEventsClient {
         );
     }
 
-    pub(crate) fn track_turn_metadata(
+    pub(crate) fn track_turn_event(
         &self,
         tracking: TrackEventsContext,
-        turn_metadata: TurnMetadata,
+        turn_event: CodexTurnEvent,
     ) {
-        track_turn_metadata(
+        track_turn_event(
             &self.queue,
             Arc::clone(&self.config),
             Some(tracking),
-            turn_metadata,
+            turn_event,
         );
     }
 
@@ -268,7 +268,7 @@ enum TrackEventsJob {
     SkillInvocations(TrackSkillInvocationsJob),
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
-    TurnMetadata(TrackTurnMetadataJob),
+    TurnEvent(TrackTurnEventJob),
     PluginUsed(TrackPluginUsedJob),
     PluginInstalled(TrackPluginManagementJob),
     PluginUninstalled(TrackPluginManagementJob),
@@ -294,10 +294,10 @@ struct TrackAppUsedJob {
     app: AppInvocation,
 }
 
-struct TrackTurnMetadataJob {
+struct TrackTurnEventJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
-    turn_metadata: TurnMetadata,
+    turn_event: CodexTurnEvent,
 }
 
 struct TrackPluginUsedJob {
@@ -334,7 +334,7 @@ enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
-    TurnMetadata(CodexTurnMetadataEventRequest),
+    TurnEvent(CodexTurnEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -384,7 +384,7 @@ struct CodexAppUsedEventRequest {
 }
 
 #[derive(Serialize)]
-struct CodexTurnMetadata {
+struct CodexTurnEventParams {
     thread_id: Option<String>,
     turn_id: Option<String>,
     product_client_id: Option<String>,
@@ -397,9 +397,9 @@ struct CodexTurnMetadata {
 }
 
 #[derive(Serialize)]
-struct CodexTurnMetadataEventRequest {
+struct CodexTurnEventRequest {
     event_type: &'static str,
-    event_params: CodexTurnMetadata,
+    event_params: CodexTurnEventParams,
 }
 
 #[derive(Serialize)]
@@ -503,11 +503,11 @@ pub(crate) fn track_app_used(
     queue.try_send(job);
 }
 
-pub(crate) fn track_turn_metadata(
+pub(crate) fn track_turn_event(
     queue: &AnalyticsEventsQueue,
     config: Arc<Config>,
     tracking: Option<TrackEventsContext>,
-    turn_metadata: TurnMetadata,
+    turn_event: CodexTurnEvent,
 ) {
     if config.analytics_enabled == Some(false) {
         return;
@@ -515,10 +515,10 @@ pub(crate) fn track_turn_metadata(
     let Some(tracking) = tracking else {
         return;
     };
-    let job = TrackEventsJob::TurnMetadata(TrackTurnMetadataJob {
+    let job = TrackEventsJob::TurnEvent(TrackTurnEventJob {
         config,
         tracking,
-        turn_metadata,
+        turn_event,
     });
     queue.try_send(job);
 }
@@ -648,18 +648,16 @@ async fn send_track_app_used(auth_manager: &AuthManager, job: TrackAppUsedJob) {
     send_track_events(auth_manager, config, events).await;
 }
 
-async fn send_track_turn_metadata(auth_manager: &AuthManager, job: TrackTurnMetadataJob) {
-    let TrackTurnMetadataJob {
+async fn send_track_turn_event(auth_manager: &AuthManager, job: TrackTurnEventJob) {
+    let TrackTurnEventJob {
         config,
         tracking,
-        turn_metadata,
+        turn_event,
     } = job;
-    let events = vec![TrackEventRequest::TurnMetadata(
-        CodexTurnMetadataEventRequest {
-            event_type: "codex_turn_metadata",
-            event_params: codex_turn_metadata(&tracking, turn_metadata),
-        },
-    )];
+    let events = vec![TrackEventRequest::TurnEvent(CodexTurnEventRequest {
+        event_type: "codex_turn_event",
+        event_params: codex_turn_event_params(&tracking, turn_event),
+    })];
 
     send_track_events(auth_manager, config, events).await;
 }
@@ -728,22 +726,20 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
     }
 }
 
-fn codex_turn_metadata(
+fn codex_turn_event_params(
     tracking: &TrackEventsContext,
-    turn_metadata: TurnMetadata,
-) -> CodexTurnMetadata {
-    CodexTurnMetadata {
+    turn_event: CodexTurnEvent,
+) -> CodexTurnEventParams {
+    CodexTurnEventParams {
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
-        sandbox_policy: Some(sandbox_policy_mode(&turn_metadata.sandbox_policy)),
-        reasoning_effort: turn_metadata
-            .reasoning_effort
-            .map(|value| value.to_string()),
-        reasoning_summary: Some(turn_metadata.reasoning_summary.to_string()),
-        service_tier: turn_metadata.service_tier.map(|value| value.to_string()),
-        collaboration_mode: Some(collaboration_mode_mode(turn_metadata.collaboration_mode)),
+        sandbox_policy: Some(sandbox_policy_mode(&turn_event.sandbox_policy)),
+        reasoning_effort: turn_event.reasoning_effort.map(|value| value.to_string()),
+        reasoning_summary: Some(turn_event.reasoning_summary.to_string()),
+        service_tier: turn_event.service_tier.map(|value| value.to_string()),
+        collaboration_mode: Some(collaboration_mode_mode(turn_event.collaboration_mode)),
     }
 }
 
