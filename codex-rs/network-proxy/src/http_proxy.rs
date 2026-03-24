@@ -151,7 +151,7 @@ async fn run_http_proxy_with_listener(
     Ok(())
 }
 
-fn proxy_authorization_network_owner_id<T>(req: &Request<T>) -> Option<String> {
+fn proxy_authorization_parent_tool_item_id<T>(req: &Request<T>) -> Option<String> {
     req.headers()
         .typed_get::<ProxyAuthorization<Basic>>()
         .map(|header| header.0.username().to_string())
@@ -181,7 +181,7 @@ async fn http_connect_accept(
     }
 
     let client = client_addr(&req);
-    let network_owner_id = proxy_authorization_network_owner_id(&req);
+    let parent_tool_item_id = proxy_authorization_parent_tool_item_id(&req);
     let enabled = app_state
         .enabled()
         .await
@@ -194,7 +194,7 @@ async fn http_connect_accept(
             host,
             authority.port,
             client_addr(&req),
-            network_owner_id,
+            parent_tool_item_id,
             Some("CONNECT".to_string()),
             NetworkProtocol::HttpsConnect,
             /*audit_endpoint_override*/ None,
@@ -206,7 +206,7 @@ async fn http_connect_accept(
         protocol: NetworkProtocol::HttpsConnect,
         host: host.clone(),
         port: authority.port,
-        network_owner_id: network_owner_id.clone(),
+        parent_tool_item_id: parent_tool_item_id.clone(),
         client_addr: client.clone(),
         method: Some("CONNECT".to_string()),
         command: None,
@@ -231,7 +231,7 @@ async fn http_connect_accept(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: reason.clone(),
-                    network_owner_id,
+                    parent_tool_item_id,
                     client: client.clone(),
                     method: Some("CONNECT".to_string()),
                     mode: None,
@@ -295,7 +295,7 @@ async fn http_connect_accept(
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
                 reason: REASON_MITM_REQUIRED.to_string(),
-                network_owner_id: None,
+                parent_tool_item_id: None,
                 client: client.clone(),
                 method: Some("CONNECT".to_string()),
                 mode: Some(NetworkMode::Limited),
@@ -445,7 +445,7 @@ async fn http_plain_proxy(
         }
     };
     let client = client_addr(&req);
-    let network_owner_id = proxy_authorization_network_owner_id(&req);
+    let parent_tool_item_id = proxy_authorization_parent_tool_item_id(&req);
     let method_allowed = match app_state
         .method_allowed(req.method().as_str())
         .await
@@ -485,7 +485,7 @@ async fn http_plain_proxy(
                 socket_path,
                 /*port*/ 0,
                 client_addr(&req),
-                network_owner_id.clone(),
+                parent_tool_item_id.clone(),
                 Some(req.method().as_str().to_string()),
                 NetworkProtocol::Http,
                 Some(("unix-socket", 0)),
@@ -631,7 +631,7 @@ async fn http_plain_proxy(
             host,
             port,
             client_addr(&req),
-            network_owner_id.clone(),
+            parent_tool_item_id.clone(),
             Some(req.method().as_str().to_string()),
             NetworkProtocol::Http,
             /*audit_endpoint_override*/ None,
@@ -643,7 +643,7 @@ async fn http_plain_proxy(
         protocol: NetworkProtocol::Http,
         host: host.clone(),
         port,
-        network_owner_id: network_owner_id.clone(),
+        parent_tool_item_id: parent_tool_item_id.clone(),
         client_addr: client.clone(),
         method: Some(req.method().as_str().to_string()),
         command: None,
@@ -668,7 +668,7 @@ async fn http_plain_proxy(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: reason.clone(),
-                    network_owner_id: network_owner_id.clone(),
+                    parent_tool_item_id: parent_tool_item_id.clone(),
                     client: client.clone(),
                     method: Some(req.method().as_str().to_string()),
                     mode: None,
@@ -714,7 +714,7 @@ async fn http_plain_proxy(
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
                 reason: REASON_METHOD_NOT_ALLOWED.to_string(),
-                network_owner_id,
+                parent_tool_item_id,
                 client: client.clone(),
                 method: Some(req.method().as_str().to_string()),
                 mode: Some(NetworkMode::Limited),
@@ -908,7 +908,7 @@ async fn proxy_disabled_response(
     host: String,
     port: u16,
     client: Option<String>,
-    network_owner_id: Option<String>,
+    parent_tool_item_id: Option<String>,
     method: Option<String>,
     protocol: NetworkProtocol,
     audit_endpoint_override: Option<(&str, u16)>,
@@ -933,7 +933,7 @@ async fn proxy_disabled_response(
         .record_blocked(BlockedRequest::new(BlockedRequestArgs {
             host: blocked_host,
             reason: REASON_PROXY_DISABLED.to_string(),
-            network_owner_id,
+            parent_tool_item_id,
             client,
             method,
             mode: None,

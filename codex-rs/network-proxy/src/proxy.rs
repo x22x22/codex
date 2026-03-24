@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::warn;
+use url::Url;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "codex-network-proxy", about = "Codex network sandbox proxy")]
@@ -305,11 +306,22 @@ fn set_env_keys(env: &mut HashMap<String, String>, keys: &[&str], value: &str) {
     }
 }
 
-fn proxy_url(scheme: &str, addr: SocketAddr, network_owner_id: Option<&str>) -> String {
-    match network_owner_id {
-        Some(network_owner_id) => format!("{scheme}://{network_owner_id}@{addr}"),
-        None => format!("{scheme}://{addr}"),
+fn proxy_url(scheme: &str, addr: SocketAddr, parent_tool_item_id: Option<&str>) -> String {
+    let base = format!("{scheme}://{addr}");
+    let mut url = match Url::parse(&base) {
+        Ok(url) => url,
+        Err(err) => panic!("failed to build proxy URL for {base}: {err}"),
+    };
+    if let Some(parent_tool_item_id) = parent_tool_item_id
+        && let Err(()) = url.set_username(parent_tool_item_id)
+    {
+        panic!("failed to encode parent tool item id in proxy URL");
     }
+    let mut proxy_url = url.to_string();
+    if proxy_url.ends_with('/') {
+        proxy_url.pop();
+    }
+    proxy_url
 }
 
 fn apply_proxy_env_overrides(
@@ -318,10 +330,10 @@ fn apply_proxy_env_overrides(
     socks_addr: SocketAddr,
     socks_enabled: bool,
     allow_local_binding: bool,
-    network_owner_id: Option<&str>,
+    parent_tool_item_id: Option<&str>,
 ) {
-    let http_proxy_url = proxy_url("http", http_addr, network_owner_id);
-    let socks_proxy_url = proxy_url("socks5h", socks_addr, network_owner_id);
+    let http_proxy_url = proxy_url("http", http_addr, parent_tool_item_id);
+    let socks_proxy_url = proxy_url("socks5h", socks_addr, parent_tool_item_id);
     env.insert(
         ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
         if allow_local_binding {
@@ -422,13 +434,15 @@ impl NetworkProxy {
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
-        self.apply_to_env_for_owner(env, /*network_owner_id*/ None);
+        self.apply_to_env_for_parent_tool_item(env, /*parent_tool_item_id*/ None);
     }
 
-    pub fn apply_to_env_for_owner(
+    /// Apply managed proxy environment variables, optionally tagging them with
+    /// the originating parent tool item id for blocked-request attribution.
+    pub fn apply_to_env_for_parent_tool_item(
         &self,
         env: &mut HashMap<String, String>,
-        network_owner_id: Option<&str>,
+        parent_tool_item_id: Option<&str>,
     ) {
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
@@ -438,7 +452,7 @@ impl NetworkProxy {
             self.socks_addr,
             self.socks_enabled,
             self.allow_local_binding,
-            network_owner_id,
+            parent_tool_item_id,
         );
     }
 
@@ -713,7 +727,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
-            /*network_owner_id*/ None,
+            /*parent_tool_item_id*/ None,
         );
 
         assert_eq!(
@@ -764,7 +778,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             false,
             true,
-            /*network_owner_id*/ None,
+            /*parent_tool_item_id*/ None,
         );
 
         assert_eq!(
@@ -783,7 +797,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
-            /*network_owner_id*/ None,
+            /*parent_tool_item_id*/ None,
         );
 
         assert_eq!(
@@ -829,7 +843,7 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
             true,
             false,
-            /*network_owner_id*/ None,
+            /*parent_tool_item_id*/ None,
         );
 
         assert_eq!(

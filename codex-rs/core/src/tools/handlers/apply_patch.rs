@@ -215,7 +215,6 @@ impl ToolHandler for ApplyPatchHandler {
                             session: session.clone(),
                             turn: turn.clone(),
                             call_id: call_id.clone(),
-                            network_approval_owner_id: None,
                             tool_name: tool_name.to_string(),
                         };
                         let out = orchestrator
@@ -320,7 +319,6 @@ pub(crate) async fn intercept_apply_patch(
                         session: session.clone(),
                         turn: turn.clone(),
                         call_id: call_id.to_string(),
-                        network_approval_owner_id: None,
                         tool_name: tool_name.to_string(),
                     };
                     let out = orchestrator
