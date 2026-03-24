@@ -486,18 +486,12 @@ impl CodexMessageProcessor {
     }
 
     async fn app_server_state_db(&self) -> Option<StateDbHandle> {
-        if let Some(state_db_ctx) = self.app_server_state_db_cell.get() {
-            return Some(state_db_ctx.clone());
-        }
-
-        let state_db_ctx = get_state_db(&self.config).await?;
-        let _ = self.app_server_state_db_cell.set(state_db_ctx.clone());
-        Some(
-            self.app_server_state_db_cell
-                .get()
-                .cloned()
-                .unwrap_or(state_db_ctx),
-        )
+        let config = Arc::clone(&self.config);
+        self.app_server_state_db_cell
+            .get_or_try_init(|| async move { get_state_db(&config).await.ok_or(()) })
+            .await
+            .ok()
+            .cloned()
     }
 
     async fn find_thread_path_by_id_with_state_db(
