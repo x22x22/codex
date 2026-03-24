@@ -167,11 +167,11 @@ def test_examples_readme_matches_pinned_runtime_version() -> None:
     )
 
 
-def test_pinned_runtime_git_ref_matches_runtime_setup_pin() -> None:
+def test_pinned_runtime_git_tag_matches_runtime_setup_pin() -> None:
     script = _load_update_script_module()
     runtime_setup = _load_runtime_setup_module()
 
-    assert script.pinned_runtime_git_ref() == (
+    assert script.pinned_runtime_git_tag() == (
         f"rust-v{runtime_setup.pinned_runtime_version()}"
     )
 
@@ -182,7 +182,20 @@ def test_parser_supports_generate_types_for_pinned_runtime() -> None:
     args = script.parse_args(["generate-types-for-pinned-runtime"])
 
     assert args.command == "generate-types-for-pinned-runtime"
-    assert args.git_ref is None
+    assert not hasattr(args, "git_ref")
+
+
+def test_parser_rejects_git_ref_override_for_pinned_runtime_generation() -> None:
+    script = _load_update_script_module()
+
+    with pytest.raises(SystemExit):
+        script.parse_args(
+            [
+                "generate-types-for-pinned-runtime",
+                "--git-ref",
+                "rust-v1.2.3",
+            ]
+        )
 
 
 def test_release_metadata_retries_without_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -335,8 +348,11 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     def fake_generate_types() -> None:
         raise AssertionError("stage-sdk should use pinned-runtime generation")
 
-    def fake_generate_types_for_pinned_runtime(git_ref: str | None = None) -> None:
-        calls.append(f"generate_types_for_pinned_runtime:{git_ref}")
+    def fake_generate_types_for_pinned_runtime() -> None:
+        raise AssertionError("stage-sdk should use explicit runtime-tag generation")
+
+    def fake_generate_types_for_runtime_tag(runtime_tag: str) -> None:
+        calls.append(f"generate_types_for_runtime_tag:{runtime_tag}")
 
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
@@ -355,6 +371,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     ops = script.CliOps(
         generate_types=fake_generate_types,
         generate_types_for_pinned_runtime=fake_generate_types_for_pinned_runtime,
+        generate_types_for_runtime_tag=fake_generate_types_for_runtime_tag,
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,
@@ -362,7 +379,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
 
     script.run_command(args, ops)
 
-    assert calls == ["generate_types_for_pinned_runtime:rust-v1.2.3", "stage_sdk"]
+    assert calls == ["generate_types_for_runtime_tag:rust-v1.2.3", "stage_sdk"]
 
 
 def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> None:
@@ -383,8 +400,11 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
-    def fake_generate_types_for_pinned_runtime(_git_ref: str | None = None) -> None:
+    def fake_generate_types_for_pinned_runtime() -> None:
         calls.append("generate_types_for_pinned_runtime")
+
+    def fake_generate_types_for_runtime_tag(_runtime_tag: str) -> None:
+        calls.append("generate_types_for_runtime_tag")
 
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
@@ -403,6 +423,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
     ops = script.CliOps(
         generate_types=fake_generate_types,
         generate_types_for_pinned_runtime=fake_generate_types_for_pinned_runtime,
+        generate_types_for_runtime_tag=fake_generate_types_for_runtime_tag,
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,

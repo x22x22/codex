@@ -97,17 +97,17 @@ def pinned_runtime_version() -> str:
     return module.pinned_runtime_version()  # type: ignore[no-any-return]
 
 
-def runtime_git_ref(version: str) -> str:
+def runtime_git_tag(version: str) -> str:
     return f"rust-v{version}"
 
 
-def pinned_runtime_git_ref() -> str:
-    return runtime_git_ref(pinned_runtime_version())
+def pinned_runtime_git_tag() -> str:
+    return runtime_git_tag(pinned_runtime_version())
 
 
-def ensure_git_ref_available(git_ref: str) -> None:
+def ensure_git_tag_available(git_tag: str) -> None:
     result = subprocess.run(
-        ["git", "rev-parse", "--verify", git_ref],
+        ["git", "rev-parse", "--verify", git_tag],
         cwd=str(repo_root()),
         text=True,
         capture_output=True,
@@ -115,20 +115,20 @@ def ensure_git_ref_available(git_ref: str) -> None:
     )
     if result.returncode == 0:
         return
-    run(["git", "fetch", "origin", "tag", git_ref, "--depth=1"], repo_root())
+    run(["git", "fetch", "origin", "tag", git_tag, "--depth=1"], repo_root())
 
 
-def read_git_file(git_ref: str, repo_path: str) -> str:
-    return run_capture(["git", "show", f"{git_ref}:{repo_path}"], repo_root())
+def read_git_tag_file(git_tag: str, repo_path: str) -> str:
+    return run_capture(["git", "show", f"{git_tag}:{repo_path}"], repo_root())
 
 
-def materialize_schema_files_from_git_ref(git_ref: str, out_dir: Path) -> tuple[Path, Path]:
+def materialize_schema_files_from_git_tag(git_tag: str, out_dir: Path) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     schema_bundle = out_dir / "codex_app_server_protocol.v2.schemas.json"
     schema_bundle.write_text(
-        read_git_file(
-            git_ref,
+        read_git_tag_file(
+            git_tag,
             "codex-rs/app-server-protocol/schema/json/"
             "codex_app_server_protocol.v2.schemas.json",
         )
@@ -136,8 +136,8 @@ def materialize_schema_files_from_git_ref(git_ref: str, out_dir: Path) -> tuple[
 
     server_notification = out_dir / "ServerNotification.json"
     server_notification.write_text(
-        read_git_file(
-            git_ref,
+        read_git_tag_file(
+            git_tag,
             "codex-rs/app-server-protocol/schema/json/ServerNotification.json",
         )
     )
@@ -647,7 +647,8 @@ class PublicFieldSpec:
 @dataclass(frozen=True)
 class CliOps:
     generate_types: Callable[[], None]
-    generate_types_for_pinned_runtime: Callable[[str | None], None]
+    generate_types_for_pinned_runtime: Callable[[], None]
+    generate_types_for_runtime_tag: Callable[[str], None]
     stage_python_sdk_package: Callable[[Path, str, str], Path]
     stage_python_runtime_package: Callable[[Path, str, Path], Path]
     current_sdk_version: Callable[[], str]
@@ -1003,18 +1004,21 @@ def generate_types(
     generate_public_api_flat_methods()
 
 
-def generate_types_for_pinned_runtime(git_ref: str | None = None) -> None:
-    pinned_ref = git_ref or pinned_runtime_git_ref()
-    ensure_git_ref_available(pinned_ref)
+def generate_types_for_runtime_tag(runtime_tag: str) -> None:
+    ensure_git_tag_available(runtime_tag)
     with tempfile.TemporaryDirectory(prefix="codex-python-pinned-schema-") as temp_root:
-        schema_bundle, server_notification_schema = materialize_schema_files_from_git_ref(
-            pinned_ref,
+        schema_bundle, server_notification_schema = materialize_schema_files_from_git_tag(
+            runtime_tag,
             Path(temp_root),
         )
         generate_types(
             schema_bundle=schema_bundle,
             server_notification_schema=server_notification_schema,
         )
+
+
+def generate_types_for_pinned_runtime() -> None:
+    generate_types_for_runtime_tag(pinned_runtime_git_tag())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1024,13 +1028,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "generate-types", help="Regenerate Python protocol-derived types"
     )
-    pinned_types_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "generate-types-for-pinned-runtime",
         help="Regenerate Python protocol-derived types from the pinned runtime version",
-    )
-    pinned_types_parser.add_argument(
-        "--git-ref",
-        help="Optional git ref to source vendored schema files from",
     )
 
     stage_sdk_parser = subparsers.add_parser(
@@ -1082,6 +1082,7 @@ def default_cli_ops() -> CliOps:
     return CliOps(
         generate_types=generate_types,
         generate_types_for_pinned_runtime=generate_types_for_pinned_runtime,
+        generate_types_for_runtime_tag=generate_types_for_runtime_tag,
         stage_python_sdk_package=stage_python_sdk_package,
         stage_python_runtime_package=stage_python_runtime_package,
         current_sdk_version=current_sdk_version,
@@ -1092,9 +1093,9 @@ def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     if args.command == "generate-types":
         ops.generate_types()
     elif args.command == "generate-types-for-pinned-runtime":
-        ops.generate_types_for_pinned_runtime(args.git_ref)
+        ops.generate_types_for_pinned_runtime()
     elif args.command == "stage-sdk":
-        ops.generate_types_for_pinned_runtime(runtime_git_ref(args.runtime_version))
+        ops.generate_types_for_runtime_tag(runtime_git_tag(args.runtime_version))
         ops.stage_python_sdk_package(
             args.staging_dir,
             args.sdk_version or ops.current_sdk_version(),
