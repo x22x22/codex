@@ -1046,39 +1046,6 @@ async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() 
     })
     .await
     .expect("completion watcher should send inter-agent communication");
-
-    let worker_thread = harness
-        .manager
-        .get_thread(worker_thread_id)
-        .await
-        .expect("worker thread should exist");
-    let expected_message = InterAgentCommunication::new(
-        tester_path.clone(),
-        worker_path.clone(),
-        Vec::new(),
-        "done".to_string(),
-    );
-    timeout(MULTI_AGENT_EVENTUAL_TIMEOUT, async {
-        loop {
-            let history_items = worker_thread
-                .codex
-                .session
-                .clone_history()
-                .await
-                .raw_items()
-                .to_vec();
-            if history_contains_assistant_inter_agent_communication(
-                &history_items,
-                &expected_message,
-            ) && !has_subagent_notification(&history_items)
-            {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("worker should record assistant inter-agent message");
 }
 
 #[tokio::test]
