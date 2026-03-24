@@ -53,7 +53,6 @@ async fn openai_model_header_mismatch_emits_warning_event_and_warning_item() -> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -153,7 +152,6 @@ async fn response_model_field_mismatch_emits_warning_when_header_matches_request
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -240,7 +238,6 @@ async fn openai_model_header_mismatch_only_emits_one_warning_per_turn() -> Resul
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -291,7 +288,6 @@ async fn openai_model_header_casing_only_mismatch_does_not_warn() -> Result<()> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 

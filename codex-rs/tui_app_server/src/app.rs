@@ -2020,7 +2020,6 @@ impl App {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
-                submission_type,
             } => {
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     match app_server
@@ -2054,7 +2053,6 @@ impl App {
                             *service_tier,
                             collaboration_mode.clone(),
                             *personality,
-                            *submission_type,
                             final_output_json_schema.clone(),
                         )
                         .await?;

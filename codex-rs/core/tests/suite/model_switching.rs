@@ -134,7 +134,6 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -172,7 +171,6 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -233,7 +231,6 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -271,7 +268,6 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -414,7 +410,6 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -436,7 +431,6 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -545,7 +539,6 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -567,7 +560,6 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             summary: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -679,7 +671,6 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             summary: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -701,7 +692,6 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             summary: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -815,7 +805,6 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             summary: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -845,7 +834,6 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             summary: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1001,7 +989,6 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -1061,7 +1048,6 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 

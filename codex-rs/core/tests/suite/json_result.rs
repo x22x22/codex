@@ -88,7 +88,6 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 

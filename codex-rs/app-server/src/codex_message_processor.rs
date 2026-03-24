@@ -6112,10 +6112,9 @@ impl CodexMessageProcessor {
             .submit_core_op(
                 &request_id,
                 thread.as_ref(),
-                Op::UserInputWithMetadata {
+                Op::UserInput {
                     items: mapped_items,
                     final_output_json_schema: params.output_schema,
-                    submission_type: params.submission_type,
                 },
             )
             .await;

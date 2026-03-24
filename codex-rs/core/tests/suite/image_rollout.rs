@@ -130,7 +130,6 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -215,7 +214,6 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 

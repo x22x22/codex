@@ -137,7 +137,6 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -308,7 +307,6 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -513,7 +511,6 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -629,7 +626,6 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -792,7 +788,6 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -1040,7 +1035,6 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 

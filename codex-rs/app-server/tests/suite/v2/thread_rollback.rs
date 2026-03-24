@@ -61,7 +61,6 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
                 text: first_text.to_string(),
                 text_elements: Vec::new(),
             }],
-            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -83,7 +82,6 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
                 text: "Second".to_string(),
                 text_elements: Vec::new(),
             }],
-            submission_type: None,
             ..Default::default()
         })
         .await?;

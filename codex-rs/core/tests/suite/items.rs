@@ -33,7 +33,6 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_web_search_call_added_partial;
 use core_test_support::responses::ev_web_search_call_done;
 use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -47,7 +46,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
-use tempfile::tempdir;
 
 fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
     fn sanitize(value: &str) -> String {
@@ -71,37 +69,6 @@ fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: 
         .join("generated_images")
         .join(sanitize(session_id))
         .join(format!("{}.png", sanitize(call_id)))
-}
-
-async fn wait_for_analytics_event(
-    server: &wiremock::MockServer,
-    event_type: &str,
-    event_match: impl Fn(&Value) -> bool,
-) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let requests = server.received_requests().await.unwrap_or_default();
-        if let Some(event) = requests
-            .into_iter()
-            .filter(|request| request.url.path() == "/codex/analytics-events/events")
-            .find_map(|request| {
-                let payload: Value =
-                    serde_json::from_slice(&request.body).expect("analytics payload");
-                payload["events"].as_array().and_then(|events| {
-                    events
-                        .iter()
-                        .find(|event| event["event_type"] == event_type && event_match(event))
-                        .cloned()
-                })
-            })
-        {
-            return event;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for analytics event {event_type}");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -163,7 +130,7 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_tracks_turn_event_analytics() -> anyhow::Result<()> {
+async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -210,7 +177,6 @@ async fn user_turn_tracks_turn_event_analytics() -> anyhow::Result<()> {
                 },
             }),
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -235,16 +201,14 @@ async fn user_turn_tracks_turn_event_analytics() -> anyhow::Result<()> {
     let event = payload["events"]
         .as_array()
         .and_then(|events| {
-            events.iter().find(|event| {
-                event["event_type"] == "codex_turn_event"
-                    && event["event_params"]["submission_type"] == "prompt"
-            })
+            events
+                .iter()
+                .find(|event| event["event_type"] == "codex_turn_event")
         })
-        .expect("codex_turn_event prompt event should be present");
+        .expect("codex_turn_event should be present");
 
     let event_params = &event["event_params"];
 
-    assert_eq!(event_params["submission_type"], "prompt");
     assert_eq!(event_params["sandbox_policy"], "read_only");
     assert_eq!(
         event_params["product_client_id"],
@@ -255,199 +219,6 @@ async fn user_turn_tracks_turn_event_analytics() -> anyhow::Result<()> {
     assert_eq!(event_params["reasoning_summary"], "detailed");
     assert_eq!(event_params["service_tier"], "flex");
     assert_eq!(event_params["collaboration_mode"], "plan");
-    assert!(event_params["thread_id"].as_str().is_some());
-    assert!(event_params["turn_id"].as_str().is_some());
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_tracks_turn_event_prompt_type_analytics() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
-    )
-    .await;
-
-    let chatgpt_base_url = server.uri();
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            config.chatgpt_base_url = chatgpt_base_url;
-        });
-    let TestCodex {
-        codex,
-        session_configured,
-        config,
-        ..
-    } = builder.build(&server).await?;
-
-    codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "hello input message analytics".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: config.cwd.clone(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            model: session_configured.model.clone(),
-            effort: Some(ReasoningEffort::High),
-            summary: Some(ReasoningSummary::Detailed),
-            service_tier: Some(Some(ServiceTier::Flex)),
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Plan,
-                settings: Settings {
-                    model: session_configured.model.clone(),
-                    reasoning_effort: Some(ReasoningEffort::High),
-                    developer_instructions: None,
-                },
-            }),
-            personality: None,
-            submission_type: None,
-        })
-        .await?;
-
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-
-    let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
-        event["event_params"]["submission_type"] == "prompt"
-    })
-    .await;
-    let event_params = &event["event_params"];
-
-    assert_eq!(event_params["submission_type"], "prompt");
-    assert_eq!(
-        event_params["product_client_id"],
-        serde_json::json!(codex_core::default_client::originator().value)
-    );
-    assert_eq!(event_params["model_slug"], session_configured.model);
-    assert!(event_params["thread_id"].as_str().is_some());
-    assert!(event_params["turn_id"].as_str().is_some());
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_tracks_turn_steer_analytics() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let temp = tempdir()?;
-    let unblock_path = temp.path().join("unblock-steering");
-    let command = format!(
-        "while [ ! -f \"{}\" ]; do sleep 0.01; done; echo done",
-        unblock_path.display()
-    );
-    let call_id = "shell-steering-call";
-
-    mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                core_test_support::responses::ev_function_call(
-                    call_id,
-                    "shell",
-                    &serde_json::to_string(&serde_json::json!({
-                        "command": ["/bin/sh", "-c", command],
-                    }))?,
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_assistant_message("msg-2", "done"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    let chatgpt_base_url = server.uri();
-    let test = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model("gpt-5")
-        .with_config(move |config| {
-            config.chatgpt_base_url = chatgpt_base_url;
-        })
-        .build(&server)
-        .await?;
-    let codex = test.codex.clone();
-    let turn_model = test.session_configured.model.clone();
-
-    codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "start steering flow".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: test.cwd_path().to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: turn_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-            submission_type: None,
-        })
-        .await?;
-
-    let turn_id = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
-        _ => None,
-    })
-    .await;
-
-    wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(()),
-        _ => None,
-    })
-    .await;
-
-    let steering_text = "steering metadata check";
-    let steered_turn_id = codex
-        .steer_input(
-            vec![UserInput::Text {
-                text: steering_text.into(),
-                text_elements: Vec::new(),
-            }],
-            Some(turn_id.as_str()),
-        )
-        .await
-        .expect("steer should succeed on active turn");
-    assert_eq!(steered_turn_id, turn_id);
-
-    std::fs::write(&unblock_path, "go")?;
-
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-
-    let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
-        event["event_params"].get("submission_type").is_none()
-            && event["event_params"].get("sandbox_policy").is_none()
-    })
-    .await;
-    let event_params = &event["event_params"];
-
-    assert!(event_params.get("submission_type").is_none());
-    assert!(event_params.get("sandbox_policy").is_none());
-    assert!(event_params.get("reasoning_effort").is_none());
-    assert!(event_params.get("reasoning_summary").is_none());
-    assert!(event_params.get("service_tier").is_none());
-    assert!(event_params.get("collaboration_mode").is_none());
-    assert_eq!(
-        event_params["product_client_id"],
-        serde_json::json!(codex_core::default_client::originator().value)
-    );
-    assert_eq!(event_params["model_slug"], "gpt-5");
     assert!(event_params["thread_id"].as_str().is_some());
     assert!(event_params["turn_id"].as_str().is_some());
 
@@ -864,7 +635,6 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -942,7 +712,6 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -1052,7 +821,6 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -1240,7 +1008,6 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -1355,7 +1122,6 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            submission_type: None,
         })
         .await?;
 

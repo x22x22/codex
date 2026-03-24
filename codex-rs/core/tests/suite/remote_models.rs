@@ -181,7 +181,6 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -245,7 +244,6 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -406,7 +404,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
@@ -626,7 +623,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 

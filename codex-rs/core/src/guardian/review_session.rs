@@ -523,7 +523,6 @@ async fn run_review_on_session(
                     final_output_json_schema: Some(params.schema.clone()),
                     collaboration_mode: None,
                     personality: params.personality,
-                    submission_type: None,
                 })
                 .await
         }),

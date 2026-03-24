@@ -59,7 +59,6 @@ async fn submit_user_turn(
             service_tier: None,
             collaboration_mode,
             personality: None,
-            submission_type: None,
         })
         .await?;
     Ok(())
@@ -141,7 +140,6 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            submission_type: None,
         })
         .await?;
 
