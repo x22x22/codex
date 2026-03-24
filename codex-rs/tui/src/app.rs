@@ -154,12 +154,15 @@ mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
 mod loaded_threads;
+mod fork_terminal;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
+#[cfg(target_os = "macos")]
+use self::fork_terminal::spawn_fork_in_terminal;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -4086,16 +4089,48 @@ impl App {
                     /*inc*/ 1,
                     &[("source", "slash_command")],
                 );
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
-                );
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
+                    #[cfg(target_os = "macos")]
+                    if let Some(path) = self.chat_widget.rollout_path()
+                        && path.exists()
+                    {
+                        match crate::resolve_session_thread_id(path.as_path(), None).await {
+                            Some(fork_thread_id) => {
+                                match spawn_fork_in_terminal(self, tui, fork_thread_id).await {
+                                    Ok(()) => {
+                                        self.chat_widget.add_to_history(
+                                            history_cell::new_info_event(
+                                                "Opened fork in a new iTerm window.".to_string(),
+                                                Some("Current session left unchanged.".to_string()),
+                                            ),
+                                        );
+                                        tui.frame_requester().schedule_frame();
+                                        return Ok(AppRunControl::Continue);
+                                    }
+                                    Err(err) => {
+                                        let path_display = path.display();
+                                        self.chat_widget.add_error_message(format!(
+                                            "Failed to open forked session in iTerm from {path_display}: {err}"
+                                        ));
+                                        tui.frame_requester().schedule_frame();
+                                        return Ok(AppRunControl::Continue);
+                                    }
+                                }
+                            }
+                            None => {
+                                let path_display = path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to read session metadata from {path_display}."
+                                ));
+                                tui.frame_requester().schedule_frame();
+                                return Ok(AppRunControl::Continue);
+                            }
+                        }
+                    }
                     match app_server.fork_thread(self.config.clone(), thread_id).await {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
