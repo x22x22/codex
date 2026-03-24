@@ -5673,6 +5673,10 @@ pub(crate) async fn run_turn(
             .await;
             return None;
         }
+        if !plugin_items.is_empty() {
+            sess.record_conversation_items(&turn_context, &plugin_items)
+                .await;
+        }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await;
         user_prompt_submit_outcome.additional_contexts
@@ -5701,10 +5705,6 @@ pub(crate) async fn run_turn(
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
-            .await;
-    }
-    if !plugin_items.is_empty() {
-        sess.record_conversation_items(&turn_context, &plugin_items)
             .await;
     }
 

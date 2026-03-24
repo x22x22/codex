@@ -20,7 +20,10 @@ pub(crate) fn build_plugin_injections(
     }
 
     // Turn each explicit plugin mention into a developer hint that points the
-    // model at the plugin's visible MCP servers, enabled apps, and skill prefix.
+    // model at the plugin's visible MCP servers, enabled apps, and skill
+    // prefix. `run_turn` records these hints before the concrete user message,
+    // so rollback trimming can drop them with the rest of that turn's
+    // pre-message scaffolding.
     mentioned_plugins
         .iter()
         .filter_map(|plugin| {
