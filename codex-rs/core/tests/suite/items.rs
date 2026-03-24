@@ -443,13 +443,18 @@ async fn user_turn_tracks_turn_steer_analytics() -> anyhow::Result<()> {
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
-        event["event_params"]["submission_type"].is_null()
-            && event["event_params"]["sandbox_policy"].is_null()
+        event["event_params"].get("submission_type").is_none()
+            && event["event_params"].get("sandbox_policy").is_none()
     })
     .await;
     let event_params = &event["event_params"];
 
-    assert!(event_params["submission_type"].is_null());
+    assert!(event_params.get("submission_type").is_none());
+    assert!(event_params.get("sandbox_policy").is_none());
+    assert!(event_params.get("reasoning_effort").is_none());
+    assert!(event_params.get("reasoning_summary").is_none());
+    assert!(event_params.get("service_tier").is_none());
+    assert!(event_params.get("collaboration_mode").is_none());
     assert_eq!(
         event_params["product_client_id"],
         serde_json::json!(codex_core::default_client::originator().value)

@@ -420,23 +420,38 @@ struct CodexAppUsedEventRequest {
     event_params: CodexAppMetadata,
 }
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 struct CodexTurnEventParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
     thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     product_client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     model_slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     submission_type: Option<SubmissionType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     model_provider: Option<String>,
     sandbox_policy: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     approval_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     approvals_reviewer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     sandbox_network_access: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     collaboration_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     personality: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     num_input_images: Option<usize>,
 }
 
@@ -842,18 +857,7 @@ fn codex_turn_steer_event_params(
         turn_id: Some(tracking.turn_id.clone()),
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
-        submission_type: None,
-        model_provider: None,
-        sandbox_policy: None,
-        reasoning_effort: None,
-        reasoning_summary: None,
-        service_tier: None,
-        approval_policy: None,
-        approvals_reviewer: None,
-        sandbox_network_access: None,
-        collaboration_mode: None,
-        personality: None,
-        num_input_images: None,
+        ..Default::default()
     }
 }
 

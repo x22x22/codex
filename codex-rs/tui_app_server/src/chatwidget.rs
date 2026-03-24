@@ -2706,7 +2706,7 @@ impl ChatWidget {
                 .map(|pending| pending.user_message)
                 .collect();
             if !pending_steers.is_empty() {
-                self.submit_user_message_with_type(merge_user_messages(pending_steers), None);
+                self.submit_user_message(merge_user_messages(pending_steers));
             } else if let Some(combined) = self.drain_pending_messages_for_restore() {
                 self.restore_user_message_to_composer(combined);
             }

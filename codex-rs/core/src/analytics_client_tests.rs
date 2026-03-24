@@ -277,18 +277,7 @@ fn turn_steer_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "product_client_id": crate::default_client::originator().value,
-                "model_slug": "gpt-5",
-                "submission_type": null,
-                "sandbox_policy": null,
-                "reasoning_effort": null,
-                "reasoning_summary": null,
-                "service_tier": null,
-                "approval_policy": null,
-                "approvals_reviewer": null,
-                "sandbox_network_access": null,
-                "collaboration_mode": null,
-                "personality": null,
-                "num_input_images": null
+                "model_slug": "gpt-5"
             }
         })
     );
