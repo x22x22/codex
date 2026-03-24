@@ -4,15 +4,18 @@ mod firewall;
 
 use anyhow::Context;
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use codex_windows_sandbox::canonicalize_path;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use codex_windows_sandbox::LOG_FILE_NAME;
+use codex_windows_sandbox::SETUP_VERSION;
+use codex_windows_sandbox::SetupErrorCode;
+use codex_windows_sandbox::SetupErrorReport;
+use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
-use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
@@ -25,16 +28,11 @@ use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::workspace_cap_sid_for_cwd;
 use codex_windows_sandbox::write_setup_error_report;
-use codex_windows_sandbox::SetupErrorCode;
-use codex_windows_sandbox::SetupErrorReport;
-use codex_windows_sandbox::SetupFailure;
-use codex_windows_sandbox::LOG_FILE_NAME;
-use codex_windows_sandbox::SETUP_VERSION;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::ffi::c_void;
 use std::ffi::OsStr;
+use std::ffi::c_void;
 use std::fs::File;
 use std::io::Write;
 use std::os::windows::process::CommandExt;
@@ -44,17 +42,17 @@ use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
 use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
-use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
-use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
 use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
+use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
+use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
-use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::CONTAINER_INHERIT_ACE;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::OBJECT_INHERIT_ACE;
@@ -616,7 +614,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    let cap_sid_str = caps.workspace.clone();
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
     let write_mask =
@@ -624,8 +621,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let mut grant_tasks: Vec<PathBuf> = Vec::new();
 
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
-    let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
-
     for root in &payload.write_roots {
         if !seen_write_roots.insert(root.clone()) {
             continue;
@@ -638,20 +633,9 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             continue;
         }
         let mut need_grant = false;
-        let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
-        let cap_label = if is_command_cwd {
-            "workspace_cap"
-        } else {
-            "cap"
-        };
-        let cap_psid_for_root = if is_command_cwd {
-            workspace_psid
-        } else {
-            cap_psid
-        };
         for (label, psid) in [
             ("sandbox_group", sandbox_group_psid),
-            (cap_label, cap_psid_for_root),
+            ("workspace_cap", workspace_psid),
         ] {
             let has =
                 match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
@@ -692,12 +676,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
     std::thread::scope(|scope| {
         for root in grant_tasks {
-            let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
-            let sid_strings = if is_command_cwd {
-                vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
-            } else {
-                vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
-            };
+            let sid_strings = vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()];
             let tx = tx.clone();
             scope.spawn(move || {
                 // Convert SID strings to psids locally in this thread.
