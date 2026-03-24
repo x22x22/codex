@@ -191,13 +191,15 @@ async fn http_connect_accept(
         warn!("CONNECT blocked; proxy disabled (client={client}, host={host})");
         return Err(proxy_disabled_response(
             &app_state,
-            host,
-            authority.port,
-            client_addr(&req),
-            parent_tool_item_id,
-            Some("CONNECT".to_string()),
-            NetworkProtocol::HttpsConnect,
-            /*audit_endpoint_override*/ None,
+            ProxyDisabledResponseArgs {
+                host,
+                port: authority.port,
+                client: client_addr(&req),
+                parent_tool_item_id,
+                method: Some("CONNECT".to_string()),
+                protocol: NetworkProtocol::HttpsConnect,
+                audit_endpoint_override: None,
+            },
         )
         .await);
     }
@@ -482,13 +484,15 @@ async fn http_plain_proxy(
             warn!("unix socket blocked; proxy disabled (client={client}, path={socket_path})");
             return Ok(proxy_disabled_response(
                 &app_state,
-                socket_path,
-                /*port*/ 0,
-                client_addr(&req),
-                parent_tool_item_id.clone(),
-                Some(req.method().as_str().to_string()),
-                NetworkProtocol::Http,
-                Some(("unix-socket", 0)),
+                ProxyDisabledResponseArgs {
+                    host: socket_path,
+                    port: 0,
+                    client: client_addr(&req),
+                    parent_tool_item_id: parent_tool_item_id.clone(),
+                    method: Some(req.method().as_str().to_string()),
+                    protocol: NetworkProtocol::Http,
+                    audit_endpoint_override: Some(("unix-socket", 0)),
+                },
             )
             .await);
         }
@@ -628,13 +632,15 @@ async fn http_plain_proxy(
         warn!("request blocked; proxy disabled (client={client}, host={host}, method={method})");
         return Ok(proxy_disabled_response(
             &app_state,
-            host,
-            port,
-            client_addr(&req),
-            parent_tool_item_id.clone(),
-            Some(req.method().as_str().to_string()),
-            NetworkProtocol::Http,
-            /*audit_endpoint_override*/ None,
+            ProxyDisabledResponseArgs {
+                host,
+                port,
+                client: client_addr(&req),
+                parent_tool_item_id: parent_tool_item_id.clone(),
+                method: Some(req.method().as_str().to_string()),
+                protocol: NetworkProtocol::Http,
+                audit_endpoint_override: None,
+            },
         )
         .await);
     }
@@ -903,16 +909,29 @@ fn blocked_text_with_details(reason: &str, details: &PolicyDecisionDetails<'_>) 
     blocked_text_response_with_policy(reason, details)
 }
 
-async fn proxy_disabled_response(
-    app_state: &NetworkProxyState,
+struct ProxyDisabledResponseArgs {
     host: String,
     port: u16,
     client: Option<String>,
     parent_tool_item_id: Option<String>,
     method: Option<String>,
     protocol: NetworkProtocol,
-    audit_endpoint_override: Option<(&str, u16)>,
+    audit_endpoint_override: Option<(&'static str, u16)>,
+}
+
+async fn proxy_disabled_response(
+    app_state: &NetworkProxyState,
+    args: ProxyDisabledResponseArgs,
 ) -> Response {
+    let ProxyDisabledResponseArgs {
+        host,
+        port,
+        client,
+        parent_tool_item_id,
+        method,
+        protocol,
+        audit_endpoint_override,
+    } = args;
     let (audit_server_address, audit_server_port) =
         audit_endpoint_override.unwrap_or((host.as_str(), port));
     emit_http_block_decision_audit_event(
