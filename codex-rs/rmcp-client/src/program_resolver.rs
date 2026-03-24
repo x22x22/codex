@@ -160,7 +160,12 @@ mod tests {
 
             // Build a clean environment with the temp dir in the PATH.
             let mut extra_env = HashMap::new();
-            extra_env.insert("PATH".to_string(), Self::build_path(dir_path));
+            extra_env.insert(
+                "PATH".to_string(),
+                Self::build_path_env_var(dir_path)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
 
             #[cfg(windows)]
             extra_env.insert("PATHEXT".to_string(), Self::ensure_cmd_extension());
@@ -202,10 +207,14 @@ mod tests {
         }
 
         /// Prepends the given directory to the system's PATH variable.
-        fn build_path(dir: &Path) -> String {
-            let current = std::env::var("PATH").unwrap_or_default();
-            let sep = if cfg!(windows) { ";" } else { ":" };
-            format!("{}{sep}{current}", dir.to_string_lossy())
+        fn build_path_env_var(dir: &Path) -> OsString {
+            let mut path = OsString::from(dir.as_os_str());
+            if let Some(current) = std::env::var_os("PATH") {
+                let sep = if cfg!(windows) { ";" } else { ":" };
+                path.push(sep);
+                path.push(current);
+            }
+            path
         }
 
         /// Ensures `.CMD` is in the `PATHEXT` variable on Windows for script discovery.
