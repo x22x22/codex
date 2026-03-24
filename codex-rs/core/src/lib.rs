@@ -45,7 +45,6 @@ pub mod git_info;
 mod guardian;
 mod hook_runtime;
 pub mod instructions;
-pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
 mod mcp_tool_approval_templates;
@@ -121,7 +120,6 @@ pub mod default_client {
 pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
-pub mod seatbelt;
 pub mod shell;
 pub mod shell_snapshot;
 pub mod skills;
