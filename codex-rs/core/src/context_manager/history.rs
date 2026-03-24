@@ -527,7 +527,7 @@ impl ContextManager {
                         // Mixed `build_initial_context` bundles are not reconstructible from
                         // steady-state diffs once trimmed, so the next real turn must fully
                         // reinject context instead of diffing against a stale baseline.
-                        self.set_reference_context_item(None);
+                        self.set_reference_context_item(/*item*/ None);
                     }
                     cut_idx -= 1;
                 }
