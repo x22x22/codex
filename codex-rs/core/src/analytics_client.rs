@@ -13,7 +13,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SkillScope;
-use codex_protocol::protocol::UserMessageType;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -34,7 +33,7 @@ pub(crate) struct TrackEventsContext {
 
 #[derive(Clone)]
 pub(crate) struct CodexTurnEvent {
-    pub(crate) submission_origin: Option<SubmissionOrigin>,
+    pub(crate) submission_type: Option<SubmissionType>,
     pub(crate) model_provider: String,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
@@ -50,7 +49,7 @@ pub(crate) struct CodexTurnEvent {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum SubmissionOrigin {
+pub(crate) enum SubmissionType {
     Prompt,
     PromptQueued,
 }
@@ -63,9 +62,7 @@ pub(crate) enum TurnEventType {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct CodexTurnSteerEvent {
-    pub(crate) user_message_type: UserMessageType,
-}
+pub(crate) struct CodexTurnSteerEvent;
 
 pub(crate) fn build_track_events_context(
     model_slug: String,
@@ -443,8 +440,7 @@ struct CodexTurnEventParams {
     product_client_id: Option<String>,
     model_slug: Option<String>,
     turn_event_type: TurnEventType,
-    submission_origin: Option<SubmissionOrigin>,
-    user_message_type: Option<UserMessageType>,
+    submission_type: Option<SubmissionType>,
     model_provider: Option<String>,
     sandbox_policy: Option<&'static str>,
     reasoning_effort: Option<String>,
@@ -832,8 +828,7 @@ fn codex_turn_event_params(
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
         turn_event_type: TurnEventType::Start,
-        submission_origin: turn_event.submission_origin,
-        user_message_type: None,
+        submission_type: turn_event.submission_type,
         model_provider: Some(turn_event.model_provider),
         sandbox_policy: Some(sandbox_policy_mode(&turn_event.sandbox_policy)),
         reasoning_effort: turn_event.reasoning_effort.map(|value| value.to_string()),
@@ -855,7 +850,7 @@ fn codex_turn_event_params(
 
 fn codex_turn_steer_event_params(
     tracking: &TrackEventsContext,
-    turn_steer: CodexTurnSteerEvent,
+    _turn_steer: CodexTurnSteerEvent,
 ) -> CodexTurnEventParams {
     CodexTurnEventParams {
         thread_id: Some(tracking.thread_id.clone()),
@@ -863,8 +858,7 @@ fn codex_turn_steer_event_params(
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
         turn_event_type: TurnEventType::Steer,
-        submission_origin: None,
-        user_message_type: Some(turn_steer.user_message_type),
+        submission_type: None,
         model_provider: None,
         sandbox_policy: None,
         reasoning_effort: None,
