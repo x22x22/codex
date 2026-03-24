@@ -1,9 +1,9 @@
 use crate::AuthManager;
 use crate::config::Config;
 use crate::default_client::create_client;
-use crate::git_info::collect_git_info;
-use crate::git_info::get_git_repo_root;
 use crate::plugins::PluginTelemetryMetadata;
+use codex_git_utils::collect_git_info;
+use codex_git_utils::get_git_repo_root;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
