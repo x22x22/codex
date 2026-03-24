@@ -3345,6 +3345,7 @@ impl Session {
         input: &[UserInput],
         response_item: ResponseItem,
     ) {
+        let auto_thread_name = self.auto_thread_name_candidate(input).await;
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
@@ -3354,6 +3355,30 @@ impl Session {
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
+        if let Some(name) = auto_thread_name {
+            handlers::maybe_set_auto_thread_name(self, turn_context.sub_id.clone(), name).await;
+        }
+    }
+
+    async fn auto_thread_name_candidate(&self, input: &[UserInput]) -> Option<String> {
+        if self.services.rollout.lock().await.is_none() {
+            return None;
+        }
+
+        let state = self.state.lock().await;
+        if state.session_configuration.thread_name.is_some() {
+            return None;
+        }
+        if state
+            .history
+            .raw_items()
+            .iter()
+            .any(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
+        {
+            return None;
+        }
+
+        crate::util::auto_thread_name_from_user_input(input)
     }
 
     pub(crate) async fn notify_background_event(
@@ -3910,6 +3935,57 @@ mod handlers {
     use std::sync::Arc;
     use tracing::info;
     use tracing::warn;
+
+    enum ThreadNameUpdateError {
+        BadRequest(String),
+        Other(String),
+    }
+
+    async fn update_thread_name(
+        sess: &Session,
+        name: String,
+    ) -> std::result::Result<String, ThreadNameUpdateError> {
+        let Some(name) = crate::util::normalize_thread_name(&name) else {
+            return Err(ThreadNameUpdateError::BadRequest(
+                "Thread name cannot be empty.".to_string(),
+            ));
+        };
+
+        let persistence_enabled = {
+            let rollout = sess.services.rollout.lock().await;
+            rollout.is_some()
+        };
+        if !persistence_enabled {
+            return Err(ThreadNameUpdateError::Other(
+                "Session persistence is disabled; cannot rename thread.".to_string(),
+            ));
+        }
+
+        let codex_home = sess.codex_home().await;
+        session_index::append_thread_name(&codex_home, sess.conversation_id, &name)
+            .await
+            .map_err(|err| {
+                ThreadNameUpdateError::Other(format!("Failed to set thread name: {err}"))
+            })?;
+
+        {
+            let mut state = sess.state.lock().await;
+            state.session_configuration.thread_name = Some(name.clone());
+        }
+
+        Ok(name)
+    }
+
+    async fn emit_thread_name_updated(sess: &Session, sub_id: String, name: String) {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
+                thread_id: sess.conversation_id,
+                thread_name: Some(name),
+            }),
+        })
+        .await;
+    }
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
@@ -4496,62 +4572,36 @@ mod handlers {
     ///
     /// Returns an error event if the name is empty or session persistence is disabled.
     pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
-        let Some(name) = crate::util::normalize_thread_name(&name) else {
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: "Thread name cannot be empty.".to_string(),
-                    codex_error_info: Some(CodexErrorInfo::BadRequest),
-                }),
-            };
-            sess.send_event_raw(event).await;
-            return;
-        };
-
-        let persistence_enabled = {
-            let rollout = sess.services.rollout.lock().await;
-            rollout.is_some()
-        };
-        if !persistence_enabled {
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: "Session persistence is disabled; cannot rename thread.".to_string(),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            };
-            sess.send_event_raw(event).await;
-            return;
-        };
-
-        let codex_home = sess.codex_home().await;
-        if let Err(e) =
-            session_index::append_thread_name(&codex_home, sess.conversation_id, &name).await
-        {
-            let event = Event {
-                id: sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: format!("Failed to set thread name: {e}"),
-                    codex_error_info: Some(CodexErrorInfo::Other),
-                }),
-            };
-            sess.send_event_raw(event).await;
-            return;
+        match update_thread_name(sess.as_ref(), name).await {
+            Ok(name) => emit_thread_name_updated(sess.as_ref(), sub_id, name).await,
+            Err(ThreadNameUpdateError::BadRequest(message)) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message,
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+            }
+            Err(ThreadNameUpdateError::Other(message)) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message,
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                })
+                .await;
+            }
         }
+    }
 
-        {
-            let mut state = sess.state.lock().await;
-            state.session_configuration.thread_name = Some(name.clone());
-        }
-
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
-                thread_id: sess.conversation_id,
-                thread_name: Some(name),
-            }),
-        })
-        .await;
+    pub(super) async fn maybe_set_auto_thread_name(sess: &Session, sub_id: String, name: String) {
+        let Ok(name) = update_thread_name(sess, name).await else {
+            return;
+        };
+        emit_thread_name_updated(sess, sub_id, name).await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -8598,6 +8648,111 @@ mod tests {
         async_channel::Receiver<Event>,
     ) {
         make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
+    }
+
+    async fn enable_rollout_persistence(sess: &Arc<Session>) {
+        let session_configuration = { sess.state.lock().await.session_configuration.clone() };
+        let config = Arc::clone(&session_configuration.original_config_do_not_use);
+        let event_persistence_mode = if session_configuration.persist_extended_history {
+            EventPersistenceMode::Extended
+        } else {
+            EventPersistenceMode::Limited
+        };
+        let recorder = RolloutRecorder::new(
+            config.as_ref(),
+            RolloutRecorderParams::new(
+                sess.conversation_id,
+                None,
+                session_configuration.session_source.clone(),
+                BaseInstructions {
+                    text: session_configuration.base_instructions.clone(),
+                },
+                session_configuration.dynamic_tools.clone(),
+                event_persistence_mode,
+            ),
+            None,
+            None,
+        )
+        .await
+        .expect("create rollout recorder");
+        *sess.services.rollout.lock().await = Some(recorder);
+    }
+
+    #[tokio::test]
+    async fn record_user_prompt_auto_names_new_thread() {
+        let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+        enable_rollout_persistence(&session).await;
+
+        let input = vec![UserInput::Text {
+            text: "Fix CI on Android app".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+
+        session
+            .record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await;
+
+        let thread_name = {
+            session
+                .state
+                .lock()
+                .await
+                .session_configuration
+                .thread_name
+                .clone()
+        };
+        assert_eq!(thread_name.as_deref(), Some("Fix CI Android app"));
+
+        let persisted = session_index::find_thread_name_by_id(
+            turn_context.config.codex_home.as_path(),
+            &session.conversation_id,
+        )
+        .await
+        .expect("read persisted thread name");
+        assert_eq!(persisted.as_deref(), Some("Fix CI Android app"));
+    }
+
+    #[tokio::test]
+    async fn record_user_prompt_does_not_auto_name_thread_with_existing_user_history() {
+        let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+        enable_rollout_persistence(&session).await;
+
+        session
+            .record_into_history(
+                &[user_message("existing thread seed")],
+                turn_context.as_ref(),
+            )
+            .await;
+
+        let input = vec![UserInput::Text {
+            text: "Fix CI on Android app".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let response_item: ResponseItem = ResponseInputItem::from(input.clone()).into();
+
+        session
+            .record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await;
+
+        let thread_name = {
+            session
+                .state
+                .lock()
+                .await
+                .session_configuration
+                .thread_name
+                .clone()
+        };
+        assert_eq!(thread_name, None);
+
+        let persisted = session_index::find_thread_name_by_id(
+            turn_context.config.codex_home.as_path(),
+            &session.conversation_id,
+        )
+        .await
+        .expect("read persisted thread name");
+        assert_eq!(persisted, None);
     }
 
     #[tokio::test]
