@@ -31,6 +31,7 @@ use codex_tui::update_action::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::path::Path;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -83,6 +84,15 @@ struct MultitoolCli {
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
 }
+
+const CODEX_EXP_2_BIN_NAME: &str = "codex-exp-2";
+const CODEX_EXP_2_DEFAULT_OVERRIDES: [&str; 5] = [
+    r#"model="gpt-5.4""#,
+    r#"model_reasoning_effort="xhigh""#,
+    r#"service_tier="fast""#,
+    "agents.max_threads=16",
+    "agents.max_depth=3",
+];
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
@@ -607,6 +617,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         subcommand,
     } = MultitoolCli::parse();
 
+    prepend_bin_tuned_defaults(
+        &mut root_config_overrides,
+        current_invocation_name().as_deref(),
+    );
+
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
@@ -1043,6 +1058,28 @@ fn prepend_config_flags(
     subcommand_config_overrides
         .raw_overrides
         .splice(0..0, cli_config_overrides.raw_overrides);
+}
+
+fn current_invocation_name() -> Option<String> {
+    std::env::args_os()
+        .next()
+        .and_then(|arg0| Path::new(&arg0).file_stem()?.to_str().map(str::to_owned))
+}
+
+fn prepend_bin_tuned_defaults(
+    root_config_overrides: &mut CliConfigOverrides,
+    invocation_name: Option<&str>,
+) {
+    if invocation_name != Some(CODEX_EXP_2_BIN_NAME) {
+        return;
+    }
+
+    root_config_overrides.raw_overrides.splice(
+        0..0,
+        CODEX_EXP_2_DEFAULT_OVERRIDES
+            .into_iter()
+            .map(ToString::to_string),
+    );
 }
 
 fn reject_remote_mode_for_subcommand(remote: Option<&str>, subcommand: &str) -> anyhow::Result<()> {
@@ -1773,5 +1810,35 @@ mod tests {
             .to_overrides()
             .expect_err("feature should be rejected");
         assert_eq!(err.to_string(), "Unknown feature flag: does_not_exist");
+    }
+
+    #[test]
+    fn exp_2_defaults_apply_only_for_exp_2_bin() {
+        let mut overrides = CliConfigOverrides::default();
+        prepend_bin_tuned_defaults(&mut overrides, Some("codex-exp-2"));
+        assert_eq!(
+            overrides.raw_overrides,
+            CODEX_EXP_2_DEFAULT_OVERRIDES.map(str::to_string).to_vec()
+        );
+
+        let mut regular_overrides = CliConfigOverrides::default();
+        prepend_bin_tuned_defaults(&mut regular_overrides, Some("codex"));
+        assert!(regular_overrides.raw_overrides.is_empty());
+    }
+
+    #[test]
+    fn exp_2_defaults_stay_lower_precedence_than_user_overrides() {
+        let mut overrides = CliConfigOverrides {
+            raw_overrides: vec!["agents.max_threads=99".to_string()],
+        };
+        prepend_bin_tuned_defaults(&mut overrides, Some("codex-exp-2"));
+        assert_eq!(
+            overrides.raw_overrides,
+            CODEX_EXP_2_DEFAULT_OVERRIDES
+                .map(str::to_string)
+                .into_iter()
+                .chain(std::iter::once("agents.max_threads=99".to_string()))
+                .collect::<Vec<_>>()
+        );
     }
 }
