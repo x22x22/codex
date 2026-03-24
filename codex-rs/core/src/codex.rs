@@ -2574,19 +2574,6 @@ impl Session {
         &self,
         reference_context_item: Option<&TurnContextItem>,
         current_context: &TurnContext,
-    ) -> Vec<ResponseItem> {
-        self.build_settings_update_items_with_additional_developer_sections(
-            reference_context_item,
-            current_context,
-            Vec::new(),
-        )
-        .await
-    }
-
-    async fn build_settings_update_items_with_additional_developer_sections(
-        &self,
-        reference_context_item: Option<&TurnContextItem>,
-        current_context: &TurnContext,
         additional_developer_sections: Vec<String>,
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
@@ -3449,14 +3436,6 @@ impl Session {
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
-    ) -> Vec<ResponseItem> {
-        self.build_initial_context_with_additional_developer_sections(turn_context, Vec::new())
-            .await
-    }
-
-    async fn build_initial_context_with_additional_developer_sections(
-        &self,
-        turn_context: &TurnContext,
         additional_developer_sections: Vec<String>,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
@@ -3687,31 +3666,17 @@ impl Session {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
-        let should_inject_full_context = reference_context_item.is_none();
-        let has_additional_developer_sections = !additional_developer_sections.is_empty();
-        let context_items = if should_inject_full_context {
-            if has_additional_developer_sections {
-                self.build_initial_context_with_additional_developer_sections(
-                    turn_context,
-                    additional_developer_sections,
-                )
+        let context_items = if reference_context_item.is_none() {
+            self.build_initial_context(turn_context, additional_developer_sections)
                 .await
-            } else {
-                self.build_initial_context(turn_context).await
-            }
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
-            if has_additional_developer_sections {
-                self.build_settings_update_items_with_additional_developer_sections(
-                    reference_context_item.as_ref(),
-                    turn_context,
-                    additional_developer_sections,
-                )
-                .await
-            } else {
-                self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
-                    .await
-            }
+            self.build_settings_update_items(
+                reference_context_item.as_ref(),
+                turn_context,
+                additional_developer_sections,
+            )
+            .await
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
