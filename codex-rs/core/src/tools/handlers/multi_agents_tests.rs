@@ -31,6 +31,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use tokio::time::timeout;
 
 fn invocation(
@@ -964,6 +965,105 @@ async fn wait_agent_returns_final_status_without_timeout() {
         result,
         wait::WaitAgentResult {
             status: HashMap::from([(agent_id, AgentStatus::Shutdown)]),
+            timed_out: false
+        }
+    );
+    assert_eq!(success, None);
+}
+
+#[tokio::test]
+async fn wait_agent_wait_for_all_does_not_return_after_first_final_status() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let config = turn.config.as_ref().clone();
+    let thread_a = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
+    let thread_b = manager.start_thread(config).await.expect("start thread");
+    let id_a = thread_a.thread_id;
+    let thread_a_handle = Arc::clone(&thread_a.thread);
+
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(20)).await;
+        let _ = thread_a_handle.submit(Op::Shutdown {}).await;
+    });
+
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "wait_agent",
+        function_payload(json!({
+            "ids": [id_a.to_string(), thread_b.thread_id.to_string()],
+            "wait_for_all": true,
+            "timeout_ms": 1000
+        })),
+    );
+
+    let early = timeout(
+        Duration::from_millis(80),
+        WaitAgentHandler.handle(invocation),
+    )
+    .await;
+    assert!(
+        early.is_err(),
+        "wait_agent(wait_for_all=true) should keep waiting after the first agent finishes"
+    );
+
+    let _ = thread_b
+        .thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown should submit");
+}
+
+#[tokio::test]
+async fn wait_agent_wait_for_all_returns_all_final_statuses() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let config = turn.config.as_ref().clone();
+    let thread_a = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start thread");
+    let thread_b = manager.start_thread(config).await.expect("start thread");
+    let id_a = thread_a.thread_id;
+    let id_b = thread_b.thread_id;
+    let thread_a_handle = Arc::clone(&thread_a.thread);
+    let thread_b_handle = Arc::clone(&thread_b.thread);
+
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(20)).await;
+        let _ = thread_a_handle.submit(Op::Shutdown {}).await;
+    });
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(40)).await;
+        let _ = thread_b_handle.submit(Op::Shutdown {}).await;
+    });
+
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "wait_agent",
+        function_payload(json!({
+            "ids": [id_a.to_string(), id_b.to_string()],
+            "wait_for_all": true,
+            "timeout_ms": 1000
+        })),
+    );
+    let output = WaitAgentHandler
+        .handle(invocation)
+        .await
+        .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        wait::WaitAgentResult {
+            status: HashMap::from([(id_a, AgentStatus::Shutdown), (id_b, AgentStatus::Shutdown)]),
             timed_out: false
         }
     );

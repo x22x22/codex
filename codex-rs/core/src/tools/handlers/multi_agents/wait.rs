@@ -119,43 +119,21 @@ impl ToolHandler for Handler {
             }
         }
 
-        let statuses = if !initial_final_statuses.is_empty() {
-            initial_final_statuses
-        } else {
-            let mut futures = FuturesUnordered::new();
-            for (id, rx) in status_rxs.into_iter() {
-                let session = session.clone();
-                futures.push(wait_for_final_status(session, id, rx));
-            }
-            let mut results = Vec::new();
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-            loop {
-                match timeout_at(deadline, futures.next()).await {
-                    Ok(Some(Some(result))) => {
-                        results.push(result);
-                        break;
-                    }
-                    Ok(Some(None)) => continue,
-                    Ok(None) | Err(_) => break,
-                }
-            }
-            if !results.is_empty() {
-                loop {
-                    match futures.next().now_or_never() {
-                        Some(Some(Some(result))) => results.push(result),
-                        Some(Some(None)) => continue,
-                        Some(None) | None => break,
-                    }
-                }
-            }
-            results
-        };
-
-        let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        let expected_status_count = receiver_thread_ids.len();
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+        let statuses_map = wait_for_requested_statuses(
+            session.clone(),
+            status_rxs,
+            initial_final_statuses,
+            expected_status_count,
+            args.wait_for_all,
+            deadline,
+        )
+        .await;
         let agent_statuses = build_wait_agent_statuses(&statuses_map, &receiver_agents);
         let result = WaitAgentResult {
             status: statuses_map.clone(),
-            timed_out: statuses.is_empty(),
+            timed_out: wait_timed_out(statuses_map.len(), expected_status_count, args.wait_for_all),
         };
 
         session
@@ -179,6 +157,8 @@ impl ToolHandler for Handler {
 struct WaitArgs {
     ids: Vec<String>,
     timeout_ms: Option<i64>,
+    #[serde(default)]
+    wait_for_all: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -225,4 +205,78 @@ async fn wait_for_final_status(
             return Some((thread_id, status));
         }
     }
+}
+
+async fn wait_for_requested_statuses(
+    session: Arc<Session>,
+    status_rxs: Vec<(ThreadId, Receiver<AgentStatus>)>,
+    initial_statuses: Vec<(ThreadId, AgentStatus)>,
+    expected_count: usize,
+    wait_for_all: bool,
+    deadline: Instant,
+) -> HashMap<ThreadId, AgentStatus> {
+    let mut statuses = initial_statuses.into_iter().collect::<HashMap<_, _>>();
+    if wait_condition_satisfied(statuses.len(), expected_count, wait_for_all) {
+        return statuses;
+    }
+
+    let mut futures = FuturesUnordered::new();
+    for (id, rx) in status_rxs {
+        if statuses.contains_key(&id) {
+            continue;
+        }
+        let session = session.clone();
+        futures.push(wait_for_final_status(session, id, rx));
+    }
+
+    loop {
+        if wait_condition_satisfied(statuses.len(), expected_count, wait_for_all) {
+            break;
+        }
+
+        match timeout_at(deadline, futures.next()).await {
+            Ok(Some(Some((id, status)))) => {
+                statuses.insert(id, status);
+                if !wait_for_all {
+                    break;
+                }
+            }
+            Ok(Some(None)) => continue,
+            Ok(None) | Err(_) => break,
+        }
+    }
+
+    drain_ready_final_statuses(&mut futures, &mut statuses);
+    statuses
+}
+
+fn drain_ready_final_statuses(
+    futures: &mut FuturesUnordered<impl futures::Future<Output = Option<(ThreadId, AgentStatus)>>>,
+    statuses: &mut HashMap<ThreadId, AgentStatus>,
+) {
+    loop {
+        match futures.next().now_or_never() {
+            Some(Some(Some((id, status)))) => {
+                statuses.insert(id, status);
+            }
+            Some(Some(None)) => continue,
+            Some(None) | None => break,
+        }
+    }
+}
+
+fn wait_condition_satisfied(
+    observed_count: usize,
+    expected_count: usize,
+    wait_for_all: bool,
+) -> bool {
+    if wait_for_all {
+        observed_count >= expected_count
+    } else {
+        observed_count > 0
+    }
+}
+
+fn wait_timed_out(observed_count: usize, expected_count: usize, wait_for_all: bool) -> bool {
+    !wait_condition_satisfied(observed_count, expected_count, wait_for_all)
 }

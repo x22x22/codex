@@ -178,12 +178,12 @@ fn wait_output_schema() -> JsonValue {
         "properties": {
             "status": {
                 "type": "object",
-                "description": "Final statuses keyed by agent id for agents that finished before the timeout.",
+                "description": "Final statuses keyed by agent id for agents that finished before the timeout or before the requested wait condition was satisfied.",
                 "additionalProperties": agent_status_output_schema()
             },
             "timed_out": {
                 "type": "boolean",
-                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
+                "description": "Whether the wait call returned due to timeout before the requested wait condition was satisfied. With wait_for_all=true, partial statuses may still be returned."
             }
         },
         "required": ["status", "timed_out"],
@@ -1114,6 +1114,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 
 ### After you delegate
 - Call wait_agent very sparingly. Only call wait_agent when you need the result immediately for the next critical-path step and you are blocked until it returns.
+- If you launch a fixed batch and need every result before the next step, spawn the whole batch first and use one wait_agent call with wait_for_all=true and a sufficiently long timeout instead of a short wait loop.
 - Do not redo delegated subagent tasks yourself; focus on integrating results or tackling non-overlapping work.
 - While the subagent is running in the background, do meaningful non-overlapping work immediately.
 - Do not repeatedly wait by reflex.
@@ -1370,7 +1371,16 @@ fn create_wait_agent_tool() -> ToolSpec {
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
             description: Some(
-                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first unless wait_for_all is true."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "wait_for_all".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, wait until every requested agent reaches a final status or the timeout expires. When false (default), return after the first requested agent reaches a final status."
                     .to_string(),
             ),
         },
@@ -1386,7 +1396,7 @@ fn create_wait_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait_agent".to_string(),
-        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
+        description: "Wait for agents to reach a final status. By default this returns when any requested agent finishes; set wait_for_all=true to wait for the whole batch. Completed statuses may include the agent's final message. Returns empty status when timed out before any requested agent finishes; with wait_for_all=true, partial statuses may still be returned on timeout."
             .to_string(),
         strict: false,
         defer_loading: None,

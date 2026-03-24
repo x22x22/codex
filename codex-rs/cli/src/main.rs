@@ -86,11 +86,12 @@ struct MultitoolCli {
 }
 
 const CODEX_EXP_2_BIN_NAME: &str = "codex-exp-2";
+// Benchmarked on a 16-core M4 Max with a 20-task cross-repo workload.
 const CODEX_EXP_2_DEFAULT_OVERRIDES: [&str; 5] = [
     r#"model="gpt-5.4""#,
     r#"model_reasoning_effort="xhigh""#,
     r#"service_tier="fast""#,
-    "agents.max_threads=16",
+    "agents.max_threads=8",
     "agents.max_depth=3",
 ];
 
