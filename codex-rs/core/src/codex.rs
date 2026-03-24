@@ -2740,16 +2740,6 @@ impl Session {
         ))
     }
 
-    async fn active_turn_tracking(&self) -> Option<crate::analytics_client::TrackEventsContext> {
-        let active = self.active_turn.lock().await;
-        let (_, task) = active.as_ref()?.tasks.first()?;
-        Some(build_track_events_context(
-            task.turn_context.model_info.slug.clone(),
-            self.conversation_id.to_string(),
-            task.turn_context.sub_id.clone(),
-        ))
-    }
-
     pub(crate) async fn record_execpolicy_amendment_message(
         &self,
         sub_id: &str,
@@ -3894,9 +3884,14 @@ impl Session {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+        let Some((active_turn_id, task)) = active_turn.tasks.first() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
+        let tracking = build_track_events_context(
+            task.turn_context.model_info.slug.clone(),
+            self.conversation_id.to_string(),
+            task.turn_context.sub_id.clone(),
+        );
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
@@ -3926,11 +3921,9 @@ impl Session {
         turn_state.push_pending_input(input.into());
         drop(turn_state);
         drop(active);
-        if let Some(tracking) = self.active_turn_tracking().await {
-            self.services
-                .analytics_events_client
-                .track_turn_steer(tracking, CodexTurnSteerEvent);
-        }
+        self.services
+            .analytics_events_client
+            .track_turn_steer(tracking, CodexTurnSteerEvent);
         Ok(active_turn_id.clone())
     }
 
