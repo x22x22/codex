@@ -4,6 +4,15 @@ use crate::default_client::create_client;
 use crate::git_info::collect_git_info;
 use crate::git_info::get_git_repo_root;
 use crate::plugins::PluginTelemetryMetadata;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
 use sha1::Digest;
@@ -21,6 +30,35 @@ pub(crate) struct TrackEventsContext {
     pub(crate) model_slug: String,
     pub(crate) thread_id: String,
     pub(crate) turn_id: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct CodexThreadStartedEvent {
+    pub(crate) thread_id: String,
+    pub(crate) model: String,
+    pub(crate) model_provider: String,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
+    pub(crate) reasoning_summary: Option<ReasoningSummary>,
+    pub(crate) service_tier: Option<ServiceTier>,
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) approvals_reviewer: ApprovalsReviewer,
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) sandbox_network_access: bool,
+    pub(crate) collaboration_mode: ModeKind,
+    pub(crate) personality: Option<Personality>,
+    pub(crate) ephemeral: bool,
+    pub(crate) session_source: SessionSource,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) create_source: ThreadCreateSource,
+    pub(crate) created_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ThreadCreateSource {
+    ThreadStart,
+    ThreadFork,
+    DetachedReview,
 }
 
 pub(crate) fn build_track_events_context(
@@ -77,6 +115,9 @@ impl AnalyticsEventsQueue {
                 match job {
                     TrackEventsJob::SkillInvocations(job) => {
                         send_track_skill_invocations(&auth_manager, job).await;
+                    }
+                    TrackEventsJob::ThreadStarted(job) => {
+                        send_track_thread_started(&auth_manager, job).await;
                     }
                     TrackEventsJob::AppMentioned(job) => {
                         send_track_app_mentioned(&auth_manager, job).await;
@@ -167,6 +208,10 @@ impl AnalyticsEventsClient {
         );
     }
 
+    pub(crate) fn track_thread_started(&self, thread_event: CodexThreadStartedEvent) {
+        track_thread_started(&self.queue, Arc::clone(&self.config), thread_event);
+    }
+
     pub(crate) fn track_app_mentioned(
         &self,
         tracking: TrackEventsContext,
@@ -236,6 +281,7 @@ impl AnalyticsEventsClient {
 
 enum TrackEventsJob {
     SkillInvocations(TrackSkillInvocationsJob),
+    ThreadStarted(TrackThreadStartedJob),
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
     PluginUsed(TrackPluginUsedJob),
@@ -249,6 +295,11 @@ struct TrackSkillInvocationsJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
     invocations: Vec<SkillInvocation>,
+}
+
+struct TrackThreadStartedJob {
+    config: Arc<Config>,
+    thread_event: CodexThreadStartedEvent,
 }
 
 struct TrackAppMentionedJob {
@@ -295,6 +346,7 @@ struct TrackEventsRequest {
 #[serde(untagged)]
 enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
+    ThreadStarted(CodexThreadStartedEventRequest),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
@@ -320,6 +372,34 @@ struct SkillInvocationEventParams {
     thread_id: Option<String>,
     invoke_type: Option<InvocationType>,
     model_slug: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CodexThreadStartedEventParams {
+    thread_id: String,
+    product_client_id: String,
+    model: String,
+    model_provider: String,
+    reasoning_effort: Option<String>,
+    reasoning_summary: Option<String>,
+    service_tier: String,
+    approval_policy: String,
+    approvals_reviewer: String,
+    sandbox_policy: &'static str,
+    sandbox_network_access: bool,
+    collaboration_mode: &'static str,
+    personality: Option<String>,
+    ephemeral: bool,
+    session_source: SessionSource,
+    parent_thread_id: Option<String>,
+    create_source: ThreadCreateSource,
+    created_at: u64,
+}
+
+#[derive(Serialize)]
+struct CodexThreadStartedEventRequest {
+    event_type: &'static str,
+    event_params: CodexThreadStartedEventParams,
 }
 
 #[derive(Serialize)]
@@ -396,6 +476,21 @@ pub(crate) fn track_skill_invocations(
         config,
         tracking,
         invocations,
+    });
+    queue.try_send(job);
+}
+
+pub(crate) fn track_thread_started(
+    queue: &AnalyticsEventsQueue,
+    config: Arc<Config>,
+    thread_event: CodexThreadStartedEvent,
+) {
+    if config.analytics_enabled == Some(false) {
+        return;
+    }
+    let job = TrackEventsJob::ThreadStarted(TrackThreadStartedJob {
+        config,
+        thread_event,
     });
     queue.try_send(job);
 }
@@ -536,6 +631,21 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkil
     send_track_events(auth_manager, config, events).await;
 }
 
+async fn send_track_thread_started(auth_manager: &AuthManager, job: TrackThreadStartedJob) {
+    let TrackThreadStartedJob {
+        config,
+        thread_event,
+    } = job;
+    let events = vec![TrackEventRequest::ThreadStarted(
+        CodexThreadStartedEventRequest {
+            event_type: "codex_thread_started",
+            event_params: codex_thread_started_event_params(thread_event),
+        },
+    )];
+
+    send_track_events(auth_manager, config, events).await;
+}
+
 async fn send_track_app_mentioned(auth_manager: &AuthManager, job: TrackAppMentionedJob) {
     let TrackAppMentionedJob {
         config,
@@ -635,6 +745,36 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
     }
 }
 
+fn codex_thread_started_event_params(
+    thread_event: CodexThreadStartedEvent,
+) -> CodexThreadStartedEventParams {
+    CodexThreadStartedEventParams {
+        thread_id: thread_event.thread_id,
+        product_client_id: crate::default_client::originator().value,
+        model: thread_event.model,
+        model_provider: thread_event.model_provider,
+        reasoning_effort: thread_event.reasoning_effort.map(|value| value.to_string()),
+        reasoning_summary: thread_event
+            .reasoning_summary
+            .map(|value| value.to_string()),
+        service_tier: thread_event
+            .service_tier
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "default".to_string()),
+        approval_policy: thread_event.approval_policy.to_string(),
+        approvals_reviewer: thread_event.approvals_reviewer.to_string(),
+        sandbox_policy: sandbox_policy_mode(&thread_event.sandbox_policy),
+        sandbox_network_access: thread_event.sandbox_network_access,
+        collaboration_mode: collaboration_mode_mode(thread_event.collaboration_mode),
+        personality: thread_event.personality.map(|value| value.to_string()),
+        ephemeral: thread_event.ephemeral,
+        session_source: thread_event.session_source,
+        parent_thread_id: thread_event.parent_thread_id,
+        create_source: thread_event.create_source,
+        created_at: thread_event.created_at,
+    }
+}
+
 fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata {
     let capability_summary = plugin.capability_summary;
     CodexPluginMetadata {
@@ -667,6 +807,24 @@ fn codex_plugin_used_metadata(
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
+    }
+}
+
+fn sandbox_policy_mode(sandbox_policy: &SandboxPolicy) -> &'static str {
+    match sandbox_policy {
+        SandboxPolicy::DangerFullAccess => "full_access",
+        SandboxPolicy::ReadOnly { .. } => "read_only",
+        SandboxPolicy::WorkspaceWrite { .. } => "workspace_write",
+        SandboxPolicy::ExternalSandbox { .. } => "external_sandbox",
+    }
+}
+
+fn collaboration_mode_mode(mode: ModeKind) -> &'static str {
+    match mode {
+        ModeKind::Plan => "plan",
+        ModeKind::Default => "default",
+        ModeKind::PairProgramming => "pair_programming",
+        ModeKind::Execute => "execute",
     }
 }
 

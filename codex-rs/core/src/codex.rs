@@ -5,6 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -14,7 +16,9 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
+use crate::analytics_client::CodexThreadStartedEvent;
 use crate::analytics_client::InvocationType;
+use crate::analytics_client::ThreadCreateSource;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -627,6 +631,13 @@ impl Codex {
             user_shell_override,
         };
 
+        let thread_create_source = classify_thread_create_source(
+            &conversation_history,
+            &session_configuration.session_source,
+        );
+        let thread_session_source = session_configuration.session_source.clone();
+        let thread_started_configuration = session_configuration.clone();
+
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
@@ -653,6 +664,46 @@ impl Codex {
             map_session_init_error(&e, &config.codex_home)
         })?;
         let thread_id = session.conversation_id;
+
+        if let Some(create_source) = thread_create_source {
+            session
+                .services
+                .analytics_events_client
+                .track_thread_started(CodexThreadStartedEvent {
+                    thread_id: thread_id.to_string(),
+                    model: thread_started_configuration
+                        .collaboration_mode
+                        .model()
+                        .to_string(),
+                    model_provider: thread_started_configuration
+                        .original_config_do_not_use
+                        .model_provider_id
+                        .clone(),
+                    reasoning_effort: thread_started_configuration
+                        .collaboration_mode
+                        .reasoning_effort(),
+                    reasoning_summary: thread_started_configuration.model_reasoning_summary,
+                    service_tier: thread_started_configuration.service_tier,
+                    approval_policy: thread_started_configuration.approval_policy.value(),
+                    approvals_reviewer: thread_started_configuration.approvals_reviewer,
+                    sandbox_policy: thread_started_configuration.sandbox_policy.get().clone(),
+                    sandbox_network_access: thread_started_configuration
+                        .network_sandbox_policy
+                        .is_enabled(),
+                    collaboration_mode: thread_started_configuration.collaboration_mode.mode,
+                    personality: thread_started_configuration.personality,
+                    ephemeral: thread_started_configuration
+                        .original_config_do_not_use
+                        .ephemeral,
+                    parent_thread_id: session_source_parent_thread_id(&thread_session_source),
+                    session_source: thread_session_source,
+                    create_source,
+                    created_at: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                });
+        }
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
@@ -765,6 +816,33 @@ impl Codex {
 
     pub(crate) fn enabled(&self, feature: Feature) -> bool {
         self.session.enabled(feature)
+    }
+}
+
+fn classify_thread_create_source(
+    conversation_history: &InitialHistory,
+    session_source: &SessionSource,
+) -> Option<ThreadCreateSource> {
+    if matches!(
+        session_source,
+        SessionSource::SubAgent(SubAgentSource::Review)
+    ) {
+        return Some(ThreadCreateSource::DetachedReview);
+    }
+
+    match conversation_history {
+        InitialHistory::New => Some(ThreadCreateSource::ThreadStart),
+        InitialHistory::Forked(_) => Some(ThreadCreateSource::ThreadFork),
+        InitialHistory::Resumed(_) => None,
+    }
+}
+
+fn session_source_parent_thread_id(session_source: &SessionSource) -> Option<String> {
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) => Some(parent_thread_id.to_string()),
+        _ => None,
     }
 }
 
