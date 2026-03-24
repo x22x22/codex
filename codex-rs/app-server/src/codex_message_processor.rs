@@ -210,10 +210,10 @@ use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
-use codex_core::find_archived_thread_path_by_id_str;
+use codex_core::find_archived_thread_path_by_id_str_with_state_db;
 use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
-use codex_core::find_thread_path_by_id_str;
+use codex_core::find_thread_path_by_id_str_with_state_db;
 use codex_core::mcp::auth::discover_supported_scopes;
 use codex_core::mcp::auth::resolve_oauth_scopes;
 use codex_core::mcp::collect_mcp_snapshot;
@@ -300,6 +300,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -384,6 +385,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     background_tasks: TaskTracker,
+    app_server_state_db_cell: OnceCell<StateDbHandle>,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
 }
@@ -482,6 +484,67 @@ impl CodexMessageProcessor {
 
         Ok((thread_id, thread))
     }
+
+    async fn app_server_state_db(&self) -> Option<StateDbHandle> {
+        if let Some(state_db_ctx) = self.app_server_state_db_cell.get() {
+            return Some(state_db_ctx.clone());
+        }
+
+        let state_db_ctx = get_state_db(&self.config).await?;
+        let _ = self.app_server_state_db_cell.set(state_db_ctx.clone());
+        Some(
+            self.app_server_state_db_cell
+                .get()
+                .cloned()
+                .unwrap_or(state_db_ctx),
+        )
+    }
+
+    async fn find_thread_path_by_id_with_state_db(
+        &self,
+        thread_id: ThreadId,
+        state_db_ctx: Option<StateDbHandle>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        find_thread_path_by_id_str_with_state_db(
+            &self.config.codex_home,
+            &thread_id.to_string(),
+            state_db_ctx,
+        )
+        .await
+    }
+
+    async fn find_archived_thread_path_by_id_with_state_db(
+        &self,
+        thread_id: ThreadId,
+        state_db_ctx: Option<StateDbHandle>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        find_archived_thread_path_by_id_str_with_state_db(
+            &self.config.codex_home,
+            &thread_id.to_string(),
+            state_db_ctx,
+        )
+        .await
+    }
+
+    async fn find_thread_path_by_id(
+        &self,
+        thread_id: ThreadId,
+    ) -> std::io::Result<Option<PathBuf>> {
+        self.find_thread_path_by_id_with_state_db(thread_id, self.app_server_state_db().await)
+            .await
+    }
+
+    async fn find_archived_thread_path_by_id(
+        &self,
+        thread_id: ThreadId,
+    ) -> std::io::Result<Option<PathBuf>> {
+        self.find_archived_thread_path_by_id_with_state_db(
+            thread_id,
+            self.app_server_state_db().await,
+        )
+        .await
+    }
+
     pub fn new(args: CodexMessageProcessorArgs) -> Self {
         let CodexMessageProcessorArgs {
             auth_manager,
@@ -512,6 +575,7 @@ impl CodexMessageProcessor {
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             background_tasks: TaskTracker::new(),
+            app_server_state_db_cell: OnceCell::new(),
             feedback,
             log_db,
         }
@@ -2236,29 +2300,27 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("no rollout found for thread id {thread_id}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("failed to locate thread id {thread_id}: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let rollout_path = match self.find_thread_path_by_id(thread_id).await {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no rollout found for thread id {thread_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to locate thread id {thread_id}: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
         let thread_id_str = thread_id.to_string();
         match self.archive_thread_common(thread_id, &rollout_path).await {
@@ -2386,20 +2448,18 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let thread_exists =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(_)) => true,
-                Ok(None) => false,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {thread_id}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
+        let thread_exists = match self.find_thread_path_by_id(thread_id).await {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to locate thread id {thread_id}: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
 
         if !thread_exists {
             self.send_invalid_request_error(request_id, format!("thread not found: {thread_id}"))
@@ -2472,7 +2532,7 @@ impl CodexMessageProcessor {
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config).await;
+            state_db_ctx = self.app_server_state_db().await;
         }
         let Some(state_db_ctx) = state_db_ctx else {
             self.send_internal_error(
@@ -2675,33 +2735,34 @@ impl CodexMessageProcessor {
             return Ok(());
         }
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
+        let rollout_path = match self
+            .find_thread_path_by_id_with_state_db(thread_uuid, Some(state_db_ctx.clone()))
+            .await
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => match self
+                .find_archived_thread_path_by_id_with_state_db(
+                    thread_uuid,
+                    Some(state_db_ctx.clone()),
+                )
                 .await
             {
                 Ok(Some(path)) => path,
-                Ok(None) => match find_archived_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &thread_uuid.to_string(),
-                )
-                .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        return Err(invalid_request(format!("thread not found: {thread_uuid}")));
-                    }
-                    Err(err) => {
-                        return Err(internal_error(format!(
-                            "failed to locate archived thread id {thread_uuid}: {err}"
-                        )));
-                    }
-                },
+                Ok(None) => {
+                    return Err(invalid_request(format!("thread not found: {thread_uuid}")));
+                }
                 Err(err) => {
                     return Err(internal_error(format!(
-                        "failed to locate thread id {thread_uuid}: {err}"
+                        "failed to locate archived thread id {thread_uuid}: {err}"
                     )));
                 }
-            };
+            },
+            Err(err) => {
+                return Err(internal_error(format!(
+                    "failed to locate thread id {thread_uuid}: {err}"
+                )));
+            }
+        };
 
         reconcile_rollout(
             Some(state_db_ctx),
@@ -2744,12 +2805,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        let archived_path = match find_archived_thread_path_by_id_str(
-            &self.config.codex_home,
-            &thread_id.to_string(),
-        )
-        .await
-        {
+        let archived_path = match self.find_archived_thread_path_by_id(thread_id).await {
             Ok(Some(path)) => path,
             Ok(None) => {
                 let error = JSONRPCErrorError {
@@ -2773,7 +2829,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = get_state_db(&self.config).await;
+        let state_db_ctx = self.app_server_state_db().await;
         let archived_folder = self
             .config
             .codex_home
@@ -3253,34 +3309,42 @@ impl CodexMessageProcessor {
 
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let loaded_thread_state_db = loaded_thread.as_ref().and_then(|thread| thread.state_db());
+        let app_server_state_db = if loaded_thread_state_db.is_some() {
+            None
+        } else {
+            self.app_server_state_db().await
+        };
         let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
             read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
         } else {
-            read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await
+            read_summary_from_state_db_by_thread_id(app_server_state_db.as_ref(), thread_uuid).await
         };
         let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
         if rollout_path.is_none() || include_turns {
-            rollout_path =
-                match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
-                    .await
-                {
-                    Ok(Some(path)) => Some(path),
-                    Ok(None) => {
-                        if include_turns {
-                            None
-                        } else {
-                            rollout_path
-                        }
+            let state_db_ctx = loaded_thread_state_db
+                .clone()
+                .or_else(|| app_server_state_db.clone());
+            rollout_path = match self
+                .find_thread_path_by_id_with_state_db(thread_uuid, state_db_ctx)
+                .await
+            {
+                Ok(Some(path)) => Some(path),
+                Ok(None) => {
+                    if include_turns {
+                        None
+                    } else {
+                        rollout_path
                     }
-                    Err(err) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("failed to locate thread id {thread_uuid}: {err}"),
-                        )
-                        .await;
-                        return;
-                    }
-                };
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {thread_uuid}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
         }
 
         if include_turns && rollout_path.is_none() && db_summary.is_some() {
@@ -3651,7 +3715,7 @@ impl CodexMessageProcessor {
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
-        let state_db_ctx = get_state_db(&self.config).await?;
+        let state_db_ctx = self.app_server_state_db().await?;
         let persisted_metadata = state_db_ctx
             .get_thread(resumed_history.conversation_id)
             .await
@@ -3684,12 +3748,7 @@ impl CodexMessageProcessor {
                 if path.exists() {
                     path
                 } else {
-                    match find_thread_path_by_id_str(
-                        &self.config.codex_home,
-                        &existing_thread_id.to_string(),
-                    )
-                    .await
-                    {
+                    match self.find_thread_path_by_id(existing_thread_id).await {
                         Ok(Some(path)) => path,
                         Ok(None) => {
                             self.send_invalid_request_error(
@@ -3710,12 +3769,7 @@ impl CodexMessageProcessor {
                     }
                 }
             } else {
-                match find_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &existing_thread_id.to_string(),
-                )
-                .await
-                {
+                match self.find_thread_path_by_id(existing_thread_id).await {
                     Ok(Some(path)) => path,
                     Ok(None) => {
                         self.send_invalid_request_error(
@@ -3772,12 +3826,13 @@ impl CodexMessageProcessor {
                     mismatch_details.join("; ")
                 );
             }
+            let state_db_ctx = existing_thread.state_db();
             let thread_summary = match load_thread_summary_for_rollout(
-                &self.config,
                 existing_thread_id,
                 rollout_path.as_path(),
                 config_snapshot.model_provider_id.as_str(),
                 /*persisted_metadata*/ None,
+                state_db_ctx.as_ref(),
             )
             .await
             {
@@ -3868,12 +3923,7 @@ impl CodexMessageProcessor {
                 }
             };
 
-            match find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &existing_thread_id.to_string(),
-            )
-            .await
-            {
+            match self.find_thread_path_by_id(existing_thread_id).await {
                 Ok(Some(path)) => path,
                 Ok(None) => {
                     self.send_invalid_request_error(
@@ -3918,12 +3968,13 @@ impl CodexMessageProcessor {
     ) -> std::result::Result<Thread, String> {
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
+                let state_db_ctx = thread.state_db();
                 load_thread_summary_for_rollout(
-                    &self.config,
                     resumed.conversation_id,
                     resumed.rollout_path.as_path(),
                     fallback_provider,
                     persisted_resume_metadata,
+                    state_db_ctx.as_ref(),
                 )
                 .await
             }
@@ -3999,12 +4050,7 @@ impl CodexMessageProcessor {
                 }
             };
 
-            match find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &existing_thread_id.to_string(),
-            )
-            .await
-            {
+            match self.find_thread_path_by_id(existing_thread_id).await {
                 Ok(Some(p)) => (p, Some(existing_thread_id)),
                 Ok(None) => {
                     self.send_invalid_request_error(
@@ -4025,9 +4071,13 @@ impl CodexMessageProcessor {
             }
         };
 
-        let history_cwd =
-            read_history_cwd_from_state_db(&self.config, source_thread_id, rollout_path.as_path())
-                .await;
+        let app_server_state_db = self.app_server_state_db().await;
+        let history_cwd = read_history_cwd_from_state_db(
+            app_server_state_db.as_ref(),
+            source_thread_id,
+            rollout_path.as_path(),
+        )
+        .await;
 
         // Persist Windows sandbox mode.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
@@ -4249,9 +4299,13 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: GetConversationSummaryParams,
     ) {
+        let app_server_state_db = self.app_server_state_db().await;
         if let GetConversationSummaryParams::ThreadId { conversation_id } = &params
-            && let Some(summary) =
-                read_summary_from_state_db_by_thread_id(&self.config, *conversation_id).await
+            && let Some(summary) = read_summary_from_state_db_by_thread_id(
+                app_server_state_db.as_ref(),
+                *conversation_id,
+            )
+            .await
         {
             let response = GetConversationSummaryResponse { summary };
             self.outgoing.send_response(request_id, response).await;
@@ -4267,11 +4321,12 @@ impl CodexMessageProcessor {
                 }
             }
             GetConversationSummaryParams::ThreadId { conversation_id } => {
-                match codex_core::find_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &conversation_id.to_string(),
-                )
-                .await
+                match self
+                    .find_thread_path_by_id_with_state_db(
+                        conversation_id,
+                        app_server_state_db.clone(),
+                    )
+                    .await
                 {
                     Ok(Some(p)) => p,
                     _ => {
@@ -4352,7 +4407,7 @@ impl CodexMessageProcessor {
         let fallback_provider = self.config.model_provider_id.clone();
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
-        let state_db_ctx = get_state_db(&self.config).await;
+        let state_db_ctx = self.app_server_state_db().await;
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -5205,7 +5260,7 @@ impl CodexMessageProcessor {
         self.finalize_thread_teardown(thread_id).await;
 
         if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config).await;
+            state_db_ctx = self.app_server_state_db().await;
         }
 
         // Move the rollout file to archived.
@@ -6556,7 +6611,7 @@ impl CodexMessageProcessor {
         let rollout_path = if let Some(path) = parent_thread.rollout_path() {
             path
         } else {
-            find_thread_path_by_id_str(&self.config.codex_home, &parent_thread_id.to_string())
+            self.find_thread_path_by_id(parent_thread_id)
                 .await
                 .map_err(|err| JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
@@ -7160,7 +7215,7 @@ impl CodexMessageProcessor {
             if let Some(log_db) = self.log_db.as_ref() {
                 log_db.flush().await;
             }
-            let state_db_ctx = get_state_db(&self.config).await;
+            let state_db_ctx = self.app_server_state_db().await;
             match (state_db_ctx.as_ref(), conversation_id) {
                 (Some(state_db_ctx), Some(conversation_id)) => {
                     let thread_id_text = conversation_id.to_string();
@@ -7313,7 +7368,11 @@ impl CodexMessageProcessor {
     async fn resolve_rollout_path(&self, conversation_id: ThreadId) -> Option<PathBuf> {
         match self.thread_manager.get_thread(conversation_id).await {
             Ok(conv) => conv.rollout_path(),
-            Err(_) => None,
+            Err(_) => self
+                .find_thread_path_by_id(conversation_id)
+                .await
+                .ok()
+                .flatten(),
         }
     }
 }
@@ -7962,12 +8021,12 @@ async fn derive_config_for_cwd(
 }
 
 async fn read_history_cwd_from_state_db(
-    config: &Config,
+    state_db_ctx: Option<&StateDbHandle>,
     thread_id: Option<ThreadId>,
     rollout_path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config).await
-        && let Some(thread_id) = thread_id
+    if let Some(thread_id) = thread_id
+        && let Some(state_db_ctx) = state_db_ctx
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
         return Some(metadata.cwd);
@@ -7984,11 +8043,10 @@ async fn read_history_cwd_from_state_db(
 }
 
 async fn read_summary_from_state_db_by_thread_id(
-    config: &Config,
+    state_db_ctx: Option<&StateDbHandle>,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = get_state_db(config).await;
-    read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
+    read_summary_from_state_db_context_by_thread_id(state_db_ctx, thread_id).await
 }
 
 async fn read_summary_from_state_db_context_by_thread_id(
@@ -8278,11 +8336,11 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
 }
 
 async fn load_thread_summary_for_rollout(
-    config: &Config,
     thread_id: ThreadId,
     rollout_path: &Path,
     fallback_provider: &str,
     persisted_metadata: Option<&ThreadMetadata>,
+    state_db_ctx: Option<&StateDbHandle>,
 ) -> std::result::Result<Thread, String> {
     let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
         .await
@@ -8298,7 +8356,9 @@ async fn load_thread_summary_for_rollout(
             &mut thread,
             summary_to_thread(summary_from_thread_metadata(persisted_metadata)),
         );
-    } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
+    } else if let Some(summary) =
+        read_summary_from_state_db_by_thread_id(state_db_ctx, thread_id).await
+    {
         merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
     }
     Ok(thread)

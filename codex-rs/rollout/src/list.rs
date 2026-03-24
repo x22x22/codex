@@ -1173,6 +1173,7 @@ async fn find_thread_path_by_id_str_in_subdir(
     codex_home: &Path,
     subdir: &str,
     id_str: &str,
+    state_db_ctx: Option<crate::state_db::StateDbHandle>,
 ) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
     if Uuid::parse_str(id_str).is_err() {
@@ -1187,7 +1188,10 @@ async fn find_thread_path_by_id_str_in_subdir(
         _ => None,
     };
     let thread_id = ThreadId::from_string(id_str).ok();
-    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
+    let state_db_ctx = match state_db_ctx {
+        Some(state_db_ctx) => Some(state_db_ctx),
+        None => state_db::open_if_present(codex_home, "").await,
+    };
     if let Some(state_db_ctx) = state_db_ctx.as_deref()
         && let Some(thread_id) = thread_id
         && let Some(db_path) = state_db::find_rollout_path_by_id(
@@ -1253,7 +1257,24 @@ pub async fn find_thread_path_by_id_str(
     codex_home: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await
+    find_thread_path_by_id_str_in_subdir(
+        codex_home,
+        SESSIONS_SUBDIR,
+        id_str,
+        /*state_db_ctx*/ None,
+    )
+    .await
+}
+
+/// Locate a recorded thread rollout file by its UUID string using an already-open SQLite handle
+/// when available. Returns `Ok(Some(path))` if found, `Ok(None)` if not present or the id is
+/// invalid.
+pub async fn find_thread_path_by_id_str_with_state_db(
+    codex_home: &Path,
+    id_str: &str,
+    state_db_ctx: Option<crate::state_db::StateDbHandle>,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str, state_db_ctx).await
 }
 
 /// Locate an archived thread rollout file by its UUID string.
@@ -1261,7 +1282,24 @@ pub async fn find_archived_thread_path_by_id_str(
     codex_home: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await
+    find_thread_path_by_id_str_in_subdir(
+        codex_home,
+        ARCHIVED_SESSIONS_SUBDIR,
+        id_str,
+        /*state_db_ctx*/ None,
+    )
+    .await
+}
+
+/// Locate an archived thread rollout file by its UUID string using an already-open SQLite handle
+/// when available.
+pub async fn find_archived_thread_path_by_id_str_with_state_db(
+    codex_home: &Path,
+    id_str: &str,
+    state_db_ctx: Option<crate::state_db::StateDbHandle>,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str, state_db_ctx)
+        .await
 }
 
 /// Extract the `YYYY/MM/DD` directory components from a rollout filename.
