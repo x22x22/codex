@@ -30,7 +30,6 @@ use crate::thread_manager::snapshot_rollout_history;
 
 use self::execution::run_before_review_deadline;
 use self::execution::run_review_on_session;
-use self::spawn::GuardianReviewSessionReuseKey;
 use self::spawn::GuardianReviewSessionSpawnOutcome;
 #[cfg(test)]
 pub(crate) use self::spawn::build_guardian_review_session_config;
@@ -141,8 +140,10 @@ struct GuardianReviewSession {
     codex: Codex,
     /// Session-scoped cancellation used during shutdown.
     cancel_token: CancellationToken,
-    /// Spawn-config fingerprint used to decide when the cached trunk is still reusable.
-    reuse_key: GuardianReviewSessionReuseKey,
+    /// Effective guardian config used for this child session.
+    ///
+    /// The trunk remains reusable only while future reviews resolve to the same config.
+    spawn_config: Config,
     /// Tracks whether this session has already completed at least one review turn.
     has_prior_review: AtomicBool,
     /// Prevents overlapping reviews on the same guardian session.
@@ -153,13 +154,13 @@ impl GuardianReviewSession {
     fn new(
         codex: Codex,
         cancel_token: CancellationToken,
-        reuse_key: GuardianReviewSessionReuseKey,
+        spawn_config: Config,
         has_prior_review: bool,
     ) -> Self {
         Self {
             codex,
             cancel_token,
-            reuse_key,
+            spawn_config,
             has_prior_review: AtomicBool::new(has_prior_review),
             review_lock: Mutex::new(()),
         }
@@ -318,14 +319,8 @@ impl GuardianReviewSessionManager {
         params: GuardianReviewSessionParams,
     ) -> GuardianReviewSessionOutcome {
         let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
-        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
         let trunk = match self
-            .get_or_spawn_trunk_for_review(
-                &params,
-                &next_reuse_key,
-                deadline,
-                params.external_cancel.as_ref(),
-            )
+            .get_or_spawn_trunk_for_review(&params, deadline, params.external_cancel.as_ref())
             .await
         {
             Ok(Some(trunk)) => trunk,
@@ -335,14 +330,9 @@ impl GuardianReviewSessionManager {
 
         // A stale-but-busy trunk stays in place so the in-flight review can finish. New work forks
         // instead of replacing the live session.
-        if trunk.reuse_key != next_reuse_key {
+        if trunk.spawn_config != params.spawn_config {
             return self
-                .run_forked_review(
-                    params,
-                    next_reuse_key,
-                    deadline,
-                    /*initial_history*/ None,
-                )
+                .run_forked_review(params, deadline, /*initial_history*/ None)
                 .await;
         }
 
@@ -351,7 +341,7 @@ impl GuardianReviewSessionManager {
             Err(_) => {
                 let initial_history = trunk.fork_initial_history().await;
                 return self
-                    .run_forked_review(params, next_reuse_key, deadline, initial_history)
+                    .run_forked_review(params, deadline, initial_history)
                     .await;
             }
         };
@@ -383,7 +373,6 @@ impl GuardianReviewSessionManager {
         spawn_config: Config,
         eager_init_cancel: &CancellationToken,
     ) {
-        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&spawn_config);
         let Ok(_spawn_guard) = self.spawn_lock.try_lock() else {
             return;
         };
@@ -399,7 +388,6 @@ impl GuardianReviewSessionManager {
                 parent_session,
                 parent_turn,
                 spawn_config,
-                next_reuse_key,
             )
             .await
         {
@@ -424,11 +412,10 @@ impl GuardianReviewSessionManager {
     async fn get_or_spawn_trunk_for_review(
         &self,
         params: &GuardianReviewSessionParams,
-        next_reuse_key: &GuardianReviewSessionReuseKey,
         deadline: tokio::time::Instant,
         external_cancel: Option<&CancellationToken>,
     ) -> Result<Option<Arc<GuardianReviewSession>>, GuardianReviewSessionOutcome> {
-        match self.prepare_trunk(next_reuse_key).await {
+        match self.prepare_trunk(&params.spawn_config).await {
             GuardianTrunkState::Ready(trunk) => return Ok(Some(trunk)),
             GuardianTrunkState::ShutdownStarted => return Ok(None),
             GuardianTrunkState::NeedsSpawn => {}
@@ -443,7 +430,7 @@ impl GuardianReviewSessionManager {
             };
 
         // Another task may have finished spawning while we were waiting on `spawn_lock`.
-        let trunk = match self.prepare_trunk(next_reuse_key).await {
+        let trunk = match self.prepare_trunk(&params.spawn_config).await {
             GuardianTrunkState::Ready(trunk) => Some(trunk),
             GuardianTrunkState::ShutdownStarted => None,
             GuardianTrunkState::NeedsSpawn => {
@@ -454,7 +441,6 @@ impl GuardianReviewSessionManager {
                         &params.parent_session,
                         &params.parent_turn,
                         params.spawn_config.clone(),
-                        next_reuse_key.clone(),
                     )
                     .await
                 {
@@ -477,7 +463,6 @@ impl GuardianReviewSessionManager {
         parent_session: &Arc<Session>,
         parent_turn: &Arc<TurnContext>,
         spawn_config: Config,
-        next_reuse_key: GuardianReviewSessionReuseKey,
     ) -> Result<Option<Arc<GuardianReviewSession>>, GuardianReviewSessionSpawnOutcome> {
         // Spawn under the caller's deadline policy first, then register the result against shared
         // trunk state exactly once in `install_spawned_trunk`.
@@ -487,7 +472,6 @@ impl GuardianReviewSessionManager {
             parent_session,
             parent_turn,
             spawn_config,
-            next_reuse_key,
             /*initial_history*/ None,
         )
         .await?;
@@ -496,17 +480,14 @@ impl GuardianReviewSessionManager {
 
     /// Inspects the cached trunk and eagerly evicts a stale idle trunk so the caller can spawn a
     /// replacement. Busy trunks are left in place.
-    async fn prepare_trunk(
-        &self,
-        next_reuse_key: &GuardianReviewSessionReuseKey,
-    ) -> GuardianTrunkState {
+    async fn prepare_trunk(&self, next_spawn_config: &Config) -> GuardianTrunkState {
         let (trunk_state, stale_trunk_to_shutdown) = {
             let mut state = self.state.lock().await;
             if state.shutdown_started {
                 return GuardianTrunkState::ShutdownStarted;
             }
             if let Some(trunk) = state.trunk.as_ref()
-                && trunk.reuse_key != *next_reuse_key
+                && trunk.spawn_config != *next_spawn_config
                 && trunk.review_lock.try_lock().is_ok()
             {
                 (GuardianTrunkState::NeedsSpawn, state.trunk.take())
@@ -591,22 +572,18 @@ impl GuardianReviewSessionManager {
 
     #[cfg(test)]
     pub(crate) async fn cache_for_test(&self, codex: Codex) {
-        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
-            codex.session.get_config().await.as_ref(),
-        );
+        let spawn_config = codex.session.get_config().await.as_ref().clone();
         self.state.lock().await.trunk = Some(Arc::new(GuardianReviewSession::new(
             codex,
             CancellationToken::new(),
-            reuse_key,
+            spawn_config,
             /*has_prior_review*/ false,
         )));
     }
 
     #[cfg(test)]
     pub(crate) async fn register_fork_for_test(&self, codex: Codex) {
-        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
-            codex.session.get_config().await.as_ref(),
-        );
+        let spawn_config = codex.session.get_config().await.as_ref().clone();
         self.state
             .lock()
             .await
@@ -614,7 +591,7 @@ impl GuardianReviewSessionManager {
             .push(Arc::new(GuardianReviewSession::new(
                 codex,
                 CancellationToken::new(),
-                reuse_key,
+                spawn_config,
                 /*has_prior_review*/ false,
             )));
     }
@@ -622,7 +599,6 @@ impl GuardianReviewSessionManager {
     async fn run_forked_review(
         &self,
         params: GuardianReviewSessionParams,
-        reuse_key: GuardianReviewSessionReuseKey,
         deadline: tokio::time::Instant,
         initial_history: Option<InitialHistory>,
     ) -> GuardianReviewSessionOutcome {
@@ -636,7 +612,6 @@ impl GuardianReviewSessionManager {
             &params.parent_session,
             &params.parent_turn,
             fork_config,
-            reuse_key,
             initial_history,
         )
         .await

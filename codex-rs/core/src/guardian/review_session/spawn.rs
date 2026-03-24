@@ -5,8 +5,6 @@
 //! - what config/model should the guardian child session use?
 //! - how do we spawn that child session under the caller's deadline/cancel policy?
 
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -21,11 +19,7 @@ use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
-use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
-use crate::config::Permissions;
-use crate::config::types::McpServerConfig;
-use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::protocol::SandboxPolicy;
 
@@ -50,62 +44,6 @@ pub(super) enum GuardianReviewSessionSpawnOutcome {
     Aborted,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct GuardianReviewSessionReuseKey {
-    // Only include settings that affect spawned-session behavior so reuse
-    // invalidation remains explicit and does not depend on unrelated config
-    // bookkeeping.
-    model: Option<String>,
-    model_provider_id: String,
-    model_provider: ModelProviderInfo,
-    model_context_window: Option<i64>,
-    model_auto_compact_token_limit: Option<i64>,
-    model_reasoning_effort: Option<ReasoningEffortConfig>,
-    permissions: Permissions,
-    developer_instructions: Option<String>,
-    base_instructions: Option<String>,
-    user_instructions: Option<String>,
-    compact_prompt: Option<String>,
-    cwd: PathBuf,
-    mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
-    codex_linux_sandbox_exe: Option<PathBuf>,
-    main_execve_wrapper_exe: Option<PathBuf>,
-    js_repl_node_path: Option<PathBuf>,
-    js_repl_node_module_dirs: Vec<PathBuf>,
-    zsh_path: Option<PathBuf>,
-    features: ManagedFeatures,
-    include_apply_patch_tool: bool,
-    use_experimental_unified_exec_tool: bool,
-}
-
-impl GuardianReviewSessionReuseKey {
-    pub(super) fn from_spawn_config(spawn_config: &Config) -> Self {
-        Self {
-            model: spawn_config.model.clone(),
-            model_provider_id: spawn_config.model_provider_id.clone(),
-            model_provider: spawn_config.model_provider.clone(),
-            model_context_window: spawn_config.model_context_window,
-            model_auto_compact_token_limit: spawn_config.model_auto_compact_token_limit,
-            model_reasoning_effort: spawn_config.model_reasoning_effort,
-            permissions: spawn_config.permissions.clone(),
-            developer_instructions: spawn_config.developer_instructions.clone(),
-            base_instructions: spawn_config.base_instructions.clone(),
-            user_instructions: spawn_config.user_instructions.clone(),
-            compact_prompt: spawn_config.compact_prompt.clone(),
-            cwd: spawn_config.cwd.clone(),
-            mcp_servers: spawn_config.mcp_servers.clone(),
-            codex_linux_sandbox_exe: spawn_config.codex_linux_sandbox_exe.clone(),
-            main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),
-            js_repl_node_path: spawn_config.js_repl_node_path.clone(),
-            js_repl_node_module_dirs: spawn_config.js_repl_node_module_dirs.clone(),
-            zsh_path: spawn_config.zsh_path.clone(),
-            features: spawn_config.features.clone(),
-            include_apply_patch_tool: spawn_config.include_apply_patch_tool,
-            use_experimental_unified_exec_tool: spawn_config.use_experimental_unified_exec_tool,
-        }
-    }
-}
-
 /// Spawns a guardian child session and maps deadline/cancel outcomes into a small internal enum.
 ///
 /// Trunk creation and fork creation both use this helper so they do not duplicate the same
@@ -116,7 +54,6 @@ pub(super) async fn spawn_review_session_before_deadline(
     parent_session: &Arc<Session>,
     parent_turn: &Arc<TurnContext>,
     spawn_config: Config,
-    reuse_key: GuardianReviewSessionReuseKey,
     initial_history: Option<InitialHistory>,
 ) -> Result<Arc<GuardianReviewSession>, GuardianReviewSessionSpawnOutcome> {
     let spawn_cancel_token = tokio_util::sync::CancellationToken::new();
@@ -128,7 +65,6 @@ pub(super) async fn spawn_review_session_before_deadline(
             Arc::clone(parent_session),
             Arc::clone(parent_turn),
             spawn_config,
-            reuse_key,
             spawn_cancel_token.clone(),
             initial_history,
         )),
@@ -168,11 +104,11 @@ async fn spawn_guardian_review_session(
     parent_session: Arc<Session>,
     parent_turn: Arc<TurnContext>,
     spawn_config: Config,
-    reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: tokio_util::sync::CancellationToken,
     initial_history: Option<InitialHistory>,
 ) -> anyhow::Result<GuardianReviewSession> {
     let has_prior_review = initial_history.is_some();
+    let review_config = spawn_config.clone();
     // Guardian runs as an ordinary child Codex thread with a different config and source label.
     let codex = run_codex_thread_interactive(
         spawn_config,
@@ -189,7 +125,7 @@ async fn spawn_guardian_review_session(
     Ok(GuardianReviewSession::new(
         codex,
         cancel_token,
-        reuse_key,
+        review_config,
         has_prior_review,
     ))
 }

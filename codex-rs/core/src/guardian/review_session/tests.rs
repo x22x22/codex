@@ -24,7 +24,6 @@ async fn guardian_review_session_with_shutdown_signal() -> (
     let (child_session, _child_turn_context) = crate::codex::make_session_and_context().await;
     let child_session = Arc::new(child_session);
     let child_config = child_session.get_config().await;
-    let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(child_config.as_ref());
     let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
     let (_child_tx_event, child_rx_event) = async_channel::unbounded();
     let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
@@ -49,7 +48,7 @@ async fn guardian_review_session_with_shutdown_signal() -> (
     let review_session = Arc::new(GuardianReviewSession::new(
         child_codex,
         CancellationToken::new(),
-        reuse_key,
+        child_config.as_ref().clone(),
         /*has_prior_review*/ false,
     ));
 
@@ -57,12 +56,11 @@ async fn guardian_review_session_with_shutdown_signal() -> (
 }
 
 #[test]
-fn guardian_review_session_config_change_invalidates_cached_session() {
+fn guardian_review_session_config_change_changes_spawn_config() {
     let parent_config = crate::config::test_config();
     let cached_spawn_config =
         build_guardian_review_session_config(&parent_config, None, "active-model", None)
             .expect("cached guardian config");
-    let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config);
 
     let mut changed_parent_config = parent_config;
     changed_parent_config.model_provider.base_url =
@@ -70,13 +68,8 @@ fn guardian_review_session_config_change_invalidates_cached_session() {
     let next_spawn_config =
         build_guardian_review_session_config(&changed_parent_config, None, "active-model", None)
             .expect("next guardian config");
-    let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&next_spawn_config);
 
-    assert_ne!(cached_reuse_key, next_reuse_key);
-    assert_eq!(
-        cached_reuse_key,
-        GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
-    );
+    assert_ne!(cached_spawn_config, next_spawn_config);
 }
 
 #[test]
