@@ -8,6 +8,7 @@ use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::guardian::take_guardian_timeout_message;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -598,10 +599,26 @@ impl CoreShellActionProvider {
                             }
                         },
                         ReviewDecision::Denied => {
-                            EscalationDecision::deny(Some("User denied execution".to_string()))
+                            if let Some(message) =
+                                take_guardian_timeout_message(self.session.as_ref(), &self.call_id)
+                                    .await
+                            {
+                                EscalationDecision::deny(Some(message))
+                            } else {
+                                EscalationDecision::deny(Some("User denied execution".to_string()))
+                            }
                         }
                         ReviewDecision::Abort => {
-                            EscalationDecision::deny(Some("User cancelled execution".to_string()))
+                            if let Some(message) =
+                                take_guardian_timeout_message(self.session.as_ref(), &self.call_id)
+                                    .await
+                            {
+                                EscalationDecision::deny(Some(message))
+                            } else {
+                                EscalationDecision::deny(Some(
+                                    "User cancelled execution".to_string(),
+                                ))
+                            }
                         }
                     }
                 }

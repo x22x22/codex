@@ -417,6 +417,29 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
 }
 
 #[tokio::test]
+async fn guardian_timeout_message_is_taken_once() {
+    let (session, _turn) = crate::codex::make_session_and_context().await;
+    session
+        .services
+        .guardian_review_timeouts
+        .lock()
+        .await
+        .insert("approval-1".to_string(), "review timed out".to_string());
+
+    assert_eq!(
+        take_guardian_timeout_message(&session, "approval-1")
+            .await
+            .as_deref(),
+        Some("review timed out")
+    );
+    assert!(
+        take_guardian_timeout_message(&session, "approval-1")
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
     let (_session, mut turn) = crate::codex::make_session_and_context().await;
     let mut config = (*turn.config).clone();

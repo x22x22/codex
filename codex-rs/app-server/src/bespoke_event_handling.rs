@@ -216,6 +216,9 @@ fn guardian_auto_approval_review_notification(
             codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
                 GuardianApprovalReviewStatus::Denied
             }
+            codex_protocol::protocol::GuardianAssessmentStatus::TimedOut => {
+                GuardianApprovalReviewStatus::TimedOut
+            }
             codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
                 GuardianApprovalReviewStatus::Aborted
             }
@@ -238,6 +241,7 @@ fn guardian_auto_approval_review_notification(
         }
         codex_protocol::protocol::GuardianAssessmentStatus::Approved
         | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+        | codex_protocol::protocol::GuardianAssessmentStatus::TimedOut
         | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
             ServerNotification::ItemGuardianApprovalReviewCompleted(
                 ItemGuardianApprovalReviewCompletedNotification {
@@ -3014,6 +3018,48 @@ mod tests {
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.rationale, None);
+                assert_eq!(payload.action, Some(action));
+            }
+            other => panic!("unexpected notification: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guardian_assessment_timed_out_emits_completed_review_payload() {
+        let conversation_id = ThreadId::new();
+        let action = json!({
+            "tool": "shell",
+            "command": "git push",
+        });
+        let notification = guardian_auto_approval_review_notification(
+            &conversation_id,
+            "turn-from-event",
+            &GuardianAssessmentEvent {
+                id: "item-4".to_string(),
+                turn_id: "turn-from-assessment".to_string(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::TimedOut,
+                risk_score: None,
+                risk_level: None,
+                rationale: Some("review timed out".to_string()),
+                action: Some(action.clone()),
+            },
+        );
+
+        match notification {
+            ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
+                assert_eq!(payload.thread_id, conversation_id.to_string());
+                assert_eq!(payload.turn_id, "turn-from-assessment");
+                assert_eq!(payload.target_item_id, "item-4");
+                assert_eq!(
+                    payload.review.status,
+                    GuardianApprovalReviewStatus::TimedOut
+                );
+                assert_eq!(payload.review.risk_score, None);
+                assert_eq!(payload.review.risk_level, None);
+                assert_eq!(
+                    payload.review.rationale.as_deref(),
+                    Some("review timed out")
+                );
                 assert_eq!(payload.action, Some(action));
             }
             other => panic!("unexpected notification: {other:?}"),

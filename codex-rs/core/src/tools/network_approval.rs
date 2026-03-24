@@ -3,6 +3,7 @@ use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::guardian::take_guardian_timeout_message;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::tools::sandboxing::ToolError;
 use codex_network_proxy::BlockedRequest;
@@ -111,6 +112,7 @@ enum PendingApprovalDecision {
 enum NetworkApprovalOutcome {
     DeniedByUser,
     DeniedByPolicy(String),
+    TimedOutByReviewer(String),
 }
 
 /// Whether an allowlist miss may be reviewed instead of hard-denied.
@@ -470,14 +472,21 @@ impl NetworkApprovalService {
             },
             ReviewDecision::Denied | ReviewDecision::Abort => {
                 if routes_approval_to_guardian(&turn_context) {
+                    let timeout_message = take_guardian_timeout_message(
+                        session.as_ref(),
+                        &Self::approval_id_for_key(&key),
+                    )
+                    .await;
                     if let Some(owner_call) = owner_call.as_ref() {
-                        self.record_call_outcome(
-                            &owner_call.registration_id,
+                        let outcome = if let Some(message) = timeout_message {
+                            NetworkApprovalOutcome::TimedOutByReviewer(message)
+                        } else {
                             NetworkApprovalOutcome::DeniedByPolicy(
                                 GUARDIAN_REJECTION_MESSAGE.to_string(),
-                            ),
-                        )
-                        .await;
+                            )
+                        };
+                        self.record_call_outcome(&owner_call.registration_id, outcome)
+                            .await;
                     }
                 } else if let Some(owner_call) = owner_call.as_ref() {
                     self.record_call_outcome(
@@ -594,6 +603,9 @@ pub(crate) async fn finish_immediate_network_approval(
             Err(ToolError::Rejected("rejected by user".to_string()))
         }
         Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => Err(ToolError::Rejected(message)),
+        Some(NetworkApprovalOutcome::TimedOutByReviewer(message)) => {
+            Err(ToolError::Message(message))
+        }
         None => Ok(()),
     }
 }

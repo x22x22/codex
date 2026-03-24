@@ -29,10 +29,11 @@ pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::review_approval_request;
 pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
+pub(crate) use review::take_guardian_timeout_message;
 pub(crate) use review_session::GuardianReviewSessionManager;
 
 const GUARDIAN_PREFERRED_MODEL: &str = "gpt-5.4";
-pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
+pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const GUARDIAN_REVIEWER_NAME: &str = "guardian";
 const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
 const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;

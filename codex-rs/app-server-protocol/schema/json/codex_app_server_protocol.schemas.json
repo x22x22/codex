@@ -7956,6 +7956,7 @@
           "inProgress",
           "approved",
           "denied",
+          "timedOut",
           "aborted"
         ],
         "type": "string"

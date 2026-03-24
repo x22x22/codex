@@ -11,6 +11,7 @@ use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
 use crate::guardian::routes_approval_to_guardian;
+use crate::guardian::take_guardian_timeout_message;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -39,6 +40,25 @@ pub(crate) struct ToolOrchestrator {
 pub(crate) struct OrchestratorRunResult<Out> {
     pub output: Out,
     pub deferred_network_approval: Option<DeferredNetworkApproval>,
+}
+
+async fn approval_denial_tool_error(
+    tool_ctx: &ToolCtx,
+    turn_ctx: &crate::codex::TurnContext,
+) -> ToolError {
+    if routes_approval_to_guardian(turn_ctx)
+        && let Some(message) =
+            take_guardian_timeout_message(tool_ctx.session.as_ref(), &tool_ctx.call_id).await
+    {
+        ToolError::Message(message)
+    } else {
+        let reason = if routes_approval_to_guardian(turn_ctx) {
+            GUARDIAN_REJECTION_MESSAGE.to_string()
+        } else {
+            "rejected by user".to_string()
+        };
+        ToolError::Rejected(reason)
+    }
 }
 
 impl ToolOrchestrator {
@@ -148,12 +168,7 @@ impl ToolOrchestrator {
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
-                        let reason = if routes_approval_to_guardian(turn_ctx) {
-                            GUARDIAN_REJECTION_MESSAGE.to_string()
-                        } else {
-                            "rejected by user".to_string()
-                        };
-                        return Err(ToolError::Rejected(reason));
+                        return Err(approval_denial_tool_error(tool_ctx, turn_ctx).await);
                     }
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
@@ -301,12 +316,7 @@ impl ToolOrchestrator {
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
-                            let reason = if routes_approval_to_guardian(turn_ctx) {
-                                GUARDIAN_REJECTION_MESSAGE.to_string()
-                            } else {
-                                "rejected by user".to_string()
-                            };
-                            return Err(ToolError::Rejected(reason));
+                            return Err(approval_denial_tool_error(tool_ctx, turn_ctx).await);
                         }
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }

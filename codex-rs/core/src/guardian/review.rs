@@ -37,11 +37,28 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
     "Otherwise, stop and request user input.",
 );
 
+pub(crate) const GUARDIAN_TIMEOUT_MESSAGE: &str = concat!(
+    "Automatic approval review timed out before it could finish evaluating this action. ",
+    "The action was not intentionally rejected, and a retry may succeed.",
+);
+
 #[derive(Debug)]
 pub(super) enum GuardianReviewOutcome {
     Completed(anyhow::Result<GuardianAssessment>),
     TimedOut,
     Aborted,
+}
+
+pub(crate) async fn take_guardian_timeout_message(
+    session: &Session,
+    request_id: &str,
+) -> Option<String> {
+    session
+        .services
+        .guardian_review_timeouts
+        .lock()
+        .await
+        .remove(request_id)
 }
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
@@ -82,6 +99,12 @@ async fn run_guardian_review(
     let assessment_id = guardian_request_id(&request).to_string();
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action_value(&request);
+    session
+        .services
+        .guardian_review_timeouts
+        .lock()
+        .await
+        .remove(&assessment_id);
     session
         .send_event(
             turn.as_ref(),
@@ -134,22 +157,41 @@ async fn run_guardian_review(
         Err(err) => GuardianReviewOutcome::Completed(Err(err.into())),
     };
 
-    let assessment = match outcome {
-        GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
-        GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
-            rationale: format!("Automatic approval review failed: {err}"),
-            evidence: vec![],
-        },
-        GuardianReviewOutcome::TimedOut => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
-            rationale:
-                "Automatic approval review timed out while evaluating the requested approval."
-                    .to_string(),
-            evidence: vec![],
-        },
+    let (assessment, status) = match outcome {
+        GuardianReviewOutcome::Completed(Ok(assessment)) => {
+            let status = if assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD {
+                GuardianAssessmentStatus::Approved
+            } else {
+                GuardianAssessmentStatus::Denied
+            };
+            (assessment, status)
+        }
+        GuardianReviewOutcome::Completed(Err(err)) => (
+            GuardianAssessment {
+                risk_level: GuardianRiskLevel::High,
+                risk_score: 100,
+                rationale: format!("Automatic approval review failed: {err}"),
+                evidence: vec![],
+            },
+            GuardianAssessmentStatus::Denied,
+        ),
+        GuardianReviewOutcome::TimedOut => {
+            session
+                .services
+                .guardian_review_timeouts
+                .lock()
+                .await
+                .insert(assessment_id.clone(), GUARDIAN_TIMEOUT_MESSAGE.to_string());
+            (
+                GuardianAssessment {
+                    risk_level: GuardianRiskLevel::High,
+                    risk_score: 100,
+                    rationale: GUARDIAN_TIMEOUT_MESSAGE.to_string(),
+                    evidence: vec![],
+                },
+                GuardianAssessmentStatus::TimedOut,
+            )
+        }
         GuardianReviewOutcome::Aborted => {
             session
                 .send_event(
@@ -169,23 +211,34 @@ async fn run_guardian_review(
         }
     };
 
-    let approved = assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD;
-    let verdict = if approved { "approved" } else { "denied" };
-    let warning = format!(
-        "Automatic approval review {verdict} (risk: {}): {}",
-        guardian_risk_level_str(assessment.risk_level),
-        assessment.rationale
-    );
+    let warning = match status {
+        GuardianAssessmentStatus::TimedOut => assessment.rationale.clone(),
+        GuardianAssessmentStatus::Approved | GuardianAssessmentStatus::Denied => {
+            let verdict = if status == GuardianAssessmentStatus::Approved {
+                "approved"
+            } else {
+                "denied"
+            };
+            format!(
+                "Automatic approval review {verdict} (risk: {}): {}",
+                guardian_risk_level_str(assessment.risk_level),
+                assessment.rationale
+            )
+        }
+        GuardianAssessmentStatus::InProgress | GuardianAssessmentStatus::Aborted => {
+            unreachable!("guardian terminal warnings only use terminal statuses")
+        }
+    };
     session
         .send_event(
             turn.as_ref(),
             EventMsg::Warning(WarningEvent { message: warning }),
         )
         .await;
-    let status = if approved {
-        GuardianAssessmentStatus::Approved
+    let (risk_score, risk_level) = if status == GuardianAssessmentStatus::TimedOut {
+        (None, None)
     } else {
-        GuardianAssessmentStatus::Denied
+        (Some(assessment.risk_score), Some(assessment.risk_level))
     };
     session
         .send_event(
@@ -194,15 +247,15 @@ async fn run_guardian_review(
                 id: assessment_id,
                 turn_id: assessment_turn_id,
                 status,
-                risk_score: Some(assessment.risk_score),
-                risk_level: Some(assessment.risk_level),
+                risk_score,
+                risk_level,
                 rationale: Some(assessment.rationale.clone()),
                 action: Some(terminal_action),
             }),
         )
         .await;
 
-    if approved {
+    if status == GuardianAssessmentStatus::Approved {
         ReviewDecision::Approved
     } else {
         ReviewDecision::Denied

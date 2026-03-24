@@ -24,6 +24,7 @@ use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::guardian::take_guardian_timeout_message;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
@@ -187,6 +188,17 @@ pub(crate) async fn handle_mcp_tool_call(
             }
             McpToolApprovalDecision::Decline => {
                 let message = "user rejected MCP tool call".to_string();
+                notify_mcp_tool_call_skip(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &call_id,
+                    invocation,
+                    message,
+                    /*already_started*/ true,
+                )
+                .await
+            }
+            McpToolApprovalDecision::TimedOut(message) => {
                 notify_mcp_tool_call_skip(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -374,6 +386,7 @@ enum McpToolApprovalDecision {
     AcceptForSession,
     AcceptAndRemember,
     Decline,
+    TimedOut(String),
     Cancel,
     BlockedBySafetyMonitor(String),
 }
@@ -551,7 +564,13 @@ async fn maybe_request_mcp_tool_approval(
             monitor_reason.clone(),
         )
         .await;
-        let decision = mcp_tool_approval_decision_from_guardian(decision);
+        let decision = if (decision == ReviewDecision::Denied || decision == ReviewDecision::Abort)
+            && let Some(message) = take_guardian_timeout_message(sess.as_ref(), call_id).await
+        {
+            McpToolApprovalDecision::TimedOut(message)
+        } else {
+            mcp_tool_approval_decision_from_guardian(decision)
+        };
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
@@ -1245,6 +1264,7 @@ async fn apply_mcp_tool_approval_decision(
         }
         McpToolApprovalDecision::Accept
         | McpToolApprovalDecision::Decline
+        | McpToolApprovalDecision::TimedOut(_)
         | McpToolApprovalDecision::Cancel
         | McpToolApprovalDecision::BlockedBySafetyMonitor(_) => {}
     }

@@ -1854,6 +1854,7 @@ impl Session {
             session_telemetry,
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
+            guardian_review_timeouts: Mutex::new(HashMap::new()),
             execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
             plugins_manager: Arc::clone(&plugins_manager),
