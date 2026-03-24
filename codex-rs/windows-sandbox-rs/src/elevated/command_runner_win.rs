@@ -289,7 +289,7 @@ fn spawn_ipc_process(
             &req.env,
             stdin_mode,
             StderrMode::Separate,
-            false,
+            use_private_desktop_for_spawn(req),
         )?;
         (
             pipe_handles.process,
@@ -313,6 +313,10 @@ fn spawn_ipc_process(
         stdin_handle,
         hpc_handle,
     })
+}
+
+fn use_private_desktop_for_spawn(req: &codex_windows_sandbox::ipc_framed::SpawnRequest) -> bool {
+    req.use_private_desktop
 }
 
 /// Stream stdout/stderr from the child into Output frames.
@@ -551,4 +555,47 @@ pub fn main() -> Result<()> {
     }
 
     std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::use_private_desktop_for_spawn;
+    use codex_windows_sandbox::ipc_framed::SpawnRequest;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn spawn_request(tty: bool, use_private_desktop: bool) -> SpawnRequest {
+        SpawnRequest {
+            command: vec!["cmd".into(), "/c".into(), "echo".into(), "hi".into()],
+            cwd: PathBuf::from("C:/workspace"),
+            env: HashMap::new(),
+            policy_json_or_preset: "workspace-write".into(),
+            sandbox_policy_cwd: PathBuf::from("C:/workspace"),
+            codex_home: PathBuf::from("C:/codex-home"),
+            real_codex_home: PathBuf::from("C:/codex-home"),
+            cap_sids: Vec::new(),
+            timeout_ms: None,
+            tty,
+            stdin_open: false,
+            use_private_desktop,
+        }
+    }
+
+    #[test]
+    fn non_tty_spawn_preserves_private_desktop_request() {
+        let req = spawn_request(false, true);
+        assert!(use_private_desktop_for_spawn(&req));
+    }
+
+    #[test]
+    fn tty_spawn_preserves_private_desktop_request() {
+        let req = spawn_request(true, true);
+        assert!(use_private_desktop_for_spawn(&req));
+    }
+
+    #[test]
+    fn desktop_request_can_be_disabled() {
+        let req = spawn_request(false, false);
+        assert!(!use_private_desktop_for_spawn(&req));
+    }
 }
