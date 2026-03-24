@@ -177,7 +177,7 @@ async fn thread_unsubscribe_during_turn_interrupts_turn_and_emits_thread_closed(
                 text_elements: Vec::new(),
             }],
             cwd: Some(working_directory),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -251,7 +251,7 @@ async fn thread_unsubscribe_clears_cached_status_before_resume() -> Result<()> {
                 text: "fail this turn".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;

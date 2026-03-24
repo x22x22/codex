@@ -153,7 +153,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
                 },
             }),
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -265,7 +265,7 @@ where
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 

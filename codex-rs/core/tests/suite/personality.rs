@@ -111,7 +111,7 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -163,7 +163,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -222,7 +222,7 @@ async fn config_personality_none_sends_no_personality() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -287,7 +287,7 @@ async fn default_personality_is_pragmatic_without_config_toml() -> anyhow::Resul
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -340,7 +340,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -379,7 +379,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -447,7 +447,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -486,7 +486,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -567,7 +567,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -606,7 +606,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -724,7 +724,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -844,7 +844,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -883,7 +883,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 

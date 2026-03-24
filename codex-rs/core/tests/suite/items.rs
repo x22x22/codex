@@ -210,7 +210,7 @@ async fn user_turn_tracks_turn_event_analytics() -> anyhow::Result<()> {
                 },
             }),
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -321,7 +321,7 @@ async fn user_turn_tracks_turn_event_prompt_type_analytics() -> anyhow::Result<(
                 },
             }),
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -410,7 +410,7 @@ async fn user_turn_tracks_turn_steer_analytics() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -871,7 +871,7 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -949,7 +949,7 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1059,7 +1059,7 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1247,7 +1247,7 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -1362,7 +1362,7 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 

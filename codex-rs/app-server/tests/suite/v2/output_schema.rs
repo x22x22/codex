@@ -63,7 +63,7 @@ async fn turn_start_accepts_output_schema_v2() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             output_schema: Some(output_schema.clone()),
             ..Default::default()
         })
@@ -146,7 +146,7 @@ async fn turn_start_output_schema_is_per_turn_v2() -> Result<()> {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             output_schema: Some(output_schema.clone()),
             ..Default::default()
         })
@@ -189,7 +189,7 @@ async fn turn_start_output_schema_is_per_turn_v2() -> Result<()> {
                 text: "Hello again".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             output_schema: None,
             ..Default::default()
         })

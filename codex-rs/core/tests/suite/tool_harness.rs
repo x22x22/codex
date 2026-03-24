@@ -93,7 +93,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -165,7 +165,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -247,7 +247,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -344,7 +344,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 
@@ -449,7 +449,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 

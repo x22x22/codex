@@ -82,7 +82,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            user_message_type: None,
+            submission_type: None,
         })
         .await?;
 

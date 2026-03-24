@@ -75,7 +75,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
-use codex_protocol::protocol::UserMessageType;
+use codex_protocol::protocol::SubmissionType;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -390,7 +390,7 @@ impl AppServerSession {
         service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
         collaboration_mode: Option<codex_protocol::config_types::CollaborationMode>,
         personality: Option<codex_protocol::config_types::Personality>,
-        user_message_type: Option<UserMessageType>,
+        submission_type: Option<SubmissionType>,
         output_schema: Option<serde_json::Value>,
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
@@ -409,7 +409,7 @@ impl AppServerSession {
                     effort,
                     summary,
                     personality,
-                    user_message_type,
+                    submission_type,
                     output_schema,
                     collaboration_mode,
                 },

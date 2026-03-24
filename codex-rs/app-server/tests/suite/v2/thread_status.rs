@@ -53,7 +53,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             model: Some("mock-model".to_string()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -176,7 +176,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             model: Some("mock-model".to_string()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;

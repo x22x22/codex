@@ -5279,7 +5279,7 @@ impl ChatWidget {
             final_output_json_schema: None,
             collaboration_mode,
             personality,
-            user_message_type: None,
+            submission_type: None,
         };
 
         if !self.submit_op(op) {

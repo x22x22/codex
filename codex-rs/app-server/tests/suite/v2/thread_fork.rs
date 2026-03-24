@@ -463,7 +463,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
                 text: "continue".to_string(),
                 text_elements: Vec::new(),
             }],
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;

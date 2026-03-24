@@ -127,7 +127,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
             summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -242,7 +242,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -376,7 +376,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;
@@ -547,7 +547,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
             summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),
-            user_message_type: None,
+            submission_type: None,
             ..Default::default()
         })
         .await?;

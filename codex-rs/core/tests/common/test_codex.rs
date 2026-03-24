@@ -731,7 +731,7 @@ impl TestCodex {
                 service_tier,
                 collaboration_mode: None,
                 personality: None,
-                user_message_type: None,
+                submission_type: None,
             })
             .await?;
 

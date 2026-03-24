@@ -199,7 +199,7 @@ impl AppServerClient {
                     // Debug client sends plain text with no UI markup spans.
                     text_elements: Vec::new(),
                 }],
-                user_message_type: None,
+                submission_type: None,
                 ..Default::default()
             },
         };

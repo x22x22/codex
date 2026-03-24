@@ -6115,7 +6115,7 @@ impl CodexMessageProcessor {
                 Op::UserInputWithMetadata {
                     items: mapped_items,
                     final_output_json_schema: params.output_schema,
-                    user_message_type: params.user_message_type,
+                    submission_type: params.submission_type,
                 },
             )
             .await;
