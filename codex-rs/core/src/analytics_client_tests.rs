@@ -8,11 +8,10 @@ use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
 use super::CodexTurnSteerEvent;
 use super::InvocationType;
-use super::SubmissionOrigin;
+use super::SubmissionType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::TurnEventType;
-use super::UserMessageType;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
@@ -210,7 +209,7 @@ fn turn_event_serializes_expected_shape() {
         event_params: codex_turn_event_params(
             &tracking,
             CodexTurnEvent {
-                submission_origin: Some(SubmissionOrigin::Prompt),
+                submission_type: Some(SubmissionType::Prompt),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 reasoning_effort: Some(ReasoningEffort::High),
                 reasoning_summary: ReasoningSummary::Detailed,
@@ -232,8 +231,7 @@ fn turn_event_serializes_expected_shape() {
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
                 "turn_event_type": "start",
-                "submission_origin": "prompt",
-                "user_message_type": null,
+                "submission_type": "prompt",
                 "sandbox_policy": "read_only",
                 "reasoning_effort": "high",
                 "reasoning_summary": "detailed",
@@ -253,12 +251,7 @@ fn turn_steer_event_serializes_expected_shape() {
     };
     let event = TrackEventRequest::TurnEvent(CodexTurnEventRequest {
         event_type: "codex_turn_event",
-        event_params: codex_turn_steer_event_params(
-            &tracking,
-            CodexTurnSteerEvent {
-                user_message_type: UserMessageType::PromptSteering,
-            },
-        ),
+        event_params: codex_turn_steer_event_params(&tracking, CodexTurnSteerEvent),
     });
 
     let payload = serde_json::to_value(&event).expect("serialize codex turn steer event");
@@ -273,8 +266,7 @@ fn turn_steer_event_serializes_expected_shape() {
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
                 "turn_event_type": "steer",
-                "submission_origin": null,
-                "user_message_type": "prompt_steering",
+                "submission_type": null,
                 "sandbox_policy": null,
                 "reasoning_effort": null,
                 "reasoning_summary": null,

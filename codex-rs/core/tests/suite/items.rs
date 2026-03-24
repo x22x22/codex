@@ -244,7 +244,7 @@ async fn user_turn_tracks_turn_event_analytics() -> anyhow::Result<()> {
 
     let event_params = &event["event_params"];
 
-    assert_eq!(event_params["submission_origin"], "prompt");
+    assert_eq!(event_params["submission_type"], "prompt");
     assert_eq!(event_params["sandbox_policy"], "read_only");
     assert_eq!(
         event_params["product_client_id"],
@@ -317,12 +317,12 @@ async fn user_turn_tracks_turn_event_prompt_type_analytics() -> anyhow::Result<(
 
     let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
         event["event_params"]["turn_event_type"] == "start"
-            && event["event_params"]["submission_origin"] == "prompt"
+            && event["event_params"]["submission_type"] == "prompt"
     })
     .await;
     let event_params = &event["event_params"];
 
-    assert_eq!(event_params["submission_origin"], "prompt");
+    assert_eq!(event_params["submission_type"], "prompt");
     assert_eq!(
         event_params["product_client_id"],
         serde_json::json!(codex_core::default_client::originator().value)
@@ -433,12 +433,11 @@ async fn user_turn_tracks_turn_steer_analytics() -> anyhow::Result<()> {
 
     let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
         event["event_params"]["turn_event_type"] == "steer"
-            && event["event_params"]["user_message_type"] == "prompt_steering"
     })
     .await;
     let event_params = &event["event_params"];
 
-    assert_eq!(event_params["user_message_type"], "prompt_steering");
+    assert!(event_params["submission_type"].is_null());
     assert_eq!(
         event_params["product_client_id"],
         serde_json::json!(codex_core::default_client::originator().value)

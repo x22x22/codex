@@ -17,7 +17,7 @@ use crate::analytics_client::AppInvocation;
 use crate::analytics_client::CodexTurnEvent;
 use crate::analytics_client::CodexTurnSteerEvent;
 use crate::analytics_client::InvocationType;
-use crate::analytics_client::SubmissionOrigin;
+use crate::analytics_client::SubmissionType;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -3938,12 +3938,9 @@ impl Session {
         drop(turn_state);
         drop(active);
         if let Some(tracking) = self.active_turn_tracking().await {
-            self.services.analytics_events_client.track_turn_steer(
-                tracking,
-                CodexTurnSteerEvent {
-                    user_message_type: SubmittedUserMessageType::PromptSteering,
-                },
-            );
+            self.services
+                .analytics_events_client
+                .track_turn_steer(tracking, CodexTurnSteerEvent);
         }
         Ok(active_turn_id)
     }
@@ -6029,9 +6026,9 @@ pub(crate) async fn run_turn(
         sess.services.analytics_events_client.track_turn_event(
             tracking,
             CodexTurnEvent {
-                submission_origin: match user_message_type {
-                    SubmittedUserMessageType::Prompt => Some(SubmissionOrigin::Prompt),
-                    SubmittedUserMessageType::PromptQueued => Some(SubmissionOrigin::PromptQueued),
+                submission_type: match user_message_type {
+                    SubmittedUserMessageType::Prompt => Some(SubmissionType::Prompt),
+                    SubmittedUserMessageType::PromptQueued => Some(SubmissionType::PromptQueued),
                     SubmittedUserMessageType::PromptSteering => None,
                 },
                 sandbox_policy: turn_context.sandbox_policy.get().clone(),
