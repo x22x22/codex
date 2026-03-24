@@ -165,7 +165,11 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
             service_tier: Some(Some(ServiceTier::Flex)),
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Plan,
-                settings: Settings::default(),
+                settings: Settings {
+                    model: session_configured.model.clone(),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                    developer_instructions: None,
+                },
             }),
             personality: None,
         })
