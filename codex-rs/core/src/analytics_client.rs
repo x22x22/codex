@@ -1,15 +1,16 @@
 use crate::AuthManager;
 use crate::config::Config;
 use crate::default_client::create_client;
+use crate::git_info::collect_git_info;
+use crate::git_info::get_git_repo_root;
 use crate::plugins::PluginTelemetryMetadata;
-use codex_git_utils::collect_git_info;
-use codex_git_utils::get_git_repo_root;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::SubmissionType;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -30,12 +31,16 @@ pub(crate) struct TrackEventsContext {
 
 #[derive(Clone)]
 pub(crate) struct CodexTurnEvent {
+    pub(crate) submission_type: Option<SubmissionType>,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
     pub(crate) reasoning_summary: ReasoningSummary,
     pub(crate) service_tier: Option<ServiceTier>,
     pub(crate) collaboration_mode: ModeKind,
 }
+
+#[derive(Clone, Copy)]
+pub(crate) struct CodexTurnSteerEvent;
 
 pub(crate) fn build_track_events_context(
     model_slug: String,
@@ -100,6 +105,9 @@ impl AnalyticsEventsQueue {
                     }
                     TrackEventsJob::TurnEvent(job) => {
                         send_track_turn_event(&auth_manager, job).await;
+                    }
+                    TrackEventsJob::TurnSteer(job) => {
+                        send_track_turn_steer(&auth_manager, job).await;
                     }
                     TrackEventsJob::PluginUsed(job) => {
                         send_track_plugin_used(&auth_manager, job).await;
@@ -227,6 +235,19 @@ impl AnalyticsEventsClient {
         );
     }
 
+    pub(crate) fn track_turn_steer(
+        &self,
+        tracking: TrackEventsContext,
+        turn_steer: CodexTurnSteerEvent,
+    ) {
+        track_turn_steer(
+            &self.queue,
+            Arc::clone(&self.config),
+            Some(tracking),
+            turn_steer,
+        );
+    }
+
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
@@ -269,6 +290,7 @@ enum TrackEventsJob {
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
     TurnEvent(TrackTurnEventJob),
+    TurnSteer(TrackTurnSteerJob),
     PluginUsed(TrackPluginUsedJob),
     PluginInstalled(TrackPluginManagementJob),
     PluginUninstalled(TrackPluginManagementJob),
@@ -298,6 +320,12 @@ struct TrackTurnEventJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
     turn_event: CodexTurnEvent,
+}
+
+struct TrackTurnSteerJob {
+    config: Arc<Config>,
+    tracking: TrackEventsContext,
+    turn_steer: CodexTurnSteerEvent,
 }
 
 struct TrackPluginUsedJob {
@@ -383,16 +411,27 @@ struct CodexAppUsedEventRequest {
     event_params: CodexAppMetadata,
 }
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 struct CodexTurnEventParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
     thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     product_client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     model_slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    submission_type: Option<SubmissionType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     sandbox_policy: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     collaboration_mode: Option<&'static str>,
 }
 
@@ -519,6 +558,26 @@ pub(crate) fn track_turn_event(
         config,
         tracking,
         turn_event,
+    });
+    queue.try_send(job);
+}
+
+pub(crate) fn track_turn_steer(
+    queue: &AnalyticsEventsQueue,
+    config: Arc<Config>,
+    tracking: Option<TrackEventsContext>,
+    turn_steer: CodexTurnSteerEvent,
+) {
+    if config.analytics_enabled == Some(false) {
+        return;
+    }
+    let Some(tracking) = tracking else {
+        return;
+    };
+    let job = TrackEventsJob::TurnSteer(TrackTurnSteerJob {
+        config,
+        tracking,
+        turn_steer,
     });
     queue.try_send(job);
 }
@@ -662,6 +721,20 @@ async fn send_track_turn_event(auth_manager: &AuthManager, job: TrackTurnEventJo
     send_track_events(auth_manager, config, events).await;
 }
 
+async fn send_track_turn_steer(auth_manager: &AuthManager, job: TrackTurnSteerJob) {
+    let TrackTurnSteerJob {
+        config,
+        tracking,
+        turn_steer,
+    } = job;
+    let events = vec![TrackEventRequest::TurnEvent(CodexTurnEventRequest {
+        event_type: "codex_turn_event",
+        event_params: codex_turn_steer_event_params(&tracking, turn_steer),
+    })];
+
+    send_track_events(auth_manager, config, events).await;
+}
+
 async fn send_track_plugin_used(auth_manager: &AuthManager, job: TrackPluginUsedJob) {
     let TrackPluginUsedJob {
         config,
@@ -735,11 +808,25 @@ fn codex_turn_event_params(
         turn_id: Some(tracking.turn_id.clone()),
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
+        submission_type: turn_event.submission_type,
         sandbox_policy: Some(sandbox_policy_mode(&turn_event.sandbox_policy)),
         reasoning_effort: turn_event.reasoning_effort.map(|value| value.to_string()),
         reasoning_summary: Some(turn_event.reasoning_summary.to_string()),
         service_tier: turn_event.service_tier.map(|value| value.to_string()),
         collaboration_mode: Some(collaboration_mode_mode(turn_event.collaboration_mode)),
+    }
+}
+
+fn codex_turn_steer_event_params(
+    tracking: &TrackEventsContext,
+    _turn_steer: CodexTurnSteerEvent,
+) -> CodexTurnEventParams {
+    CodexTurnEventParams {
+        thread_id: Some(tracking.thread_id.clone()),
+        turn_id: Some(tracking.turn_id.clone()),
+        product_client_id: Some(crate::default_client::originator().value),
+        model_slug: Some(tracking.model_slug.clone()),
+        ..Default::default()
     }
 }
 
