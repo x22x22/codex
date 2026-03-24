@@ -47,6 +47,7 @@ pub(crate) enum GuardianApprovalRequest {
     NetworkAccess {
         id: String,
         turn_id: String,
+        parent_tool_item_id: Option<String>,
         target: String,
         host: String,
         protocol: NetworkApprovalProtocol,
@@ -339,6 +340,18 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
             "tool_name": tool_name,
         }),
     }
+}
+
+fn network_approval_protocol_value(protocol: NetworkApprovalProtocol) -> Value {
+    Value::String(
+        match protocol {
+            NetworkApprovalProtocol::Http => "http",
+            NetworkApprovalProtocol::Https => "https",
+            NetworkApprovalProtocol::Socks5Tcp => "socks5_tcp",
+            NetworkApprovalProtocol::Socks5Udp => "socks5_udp",
+        }
+        .to_string(),
+    )
 }
 
 pub(crate) fn guardian_request_id(request: &GuardianApprovalRequest) -> &str {

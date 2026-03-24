@@ -579,6 +579,7 @@ pub(crate) fn build_network_policy_decider(
 pub(crate) async fn begin_network_approval(
     session: &Session,
     turn_id: &str,
+    parent_tool_item_id: &str,
     has_managed_network_requirements: bool,
     spec: Option<NetworkApprovalSpec>,
 ) -> Option<ActiveNetworkApproval> {
