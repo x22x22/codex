@@ -2610,11 +2610,22 @@ impl Config {
             commit_attribution,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
+            cli_auth_credentials_store_mode: if env!("CARGO_PKG_VERSION") == "0.0.0"
+                && cfg.cli_auth_credentials_store.unwrap_or_default()
+                    != AuthCredentialsStoreMode::Ephemeral
+            {
+                AuthCredentialsStoreMode::File
+            } else {
+                cfg.cli_auth_credentials_store.unwrap_or_default()
+            },
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
+            mcp_oauth_credentials_store_mode: if env!("CARGO_PKG_VERSION") == "0.0.0" {
+                OAuthCredentialsStoreMode::File
+            } else {
+                cfg.mcp_oauth_credentials_store.unwrap_or_default()
+            },
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
