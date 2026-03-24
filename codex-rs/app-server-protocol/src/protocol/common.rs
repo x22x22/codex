@@ -874,6 +874,7 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
+    LogEntry => "log/entry" (v2::LogEntryNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
@@ -1569,6 +1570,50 @@ mod tests {
                     "status": {
                         "type": "idle"
                     },
+                }
+            }),
+            serde_json::to_value(&notification)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_log_entry_notification() -> Result<()> {
+        let notification = ServerNotification::LogEntry(v2::LogEntryNotification {
+            timestamp: 1_742_710_400,
+            level: v2::LogEntryLevel::Warn,
+            target: "codex_app_server".to_string(),
+            message: "listener queue is full".to_string(),
+            fields: std::collections::BTreeMap::from([
+                ("connectionId".to_string(), serde_json::json!(7)),
+                ("retryable".to_string(), serde_json::json!(true)),
+            ]),
+            span: Some(v2::LogSpanContext {
+                name: "app_server.request".to_string(),
+                fields: std::collections::BTreeMap::from([(
+                    "rpc.method".to_string(),
+                    serde_json::json!("thread/start"),
+                )]),
+            }),
+        });
+        assert_eq!(
+            json!({
+                "method": "log/entry",
+                "params": {
+                    "timestamp": 1742710400,
+                    "level": "warn",
+                    "target": "codex_app_server",
+                    "message": "listener queue is full",
+                    "fields": {
+                        "connectionId": 7,
+                        "retryable": true,
+                    },
+                    "span": {
+                        "name": "app_server.request",
+                        "fields": {
+                            "rpc.method": "thread/start",
+                        }
+                    }
                 }
             }),
             serde_json::to_value(&notification)?,

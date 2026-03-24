@@ -8,6 +8,7 @@ use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::LogEntryNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -192,6 +193,81 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
     assert!(
         thread_started.is_err(),
         "thread/started should be filtered by optOutNotificationMethods"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn initialize_can_opt_in_to_log_entry_notifications() -> Result<()> {
+    let responses = Vec::new();
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    let message = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_capabilities_allow_log_entry(
+            ClientInfo {
+                name: "codex_vscode".to_string(),
+                title: Some("Codex VS Code Extension".to_string()),
+                version: "0.1.0".to_string(),
+            },
+            Some(InitializeCapabilities {
+                experimental_api: true,
+                opt_out_notification_methods: None,
+            }),
+        ),
+    )
+    .await??;
+    let JSONRPCMessage::Response(_) = message else {
+        anyhow::bail!("expected initialize response, got {message:?}");
+    };
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let mut saw_log_entry = false;
+    let mut saw_response = false;
+    let mut saw_thread_started = false;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            match mcp.read_next_message().await? {
+                JSONRPCMessage::Response(response)
+                    if response.id == RequestId::Integer(request_id) =>
+                {
+                    let _: ThreadStartResponse = to_response(response)?;
+                    saw_response = true;
+                }
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == "log/entry" =>
+                {
+                    let params = notification
+                        .params
+                        .ok_or_else(|| anyhow::format_err!("missing log/entry params"))?;
+                    let log_entry = serde_json::from_value::<LogEntryNotification>(params)?;
+                    if log_entry.target.contains("codex_app_server") || log_entry.target == "log" {
+                        saw_log_entry = true;
+                    }
+                }
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == "thread/started" =>
+                {
+                    saw_thread_started = true;
+                }
+                _ => {}
+            }
+
+            if saw_log_entry && saw_response && saw_thread_started {
+                return Ok::<(), anyhow::Error>(());
+            }
+        }
+    })
+    .await??;
+
+    assert!(
+        saw_log_entry,
+        "expected to receive at least one log/entry notification"
     );
     Ok(())
 }

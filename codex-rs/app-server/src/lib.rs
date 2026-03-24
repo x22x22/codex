@@ -68,6 +68,7 @@ mod filters;
 mod fs_api;
 mod fuzzy_file_search;
 pub mod in_process;
+mod log_notification_layer;
 mod message_processor;
 mod models;
 mod outgoing_message;
@@ -503,22 +504,27 @@ pub async fn run_main_with_transport(
         )
     })?;
 
-    // Install a simple subscriber so `tracing` output is visible. Users can
-    // control the log level with `RUST_LOG` and switch to JSON logs with
-    // `LOG_FORMAT=json`.
-    let stderr_fmt: StderrLogLayer = match log_format_from_env() {
-        LogFormat::Json => tracing_subscriber::fmt::layer()
-            .json()
-            .with_writer(std::io::stderr)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-            .with_filter(EnvFilter::from_default_env())
-            .boxed(),
-        LogFormat::Default => tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stderr)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
-            .with_filter(EnvFilter::from_default_env())
-            .boxed(),
+    let stderr_fmt: Option<StderrLogLayer> = match transport {
+        AppServerTransport::Stdio => None,
+        AppServerTransport::WebSocket { .. } => Some(match log_format_from_env() {
+            LogFormat::Json => tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(std::io::stderr)
+                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+                .with_filter(EnvFilter::from_default_env())
+                .boxed(),
+            LogFormat::Default => tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+                .with_filter(EnvFilter::from_default_env())
+                .boxed(),
+        }),
     };
+    let log_notification_layer = log_notification_layer::LogNotificationLayer::new(
+        outgoing_tx.clone(),
+        matches!(transport, AppServerTransport::Stdio),
+    )
+    .with_filter(EnvFilter::from_default_env());
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
@@ -536,6 +542,7 @@ pub async fn run_main_with_transport(
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
+        .with(log_notification_layer)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
         .with(log_db_layer)

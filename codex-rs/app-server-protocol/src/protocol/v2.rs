@@ -3693,6 +3693,37 @@ pub struct ErrorNotification {
     pub turn_id: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase", export_to = "v2/")]
+pub enum LogEntryLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct LogSpanContext {
+    pub name: String,
+    pub fields: BTreeMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct LogEntryNotification {
+    pub timestamp: i64,
+    pub level: LogEntryLevel,
+    pub target: String,
+    pub message: String,
+    pub fields: BTreeMap<String, JsonValue>,
+    pub span: Option<LogSpanContext>,
+}
+
 /// EXPERIMENTAL - thread realtime audio chunk.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -6804,6 +6835,49 @@ mod tests {
 
         let decoded = serde_json::from_value::<CommandExecutionOutputDeltaNotification>(value)
             .expect("deserialize round-trip");
+        assert_eq!(decoded, notification);
+    }
+
+    #[test]
+    fn log_entry_notification_round_trips() {
+        let notification = LogEntryNotification {
+            timestamp: 1_742_710_400,
+            level: LogEntryLevel::Info,
+            target: "codex_app_server::transport".to_string(),
+            message: "connection opened".to_string(),
+            fields: BTreeMap::from([
+                ("connectionId".to_string(), json!(7)),
+                ("interactive".to_string(), json!(true)),
+            ]),
+            span: Some(LogSpanContext {
+                name: "app_server.request".to_string(),
+                fields: BTreeMap::from([("rpc.method".to_string(), json!("initialize"))]),
+            }),
+        };
+
+        let value = serde_json::to_value(&notification).expect("serialize log/entry notification");
+        assert_eq!(
+            value,
+            json!({
+                "timestamp": 1742710400,
+                "level": "info",
+                "target": "codex_app_server::transport",
+                "message": "connection opened",
+                "fields": {
+                    "connectionId": 7,
+                    "interactive": true,
+                },
+                "span": {
+                    "name": "app_server.request",
+                    "fields": {
+                        "rpc.method": "initialize",
+                    }
+                }
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<LogEntryNotification>(value).expect("deserialize round-trip");
         assert_eq!(decoded, notification);
     }
 

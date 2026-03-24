@@ -37,7 +37,12 @@ Websocket transport is currently experimental and unsupported. Do not rely on it
 Tracing/log output:
 
 - `RUST_LOG` controls log filtering/verbosity.
-- Set `LOG_FORMAT=json` to emit app-server tracing logs to `stderr` as JSON (one event per line).
+- `stdio` transport emits operational logs as `log/entry` JSON-RPC notifications after the client finishes `initialize`.
+- `log/entry` is on by default for initialized `stdio` clients and can be suppressed with `initialize.params.capabilities.optOutNotificationMethods: ["log/entry"]`.
+- `log/entry.params` includes `timestamp`, `level`, `target`, `message`, `fields`, and optional `span` context.
+- `stdio` transport no longer emits operational tracing logs to `stderr`.
+- `websocket` transport keeps the existing `stderr` logger behavior.
+- For `websocket`, set `LOG_FORMAT=json` to emit app-server tracing logs to `stderr` as JSON (one event per line).
 
 Backpressure behavior:
 
@@ -152,6 +157,7 @@ Example with notification opt-out:
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
 - `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
+- `log/entry` — notification emitted for structured app-server tracing logs on `stdio` connections after initialization.
 - `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.

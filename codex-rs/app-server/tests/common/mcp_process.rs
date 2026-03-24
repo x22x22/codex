@@ -93,6 +93,7 @@ pub struct McpProcess {
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
+const LOG_ENTRY_NOTIFICATION_METHOD: &str = "log/entry";
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
@@ -208,6 +209,18 @@ impl McpProcess {
     }
 
     pub async fn initialize_with_capabilities(
+        &mut self,
+        client_info: ClientInfo,
+        capabilities: Option<InitializeCapabilities>,
+    ) -> anyhow::Result<JSONRPCMessage> {
+        self.initialize_with_params(InitializeParams {
+            client_info,
+            capabilities: capabilities.map(with_default_opted_out_notifications),
+        })
+        .await
+    }
+
+    pub async fn initialize_with_capabilities_allow_log_entry(
         &mut self,
         client_info: ClientInfo,
         capabilities: Option<InitializeCapabilities>,
@@ -1157,6 +1170,21 @@ impl McpProcess {
             JSONRPCMessage::Notification(_) => None,
         }
     }
+}
+
+fn with_default_opted_out_notifications(
+    mut capabilities: InitializeCapabilities,
+) -> InitializeCapabilities {
+    let opt_out_notification_methods = capabilities
+        .opt_out_notification_methods
+        .get_or_insert_with(Vec::new);
+    if !opt_out_notification_methods
+        .iter()
+        .any(|method| method == LOG_ENTRY_NOTIFICATION_METHOD)
+    {
+        opt_out_notification_methods.push(LOG_ENTRY_NOTIFICATION_METHOD.to_string());
+    }
+    capabilities
 }
 
 impl Drop for McpProcess {

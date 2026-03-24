@@ -1440,6 +1440,71 @@
       ],
       "type": "object"
     },
+    "LogEntryLevel": {
+      "enum": [
+        "trace",
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ],
+      "type": "string"
+    },
+    "LogEntryNotification": {
+      "properties": {
+        "fields": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "level": {
+          "$ref": "#/definitions/LogEntryLevel"
+        },
+        "message": {
+          "type": "string"
+        },
+        "span": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LogSpanContext"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "fields",
+        "level",
+        "message",
+        "target",
+        "timestamp"
+      ],
+      "type": "object"
+    },
+    "LogSpanContext": {
+      "properties": {
+        "fields": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fields",
+        "name"
+      ],
+      "type": "object"
+    },
     "McpServerOauthLoginCompletedNotification": {
       "properties": {
         "error": {
@@ -3770,6 +3835,26 @@
         "params"
       ],
       "title": "ErrorNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "log/entry"
+          ],
+          "title": "Log/entryNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/LogEntryNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Log/entryNotification",
       "type": "object"
     },
     {
