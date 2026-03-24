@@ -381,7 +381,14 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
 
     let payload: serde_json::Value =
         serde_json::from_slice(&analytics_request.body).expect("analytics payload");
-    let event = &payload["events"][0];
+    let event = payload["events"]
+        .as_array()
+        .and_then(|events| {
+            events
+                .iter()
+                .find(|event| event["event_type"] == "codex_plugin_used")
+        })
+        .expect("codex_plugin_used event should be present");
     assert_eq!(event["event_type"], "codex_plugin_used");
     assert_eq!(event["event_params"]["plugin_id"], "sample@test");
     assert_eq!(event["event_params"]["plugin_name"], "sample");

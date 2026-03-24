@@ -140,7 +140,12 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
     )
     .await;
 
-    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let chatgpt_base_url = server.uri();
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
+        });
     let TestCodex {
         codex,
         session_configured,
