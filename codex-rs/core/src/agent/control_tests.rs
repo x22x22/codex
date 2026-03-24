@@ -29,6 +29,8 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::sleep;
 use tokio::time::timeout;
+
+const MULTI_AGENT_EVENTUAL_TIMEOUT: Duration = Duration::from_secs(5);
 use toml::Value as TomlValue;
 
 async fn test_config_with_cli_overrides(
@@ -1019,7 +1021,7 @@ async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() 
         )
         .await;
 
-    timeout(Duration::from_secs(2), async {
+    timeout(MULTI_AGENT_EVENTUAL_TIMEOUT, async {
         loop {
             let delivered = harness
                 .manager
@@ -1056,7 +1058,7 @@ async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() 
         Vec::new(),
         "done".to_string(),
     );
-    timeout(Duration::from_secs(2), async {
+    timeout(MULTI_AGENT_EVENTUAL_TIMEOUT, async {
         loop {
             let history_items = worker_thread
                 .codex

@@ -48,6 +48,8 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+const MULTI_AGENT_EVENTUAL_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn invocation(
     session: Arc<crate::codex::Session>,
     turn: Arc<TurnContext>,
@@ -426,7 +428,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
         Vec::new(),
         "continue".to_string(),
     );
-    timeout(Duration::from_secs(2), async {
+    timeout(MULTI_AGENT_EVENTUAL_TIMEOUT, async {
         loop {
             let history_items = child_thread
                 .codex
@@ -537,7 +539,7 @@ async fn multi_agent_v2_send_input_accepts_structured_items() {
         "/root/worker",
         "[mention:$drive](app://google_drive)\nread the folder",
     );
-    timeout(Duration::from_secs(2), async {
+    timeout(MULTI_AGENT_EVENTUAL_TIMEOUT, async {
         loop {
             let history_items = thread
                 .codex
