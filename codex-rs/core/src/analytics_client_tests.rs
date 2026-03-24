@@ -2,22 +2,22 @@ use super::AnalyticsEventsQueue;
 use super::AppInvocation;
 use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
-use super::CodexInputMessageMetadataEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
-use super::CodexTurnMetadataEventRequest;
+use super::CodexTurnEventRequest;
 use super::InvocationType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
+use super::TurnEventType;
 use super::TurnMetadata;
 use super::TurnType;
 use super::UserMessageMetadata;
 use super::UserMessageType;
 use super::codex_app_metadata;
-use super::codex_input_message_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
-use super::codex_turn_metadata;
+use super::codex_turn_start_event;
+use super::codex_turn_steer_event;
 use super::normalize_path_for_skill_id;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginCapabilitySummary;
@@ -202,15 +202,15 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
 }
 
 #[test]
-fn turn_metadata_event_serializes_expected_shape() {
+fn turn_start_event_serializes_expected_shape() {
     let tracking = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-2".to_string(),
         turn_id: "turn-2".to_string(),
     };
-    let event = TrackEventRequest::TurnMetadata(CodexTurnMetadataEventRequest {
-        event_type: "codex_turn_metadata",
-        event_params: codex_turn_metadata(
+    let event = TrackEventRequest::TurnEvent(CodexTurnEventRequest {
+        event_type: "codex_turn_event",
+        event_params: codex_turn_start_event(
             &tracking,
             TurnMetadata {
                 model_provider: "openai".to_string(),
@@ -234,13 +234,15 @@ fn turn_metadata_event_serializes_expected_shape() {
     assert_eq!(
         payload,
         json!({
-            "event_type": "codex_turn_metadata",
+            "event_type": "codex_turn_event",
             "event_params": {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "product_client_id": crate::default_client::originator().value,
-                "model": "gpt-5",
+                "model_slug": "gpt-5",
+                "turn_event_type": "start",
                 "turn_type": "prompt",
+                "user_message_type": null,
                 "model_provider": "openai",
                 "sandbox_policy": "read_only",
                 "reasoning_effort": "high",
@@ -258,15 +260,15 @@ fn turn_metadata_event_serializes_expected_shape() {
 }
 
 #[test]
-fn input_message_metadata_event_serializes_expected_shape() {
+fn turn_steer_event_serializes_expected_shape() {
     let tracking = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-2".to_string(),
         turn_id: "turn-2".to_string(),
     };
-    let event = TrackEventRequest::InputMessageMetadata(CodexInputMessageMetadataEventRequest {
-        event_type: "codex_input_message_metadata",
-        event_params: codex_input_message_metadata(
+    let event = TrackEventRequest::TurnEvent(CodexTurnEventRequest {
+        event_type: "codex_turn_event",
+        event_params: codex_turn_steer_event(
             &tracking,
             UserMessageMetadata {
                 user_message_type: UserMessageType::PromptSteering,
@@ -279,13 +281,25 @@ fn input_message_metadata_event_serializes_expected_shape() {
     assert_eq!(
         payload,
         json!({
-            "event_type": "codex_input_message_metadata",
+            "event_type": "codex_turn_event",
             "event_params": {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
-                "user_message_type": "prompt_steering"
+                "turn_event_type": "steer",
+                "turn_type": null,
+                "user_message_type": "prompt_steering",
+                "sandbox_policy": null,
+                "reasoning_effort": null,
+                "reasoning_summary": null,
+                "service_tier": null,
+                "approval_policy": null,
+                "approvals_reviewer": null,
+                "sandbox_network_access": null,
+                "collaboration_mode": null,
+                "personality": null,
+                "num_input_images": null
             }
         })
     );

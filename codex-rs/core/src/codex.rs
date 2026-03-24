@@ -3938,14 +3938,12 @@ impl Session {
         drop(turn_state);
         drop(active);
         if let Some(tracking) = self.active_turn_tracking().await {
-            self.services
-                .analytics_events_client
-                .track_input_message_metadata(
-                    tracking,
-                    UserMessageMetadata {
-                        user_message_type: SubmittedUserMessageType::PromptSteering,
-                    },
-                );
+            self.services.analytics_events_client.track_turn_steer(
+                tracking,
+                UserMessageMetadata {
+                    user_message_type: SubmittedUserMessageType::PromptSteering,
+                },
+            );
         }
         Ok(active_turn_id)
     }
@@ -5715,7 +5713,7 @@ pub(crate) async fn run_turn(
         let user_message_type = turn_context
             .user_message_type
             .unwrap_or(SubmittedUserMessageType::Prompt);
-        sess.services.analytics_events_client.track_turn_metadata(
+        sess.services.analytics_events_client.track_turn_start(
             tracking.clone(),
             TurnMetadata {
                 model_provider: turn_context.config.model_provider_id.clone(),

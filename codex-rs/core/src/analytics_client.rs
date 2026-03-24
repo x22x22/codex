@@ -55,6 +55,13 @@ pub(crate) enum TurnType {
     PromptQueued,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TurnEventType {
+    Start,
+    Steer,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct UserMessageMetadata {
     pub(crate) user_message_type: UserMessageType,
@@ -121,11 +128,11 @@ impl AnalyticsEventsQueue {
                     TrackEventsJob::AppUsed(job) => {
                         send_track_app_used(&auth_manager, job).await;
                     }
-                    TrackEventsJob::TurnMetadata(job) => {
-                        send_track_turn_metadata(&auth_manager, job).await;
+                    TrackEventsJob::TurnStart(job) => {
+                        send_track_turn_start(&auth_manager, job).await;
                     }
-                    TrackEventsJob::InputMessageMetadata(job) => {
-                        send_track_input_message_metadata(&auth_manager, job).await;
+                    TrackEventsJob::TurnSteer(job) => {
+                        send_track_turn_steer(&auth_manager, job).await;
                     }
                     TrackEventsJob::PluginUsed(job) => {
                         send_track_plugin_used(&auth_manager, job).await;
@@ -240,29 +247,25 @@ impl AnalyticsEventsClient {
         );
     }
 
-    pub(crate) fn track_turn_metadata(
-        &self,
-        tracking: TrackEventsContext,
-        turn_metadata: TurnMetadata,
-    ) {
-        track_turn_metadata(
+    pub(crate) fn track_turn_start(&self, tracking: TrackEventsContext, turn_start: TurnMetadata) {
+        track_turn_start(
             &self.queue,
             Arc::clone(&self.config),
             Some(tracking),
-            turn_metadata,
+            turn_start,
         );
     }
 
-    pub(crate) fn track_input_message_metadata(
+    pub(crate) fn track_turn_steer(
         &self,
         tracking: TrackEventsContext,
-        input_message_metadata: UserMessageMetadata,
+        turn_steer: UserMessageMetadata,
     ) {
-        track_input_message_metadata(
+        track_turn_steer(
             &self.queue,
             Arc::clone(&self.config),
             Some(tracking),
-            input_message_metadata,
+            turn_steer,
         );
     }
 
@@ -307,8 +310,8 @@ enum TrackEventsJob {
     SkillInvocations(TrackSkillInvocationsJob),
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
-    TurnMetadata(TrackTurnMetadataJob),
-    InputMessageMetadata(TrackInputMessageMetadataJob),
+    TurnStart(TrackTurnStartJob),
+    TurnSteer(TrackTurnSteerJob),
     PluginUsed(TrackPluginUsedJob),
     PluginInstalled(TrackPluginManagementJob),
     PluginUninstalled(TrackPluginManagementJob),
@@ -334,16 +337,16 @@ struct TrackAppUsedJob {
     app: AppInvocation,
 }
 
-struct TrackTurnMetadataJob {
+struct TrackTurnStartJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
-    turn_metadata: TurnMetadata,
+    turn_start: TurnMetadata,
 }
 
-struct TrackInputMessageMetadataJob {
+struct TrackTurnSteerJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
-    input_message_metadata: UserMessageMetadata,
+    turn_steer: UserMessageMetadata,
 }
 
 struct TrackPluginUsedJob {
@@ -380,8 +383,7 @@ enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
-    TurnMetadata(CodexTurnMetadataEventRequest),
-    InputMessageMetadata(CodexInputMessageMetadataEventRequest),
+    TurnEvent(CodexTurnEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -431,44 +433,31 @@ struct CodexAppUsedEventRequest {
 }
 
 #[derive(Serialize)]
-struct CodexTurnMetadata {
-    thread_id: String,
-    turn_id: String,
-    product_client_id: Option<String>,
-    model: Option<String>,
-    turn_type: Option<TurnType>,
-    model_provider: String,
-    sandbox_policy: Option<&'static str>,
-    reasoning_effort: Option<String>,
-    reasoning_summary: Option<String>,
-    service_tier: String,
-    approval_policy: String,
-    approvals_reviewer: String,
-    sandbox_network_access: bool,
-    collaboration_mode: Option<&'static str>,
-    personality: Option<String>,
-    num_input_images: usize,
-}
-
-#[derive(Serialize)]
-struct CodexTurnMetadataEventRequest {
-    event_type: &'static str,
-    event_params: CodexTurnMetadata,
-}
-
-#[derive(Serialize)]
-struct CodexInputMessageMetadata {
+struct CodexTurnEvent {
     thread_id: Option<String>,
     turn_id: Option<String>,
     product_client_id: Option<String>,
     model_slug: Option<String>,
+    turn_event_type: TurnEventType,
+    turn_type: Option<TurnType>,
     user_message_type: Option<UserMessageType>,
+    model_provider: Option<String>,
+    sandbox_policy: Option<&'static str>,
+    reasoning_effort: Option<String>,
+    reasoning_summary: Option<String>,
+    service_tier: Option<String>,
+    approval_policy: Option<String>,
+    approvals_reviewer: Option<String>,
+    sandbox_network_access: Option<bool>,
+    collaboration_mode: Option<&'static str>,
+    personality: Option<String>,
+    num_input_images: Option<usize>,
 }
 
 #[derive(Serialize)]
-struct CodexInputMessageMetadataEventRequest {
+struct CodexTurnEventRequest {
     event_type: &'static str,
-    event_params: CodexInputMessageMetadata,
+    event_params: CodexTurnEvent,
 }
 
 #[derive(Serialize)]
@@ -572,11 +561,11 @@ pub(crate) fn track_app_used(
     queue.try_send(job);
 }
 
-pub(crate) fn track_turn_metadata(
+pub(crate) fn track_turn_start(
     queue: &AnalyticsEventsQueue,
     config: Arc<Config>,
     tracking: Option<TrackEventsContext>,
-    turn_metadata: TurnMetadata,
+    turn_start: TurnMetadata,
 ) {
     if config.analytics_enabled == Some(false) {
         return;
@@ -584,19 +573,19 @@ pub(crate) fn track_turn_metadata(
     let Some(tracking) = tracking else {
         return;
     };
-    let job = TrackEventsJob::TurnMetadata(TrackTurnMetadataJob {
+    let job = TrackEventsJob::TurnStart(TrackTurnStartJob {
         config,
         tracking,
-        turn_metadata,
+        turn_start,
     });
     queue.try_send(job);
 }
 
-pub(crate) fn track_input_message_metadata(
+pub(crate) fn track_turn_steer(
     queue: &AnalyticsEventsQueue,
     config: Arc<Config>,
     tracking: Option<TrackEventsContext>,
-    input_message_metadata: UserMessageMetadata,
+    turn_steer: UserMessageMetadata,
 ) {
     if config.analytics_enabled == Some(false) {
         return;
@@ -604,10 +593,10 @@ pub(crate) fn track_input_message_metadata(
     let Some(tracking) = tracking else {
         return;
     };
-    let job = TrackEventsJob::InputMessageMetadata(TrackInputMessageMetadataJob {
+    let job = TrackEventsJob::TurnSteer(TrackTurnSteerJob {
         config,
         tracking,
-        input_message_metadata,
+        turn_steer,
     });
     queue.try_send(job);
 }
@@ -737,37 +726,30 @@ async fn send_track_app_used(auth_manager: &AuthManager, job: TrackAppUsedJob) {
     send_track_events(auth_manager, config, events).await;
 }
 
-async fn send_track_turn_metadata(auth_manager: &AuthManager, job: TrackTurnMetadataJob) {
-    let TrackTurnMetadataJob {
+async fn send_track_turn_start(auth_manager: &AuthManager, job: TrackTurnStartJob) {
+    let TrackTurnStartJob {
         config,
         tracking,
-        turn_metadata,
+        turn_start,
     } = job;
-    let events = vec![TrackEventRequest::TurnMetadata(
-        CodexTurnMetadataEventRequest {
-            event_type: "codex_turn_metadata",
-            event_params: codex_turn_metadata(&tracking, turn_metadata),
-        },
-    )];
+    let events = vec![TrackEventRequest::TurnEvent(CodexTurnEventRequest {
+        event_type: "codex_turn_event",
+        event_params: codex_turn_start_event(&tracking, turn_start),
+    })];
 
     send_track_events(auth_manager, config, events).await;
 }
 
-async fn send_track_input_message_metadata(
-    auth_manager: &AuthManager,
-    job: TrackInputMessageMetadataJob,
-) {
-    let TrackInputMessageMetadataJob {
+async fn send_track_turn_steer(auth_manager: &AuthManager, job: TrackTurnSteerJob) {
+    let TrackTurnSteerJob {
         config,
         tracking,
-        input_message_metadata,
+        turn_steer,
     } = job;
-    let events = vec![TrackEventRequest::InputMessageMetadata(
-        CodexInputMessageMetadataEventRequest {
-            event_type: "codex_input_message_metadata",
-            event_params: codex_input_message_metadata(&tracking, input_message_metadata),
-        },
-    )];
+    let events = vec![TrackEventRequest::TurnEvent(CodexTurnEventRequest {
+        event_type: "codex_turn_event",
+        event_params: codex_turn_steer_event(&tracking, turn_steer),
+    })];
 
     send_track_events(auth_manager, config, events).await;
 }
@@ -836,45 +818,60 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
     }
 }
 
-fn codex_turn_metadata(
+fn codex_turn_start_event(
     tracking: &TrackEventsContext,
-    turn_metadata: TurnMetadata,
-) -> CodexTurnMetadata {
-    CodexTurnMetadata {
-        thread_id: tracking.thread_id.clone(),
-        turn_id: tracking.turn_id.clone(),
-        product_client_id: Some(crate::default_client::originator().value),
-        model: Some(tracking.model_slug.clone()),
-        turn_type: turn_metadata.turn_type,
-        model_provider: turn_metadata.model_provider,
-        sandbox_policy: Some(sandbox_policy_mode(&turn_metadata.sandbox_policy)),
-        reasoning_effort: turn_metadata
-            .reasoning_effort
-            .map(|value| value.to_string()),
-        reasoning_summary: reasoning_summary_mode(turn_metadata.reasoning_summary),
-        service_tier: turn_metadata
-            .service_tier
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "default".to_string()),
-        approval_policy: turn_metadata.approval_policy.to_string(),
-        approvals_reviewer: turn_metadata.approvals_reviewer.to_string(),
-        sandbox_network_access: turn_metadata.sandbox_network_access,
-        collaboration_mode: Some(collaboration_mode_mode(turn_metadata.collaboration_mode)),
-        personality: personality_mode(turn_metadata.personality),
-        num_input_images: turn_metadata.num_input_images,
-    }
-}
-
-fn codex_input_message_metadata(
-    tracking: &TrackEventsContext,
-    input_message_metadata: UserMessageMetadata,
-) -> CodexInputMessageMetadata {
-    CodexInputMessageMetadata {
+    turn_start: TurnMetadata,
+) -> CodexTurnEvent {
+    CodexTurnEvent {
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
-        user_message_type: Some(input_message_metadata.user_message_type),
+        turn_event_type: TurnEventType::Start,
+        turn_type: turn_start.turn_type,
+        user_message_type: None,
+        model_provider: Some(turn_start.model_provider),
+        sandbox_policy: Some(sandbox_policy_mode(&turn_start.sandbox_policy)),
+        reasoning_effort: turn_start.reasoning_effort.map(|value| value.to_string()),
+        reasoning_summary: reasoning_summary_mode(turn_start.reasoning_summary),
+        service_tier: Some(
+            turn_start
+                .service_tier
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "default".to_string()),
+        ),
+        approval_policy: Some(turn_start.approval_policy.to_string()),
+        approvals_reviewer: Some(turn_start.approvals_reviewer.to_string()),
+        sandbox_network_access: Some(turn_start.sandbox_network_access),
+        collaboration_mode: Some(collaboration_mode_mode(turn_start.collaboration_mode)),
+        personality: personality_mode(turn_start.personality),
+        num_input_images: Some(turn_start.num_input_images),
+    }
+}
+
+fn codex_turn_steer_event(
+    tracking: &TrackEventsContext,
+    turn_steer: UserMessageMetadata,
+) -> CodexTurnEvent {
+    CodexTurnEvent {
+        thread_id: Some(tracking.thread_id.clone()),
+        turn_id: Some(tracking.turn_id.clone()),
+        product_client_id: Some(crate::default_client::originator().value),
+        model_slug: Some(tracking.model_slug.clone()),
+        turn_event_type: TurnEventType::Steer,
+        turn_type: None,
+        user_message_type: Some(turn_steer.user_message_type),
+        model_provider: None,
+        sandbox_policy: None,
+        reasoning_effort: None,
+        reasoning_summary: None,
+        service_tier: None,
+        approval_policy: None,
+        approvals_reviewer: None,
+        sandbox_network_access: None,
+        collaboration_mode: None,
+        personality: None,
+        num_input_images: None,
     }
 }
 

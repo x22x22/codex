@@ -163,7 +163,7 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
+async fn user_turn_tracks_turn_start_analytics() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -234,11 +234,12 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
     let event = payload["events"]
         .as_array()
         .and_then(|events| {
-            events
-                .iter()
-                .find(|event| event["event_type"] == "codex_turn_event")
+            events.iter().find(|event| {
+                event["event_type"] == "codex_turn_event"
+                    && event["event_params"]["turn_event_type"] == "start"
+            })
         })
-        .expect("codex_turn_event should be present");
+        .expect("codex_turn_event start event should be present");
 
     let event_params = &event["event_params"];
 
@@ -272,7 +273,7 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_tracks_turn_type_prompt_metadata_analytics() -> anyhow::Result<()> {
+async fn user_turn_tracks_turn_start_prompt_type_analytics() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -324,8 +325,9 @@ async fn user_turn_tracks_turn_type_prompt_metadata_analytics() -> anyhow::Resul
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let event = wait_for_analytics_event(&server, "codex_turn_metadata", |event| {
-        event["event_params"]["turn_type"] == "prompt"
+    let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
+        event["event_params"]["turn_event_type"] == "start"
+            && event["event_params"]["turn_type"] == "prompt"
     })
     .await;
     let event_params = &event["event_params"];
@@ -343,7 +345,7 @@ async fn user_turn_tracks_turn_type_prompt_metadata_analytics() -> anyhow::Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_tracks_input_message_prompt_steering_metadata_analytics() -> anyhow::Result<()> {
+async fn user_turn_tracks_turn_steer_analytics() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -438,8 +440,9 @@ async fn user_turn_tracks_input_message_prompt_steering_metadata_analytics() -> 
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let event = wait_for_analytics_event(&server, "codex_input_message_metadata", |event| {
-        event["event_params"]["user_message_type"] == "prompt_steering"
+    let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
+        event["event_params"]["turn_event_type"] == "steer"
+            && event["event_params"]["user_message_type"] == "prompt_steering"
     })
     .await;
     let event_params = &event["event_params"];
