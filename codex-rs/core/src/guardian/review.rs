@@ -62,6 +62,63 @@ impl GuardianApprovalDecision {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuardianTerminalDecision {
+    Approved,
+    Denied,
+    TimedOut,
+}
+
+impl GuardianTerminalDecision {
+    fn assessment_status(self) -> GuardianAssessmentStatus {
+        match self {
+            Self::Approved => GuardianAssessmentStatus::Approved,
+            Self::Denied => GuardianAssessmentStatus::Denied,
+            Self::TimedOut => GuardianAssessmentStatus::TimedOut,
+        }
+    }
+
+    fn risk_payload(
+        self,
+        assessment: &GuardianAssessment,
+    ) -> (Option<u8>, Option<GuardianRiskLevel>) {
+        match self {
+            Self::TimedOut => (None, None),
+            Self::Approved | Self::Denied => {
+                (Some(assessment.risk_score), Some(assessment.risk_level))
+            }
+        }
+    }
+
+    fn warning_message(self, assessment: &GuardianAssessment) -> String {
+        match self {
+            Self::TimedOut => assessment.rationale.clone(),
+            Self::Approved | Self::Denied => {
+                let verdict = if self == Self::Approved {
+                    "approved"
+                } else {
+                    "denied"
+                };
+                format!(
+                    "Automatic approval review {verdict} (risk: {}): {}",
+                    guardian_risk_level_str(assessment.risk_level),
+                    assessment.rationale
+                )
+            }
+        }
+    }
+}
+
+impl From<GuardianTerminalDecision> for GuardianApprovalDecision {
+    fn from(value: GuardianTerminalDecision) -> Self {
+        match value {
+            GuardianTerminalDecision::Approved => Self::Approved,
+            GuardianTerminalDecision::Denied => Self::Denied,
+            GuardianTerminalDecision::TimedOut => Self::TimedOut,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum GuardianReviewOutcome {
     Completed(anyhow::Result<GuardianAssessment>),
@@ -159,14 +216,14 @@ async fn run_guardian_review(
         Err(err) => GuardianReviewOutcome::Completed(Err(err.into())),
     };
 
-    let (assessment, status) = match outcome {
+    let (assessment, terminal_decision) = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => {
-            let status = if assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD {
-                GuardianAssessmentStatus::Approved
+            let decision = if assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD {
+                GuardianTerminalDecision::Approved
             } else {
-                GuardianAssessmentStatus::Denied
+                GuardianTerminalDecision::Denied
             };
-            (assessment, status)
+            (assessment, decision)
         }
         GuardianReviewOutcome::Completed(Err(err)) => (
             GuardianAssessment {
@@ -175,7 +232,7 @@ async fn run_guardian_review(
                 rationale: format!("Automatic approval review failed: {err}"),
                 evidence: vec![],
             },
-            GuardianAssessmentStatus::Denied,
+            GuardianTerminalDecision::Denied,
         ),
         GuardianReviewOutcome::TimedOut => (
             GuardianAssessment {
@@ -184,7 +241,7 @@ async fn run_guardian_review(
                 rationale: GUARDIAN_TIMEOUT_MESSAGE.to_string(),
                 evidence: vec![],
             },
-            GuardianAssessmentStatus::TimedOut,
+            GuardianTerminalDecision::TimedOut,
         ),
         GuardianReviewOutcome::Aborted => {
             session
@@ -205,35 +262,15 @@ async fn run_guardian_review(
         }
     };
 
-    let warning = match status {
-        GuardianAssessmentStatus::TimedOut => assessment.rationale.clone(),
-        GuardianAssessmentStatus::Approved | GuardianAssessmentStatus::Denied => {
-            let verdict = if status == GuardianAssessmentStatus::Approved {
-                "approved"
-            } else {
-                "denied"
-            };
-            format!(
-                "Automatic approval review {verdict} (risk: {}): {}",
-                guardian_risk_level_str(assessment.risk_level),
-                assessment.rationale
-            )
-        }
-        GuardianAssessmentStatus::InProgress | GuardianAssessmentStatus::Aborted => {
-            unreachable!("guardian terminal warnings only use terminal statuses")
-        }
-    };
+    let warning = terminal_decision.warning_message(&assessment);
     session
         .send_event(
             turn.as_ref(),
             EventMsg::Warning(WarningEvent { message: warning }),
         )
         .await;
-    let (risk_score, risk_level) = if status == GuardianAssessmentStatus::TimedOut {
-        (None, None)
-    } else {
-        (Some(assessment.risk_score), Some(assessment.risk_level))
-    };
+    let status = terminal_decision.assessment_status();
+    let (risk_score, risk_level) = terminal_decision.risk_payload(&assessment);
     session
         .send_event(
             turn.as_ref(),
@@ -249,14 +286,7 @@ async fn run_guardian_review(
         )
         .await;
 
-    match status {
-        GuardianAssessmentStatus::Approved => GuardianApprovalDecision::Approved,
-        GuardianAssessmentStatus::Denied => GuardianApprovalDecision::Denied,
-        GuardianAssessmentStatus::TimedOut => GuardianApprovalDecision::TimedOut,
-        GuardianAssessmentStatus::InProgress | GuardianAssessmentStatus::Aborted => {
-            unreachable!("guardian terminal decision should not use non-terminal statuses")
-        }
-    }
+    terminal_decision.into()
 }
 
 /// Public entrypoint for approval requests that should be reviewed by guardian.
