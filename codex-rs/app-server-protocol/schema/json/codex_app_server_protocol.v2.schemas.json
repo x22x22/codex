@@ -5881,6 +5881,12 @@
             "integer",
             "null"
           ]
+        },
+        "yoloOnlyEnforceBlocklist": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": "object"

@@ -68,6 +68,20 @@ pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
 
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
+#[cfg(test)]
+/// Local test escape hatch for ignoring managed admin configuration on
+/// machines with MDM or system managed config installed.
+pub(super) const CODEX_IGNORE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_IGNORE_MANAGED_CONFIG";
+
+#[cfg(test)]
+pub(super) fn should_ignore_managed_config() -> bool {
+    std::env::var_os(CODEX_IGNORE_MANAGED_CONFIG_ENV_VAR).is_some()
+}
+
+#[cfg(not(test))]
+pub(super) fn should_ignore_managed_config() -> bool {
+    false
+}
 
 pub(crate) async fn first_layer_config_error(layers: &ConfigLayerStack) -> Option<ConfigError> {
     codex_config::first_layer_config_error::<ConfigToml>(layers, CONFIG_TOML_FILE).await
@@ -126,13 +140,20 @@ pub async fn load_config_layers_state(
     }
 
     #[cfg(target_os = "macos")]
-    macos::load_managed_admin_requirements_toml(
-        &mut config_requirements_toml,
-        overrides
-            .macos_managed_config_requirements_base64
-            .as_deref(),
-    )
-    .await?;
+    if should_ignore_managed_config() {
+        #[cfg(test)]
+        tracing::info!(
+            "Ignoring managed requirements from MDM because {CODEX_IGNORE_MANAGED_CONFIG_ENV_VAR} is set"
+        );
+    } else {
+        macos::load_managed_admin_requirements_toml(
+            &mut config_requirements_toml,
+            overrides
+                .macos_managed_config_requirements_base64
+                .as_deref(),
+        )
+        .await?;
+    }
 
     // Honor the system requirements.toml location.
     let requirements_toml_file = system_requirements_toml_file()?;

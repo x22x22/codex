@@ -340,12 +340,20 @@ impl NetworkProxyState {
             Ok(host) => host,
             Err(_) => return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)),
         };
-        let (deny_set, allow_set, allow_local_binding, allowed_domains_empty, allowed_domains) = {
+        let (
+            deny_set,
+            allow_set,
+            allow_local_binding,
+            yolo_only_enforce_blocklist,
+            allowed_domains_empty,
+            allowed_domains,
+        ) = {
             let guard = self.state.read().await;
             (
                 guard.deny_set.clone(),
                 guard.allow_set.clone(),
                 guard.config.network.allow_local_binding,
+                guard.config.network.yolo_only_enforce_blocklist,
                 guard.config.network.allowed_domains.is_empty(),
                 guard.config.network.allowed_domains.clone(),
             )
@@ -355,10 +363,14 @@ impl NetworkProxyState {
 
         // Decision order matters:
         //  1) explicit deny always wins
-        //  2) local/private networking is opt-in (defense-in-depth)
-        //  3) allowlist is enforced when configured
+        //  2) yolo blocklist-only mode bypasses allowlist and local/private guards
+        //  3) local/private networking is opt-in (defense-in-depth)
+        //  4) allowlist is enforced when configured
         if deny_set.is_match(host_str) {
             return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
+        }
+        if yolo_only_enforce_blocklist {
+            return Ok(HostBlockDecision::Allowed);
         }
 
         let is_allowlisted = allow_set.is_match(host_str);
@@ -855,6 +867,28 @@ mod tests {
             // resolve unknown hostnames to private IPs, which would trigger `not_allowed_local`).
             state.host_blocked("8.8.8.8", 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_yolo_only_enforce_blocklist_allows_non_denied_hosts_without_allowlist() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            yolo_only_enforce_blocklist: true,
+            denied_domains: vec!["blocked.example.com".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("blocked.example.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
+        );
+        assert_eq!(
+            state.host_blocked("8.8.8.8", 80).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+        assert_eq!(
+            state.host_blocked("127.0.0.1", 80).await.unwrap(),
+            HostBlockDecision::Allowed
         );
     }
 

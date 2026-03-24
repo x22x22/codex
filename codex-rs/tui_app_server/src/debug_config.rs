@@ -333,6 +333,7 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
         dangerously_allow_all_unix_sockets,
+        yolo_only_enforce_blocklist,
         allowed_domains,
         managed_allowed_domains_only,
         denied_domains,
@@ -360,6 +361,11 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(dangerously_allow_all_unix_sockets) = dangerously_allow_all_unix_sockets {
         parts.push(format!(
             "dangerously_allow_all_unix_sockets={dangerously_allow_all_unix_sockets}"
+        ));
+    }
+    if let Some(yolo_only_enforce_blocklist) = yolo_only_enforce_blocklist {
+        parts.push(format!(
+            "yolo_only_enforce_blocklist={yolo_only_enforce_blocklist}"
         ));
     }
     if let Some(allowed_domains) = allowed_domains {

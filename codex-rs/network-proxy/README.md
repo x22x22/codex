@@ -33,6 +33,9 @@ allow_upstream_proxy = true
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
 dangerously_allow_non_loopback_proxy = false
 mode = "full" # default when unset; use "limited" for read-only mode
+# In yolo/full-access sandbox mode only: ignore the allowlist and local/private-network guard,
+# enforcing only `denied_domains`.
+yolo_only_enforce_blocklist = false
 # When true, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
 mitm = false
 # CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
@@ -191,6 +194,9 @@ what it can reasonably guarantee.
 - Allowlist-first policy: if `allowed_domains` is empty, requests are blocked until an allowlist is configured.
 - Domain patterns: exact hosts plus scoped wildcards (`*.example.com`, `**.example.com`) are supported; the global `*` wildcard is rejected.
 - Deny wins: entries in `denied_domains` always override the allowlist.
+- YOLO blocklist-only mode: with `yolo_only_enforce_blocklist = true` in full-access sandbox mode,
+  the proxy allows requests that are not explicitly denied, including hosts outside the allowlist
+  and local/private destinations. Use only when that broader egress is acceptable.
 - Local/private network protection: when `allow_local_binding = false`, the proxy blocks loopback
   and common private/link-local ranges. Explicit allowlisting of local IP literals (or `localhost`)
   is required to permit them; hostnames that resolve to local/private IPs are still blocked even if

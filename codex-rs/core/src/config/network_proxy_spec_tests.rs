@@ -176,6 +176,89 @@ fn managed_allowed_domains_only_blocks_all_user_domains_in_full_access_without_m
 }
 
 #[test]
+fn yolo_only_enforce_blocklist_is_ignored_outside_full_access() {
+    let mut config = NetworkProxyConfig::default();
+    config.network.yolo_only_enforce_blocklist = true;
+
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        config,
+        None,
+        &SandboxPolicy::new_workspace_write_policy(),
+    )
+    .expect("non-yolo modes should load with blocklist-only disabled");
+
+    assert!(!spec.config.network.yolo_only_enforce_blocklist);
+}
+
+#[test]
+fn requirements_can_enable_yolo_only_enforce_blocklist_in_full_access() {
+    let requirements = NetworkConstraints {
+        yolo_only_enforce_blocklist: Some(true),
+        denied_domains: Some(vec!["blocked.example.com".to_string()]),
+        ..Default::default()
+    };
+
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(requirements),
+        &SandboxPolicy::DangerFullAccess,
+    )
+    .expect("requirements blocklist-only mode should load in yolo");
+
+    assert!(spec.config.network.yolo_only_enforce_blocklist);
+    assert_eq!(spec.constraints.yolo_only_enforce_blocklist, Some(true));
+    assert_eq!(
+        spec.config.network.denied_domains,
+        vec!["blocked.example.com".to_string()]
+    );
+}
+
+#[test]
+fn requirements_yolo_only_enforce_blocklist_is_ignored_outside_full_access() {
+    let requirements = NetworkConstraints {
+        yolo_only_enforce_blocklist: Some(true),
+        ..Default::default()
+    };
+
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(requirements),
+        &SandboxPolicy::new_workspace_write_policy(),
+    )
+    .expect("requirements blocklist-only should be disabled outside yolo");
+
+    assert!(!spec.config.network.yolo_only_enforce_blocklist);
+}
+
+#[test]
+fn managed_allowed_domains_only_disables_user_blocklist_only_yolo_without_explicit_requirement() {
+    let mut config = NetworkProxyConfig::default();
+    config.network.yolo_only_enforce_blocklist = true;
+    config.network.allowed_domains = vec!["user.example.com".to_string()];
+
+    let requirements = NetworkConstraints {
+        allowed_domains: Some(vec!["managed.example.com".to_string()]),
+        managed_allowed_domains_only: Some(true),
+        ..Default::default()
+    };
+
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        config,
+        Some(requirements),
+        &SandboxPolicy::DangerFullAccess,
+    )
+    .expect("managed allowlist-only should disable user blocklist-only yolo");
+
+    assert!(!spec.config.network.yolo_only_enforce_blocklist);
+    assert_eq!(spec.constraints.yolo_only_enforce_blocklist, Some(false));
+    assert_eq!(
+        spec.config.network.allowed_domains,
+        vec!["managed.example.com".to_string()]
+    );
+    assert!(spec.hard_deny_allowlist_misses);
+}
+
+#[test]
 fn requirements_denied_domains_are_a_baseline_for_default_mode() {
     let mut config = NetworkProxyConfig::default();
     config.network.denied_domains = vec!["blocked.example.com".to_string()];

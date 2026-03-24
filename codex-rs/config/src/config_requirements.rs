@@ -140,6 +140,9 @@ pub struct NetworkRequirementsToml {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
+    /// When true, yolo/full-access sandbox mode only enforces `denied_domains`
+    /// and allows all other requests through.
+    pub yolo_only_enforce_blocklist: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
@@ -158,6 +161,9 @@ pub struct NetworkConstraints {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
+    /// When true, yolo/full-access sandbox mode only enforces `denied_domains`
+    /// and allows all other requests through.
+    pub yolo_only_enforce_blocklist: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
@@ -176,6 +182,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
+            yolo_only_enforce_blocklist,
             allowed_domains,
             managed_allowed_domains_only,
             denied_domains,
@@ -189,6 +196,7 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
             dangerously_allow_all_unix_sockets,
+            yolo_only_enforce_blocklist,
             allowed_domains,
             managed_allowed_domains_only,
             denied_domains,

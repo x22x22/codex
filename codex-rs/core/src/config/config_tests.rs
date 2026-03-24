@@ -319,6 +319,7 @@ allowed_domains = ["openai.com"]
                         dangerously_allow_non_loopback_proxy: None,
                         dangerously_allow_all_unix_sockets: None,
                         mode: None,
+                        yolo_only_enforce_blocklist: None,
                         allowed_domains: Some(vec!["openai.com".to_string()]),
                         denied_domains: None,
                         allow_unix_sockets: None,

@@ -34,6 +34,10 @@ pub struct NetworkProxySettings {
     pub dangerously_allow_all_unix_sockets: bool,
     #[serde(default)]
     pub mode: NetworkMode,
+    /// In yolo/full-access sandbox mode, ignore the allowlist and local-network
+    /// guard so only `denied_domains` remains enforced.
+    #[serde(default)]
+    pub yolo_only_enforce_blocklist: bool,
     #[serde(default)]
     pub allowed_domains: Vec<String>,
     #[serde(default)]
@@ -57,6 +61,7 @@ impl Default for NetworkProxySettings {
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_all_unix_sockets: false,
             mode: NetworkMode::default(),
+            yolo_only_enforce_blocklist: false,
             allowed_domains: Vec::new(),
             denied_domains: Vec::new(),
             allow_unix_sockets: Vec::new(),
@@ -371,6 +376,7 @@ mod tests {
                 dangerously_allow_non_loopback_proxy: false,
                 dangerously_allow_all_unix_sockets: false,
                 mode: NetworkMode::Full,
+                yolo_only_enforce_blocklist: false,
                 allowed_domains: Vec::new(),
                 denied_domains: Vec::new(),
                 allow_unix_sockets: Vec::new(),

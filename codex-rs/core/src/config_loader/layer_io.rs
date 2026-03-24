@@ -39,6 +39,18 @@ pub(super) async fn load_config_layers_internal(
     codex_home: &Path,
     overrides: LoaderOverrides,
 ) -> io::Result<LoadedConfigLayers> {
+    if super::should_ignore_managed_config() {
+        #[cfg(test)]
+        tracing::info!(
+            "Ignoring managed config layers because {} is set",
+            super::CODEX_IGNORE_MANAGED_CONFIG_ENV_VAR
+        );
+        return Ok(LoadedConfigLayers {
+            managed_config: None,
+            managed_config_from_mdm: None,
+        });
+    }
+
     #[cfg(target_os = "macos")]
     let LoaderOverrides {
         managed_config_path,

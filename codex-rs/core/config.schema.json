@@ -955,6 +955,10 @@
         },
         "socks_url": {
           "type": "string"
+        },
+        "yolo_only_enforce_blocklist": {
+          "description": "Only applies in yolo/full-access sandbox mode. When enabled, the network proxy enforces `denied_domains` but allows all other requests through.",
+          "type": "boolean"
         }
       },
       "type": "object"

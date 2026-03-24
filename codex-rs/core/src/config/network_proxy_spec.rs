@@ -92,7 +92,7 @@ impl NetworkProxySpec {
         let hard_deny_allowlist_misses = requirements
             .as_ref()
             .is_some_and(Self::managed_allowed_domains_only);
-        let (config, constraints) = if let Some(requirements) = requirements {
+        let (mut config, constraints) = if let Some(requirements) = requirements {
             Self::apply_requirements(
                 config,
                 &requirements,
@@ -102,6 +102,12 @@ impl NetworkProxySpec {
         } else {
             (config, NetworkProxyConstraints::default())
         };
+        // The blocklist-only escape hatch is intentionally scoped to yolo mode,
+        // regardless of whether it came from user config or managed requirements.
+        if !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+            config.network.yolo_only_enforce_blocklist = false;
+        }
+
         validate_policy_against_constraints(&config, &constraints).map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -224,6 +230,15 @@ impl NetworkProxySpec {
             config.network.dangerously_allow_all_unix_sockets = dangerously_allow_all_unix_sockets;
             constraints.dangerously_allow_all_unix_sockets =
                 Some(dangerously_allow_all_unix_sockets);
+        }
+        if let Some(yolo_only_enforce_blocklist) = requirements.yolo_only_enforce_blocklist {
+            config.network.yolo_only_enforce_blocklist = yolo_only_enforce_blocklist;
+            constraints.yolo_only_enforce_blocklist = Some(yolo_only_enforce_blocklist);
+        } else if hard_deny_allowlist_misses {
+            // Managed allowlist-only mode must not be bypassable by a user
+            // opting into blocklist-only yolo behavior.
+            config.network.yolo_only_enforce_blocklist = false;
+            constraints.yolo_only_enforce_blocklist = Some(false);
         }
         let managed_allowed_domains = if hard_deny_allowlist_misses {
             Some(requirements.allowed_domains.clone().unwrap_or_default())

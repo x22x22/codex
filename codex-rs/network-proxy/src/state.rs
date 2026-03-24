@@ -23,6 +23,7 @@ pub struct NetworkProxyConstraints {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
+    pub yolo_only_enforce_blocklist: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
     pub allowlist_expansion_enabled: Option<bool>,
     pub denied_domains: Option<Vec<String>>,
@@ -44,6 +45,7 @@ pub struct PartialNetworkConfig {
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
+    pub yolo_only_enforce_blocklist: Option<bool>,
     #[serde(default)]
     pub allowed_domains: Option<Vec<String>>,
     #[serde(default)]
@@ -192,6 +194,23 @@ pub fn validate_policy_against_constraints(
             }
         },
     )?;
+
+    if let Some(yolo_only_enforce_blocklist) = constraints.yolo_only_enforce_blocklist {
+        validate(
+            config.network.yolo_only_enforce_blocklist,
+            move |candidate| {
+                if *candidate && !yolo_only_enforce_blocklist {
+                    Err(invalid_value(
+                        "network.yolo_only_enforce_blocklist",
+                        "true",
+                        "false (disabled by managed config)",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        )?;
+    }
 
     if let Some(allow_local_binding) = constraints.allow_local_binding {
         validate(config.network.allow_local_binding, move |candidate| {

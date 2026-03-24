@@ -69,6 +69,9 @@ pub struct NetworkToml {
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     #[schemars(with = "Option<NetworkModeSchema>")]
     pub mode: Option<NetworkMode>,
+    /// Only applies in yolo/full-access sandbox mode. When enabled, the network
+    /// proxy enforces `denied_domains` but allows all other requests through.
+    pub yolo_only_enforce_blocklist: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
@@ -113,6 +116,9 @@ impl NetworkToml {
         }
         if let Some(mode) = self.mode {
             config.network.mode = mode;
+        }
+        if let Some(yolo_only_enforce_blocklist) = self.yolo_only_enforce_blocklist {
+            config.network.yolo_only_enforce_blocklist = yolo_only_enforce_blocklist;
         }
         if let Some(allowed_domains) = self.allowed_domains.as_ref() {
             config.network.allowed_domains = allowed_domains.clone();

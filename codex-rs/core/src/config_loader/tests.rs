@@ -12,6 +12,7 @@ use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::ConfigRequirementsWithSources;
+use crate::config_loader::NetworkRequirementsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
@@ -572,6 +573,43 @@ personality = true
             .map(|requirements| requirements.value.clone()),
         Some(crate::config_loader::FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_parses_yolo_only_enforce_blocklist() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[experimental_network]
+yolo_only_enforce_blocklist = true
+denied_domains = ["blocked.example.com"]
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    assert_eq!(
+        config_requirements_toml.network.as_deref().cloned(),
+        Some(NetworkRequirementsToml {
+            enabled: None,
+            http_port: None,
+            socks_port: None,
+            allow_upstream_proxy: None,
+            dangerously_allow_non_loopback_proxy: None,
+            dangerously_allow_all_unix_sockets: None,
+            yolo_only_enforce_blocklist: Some(true),
+            allowed_domains: None,
+            managed_allowed_domains_only: None,
+            denied_domains: Some(vec!["blocked.example.com".to_string()]),
+            allow_unix_sockets: None,
+            allow_local_binding: None,
         })
     );
     Ok(())
