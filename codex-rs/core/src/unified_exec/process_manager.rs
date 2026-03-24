@@ -198,7 +198,7 @@ impl UnifiedExecProcessManager {
         if process_started_alive {
             let network_approval_id = deferred_network_approval
                 .as_ref()
-                .map(|deferred| deferred.registration_id().to_string());
+                .map(|deferred| deferred.parent_tool_item_id().to_string());
             self.store_process(
                 Arc::clone(&process),
                 context,
@@ -627,7 +627,6 @@ impl UnifiedExecProcessManager {
             session: context.session.clone(),
             turn: context.turn.clone(),
             call_id: context.call_id.clone(),
-            network_approval_owner_id: None,
             tool_name: "exec_command".to_string(),
         };
         orchestrator

@@ -9,8 +9,8 @@ use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
 use crate::network_policy::emit_block_decision_audit_event;
 use crate::network_policy::evaluate_host_policy;
-use crate::owner_identity::ProxyOwnerAuthorizer;
-use crate::owner_identity::network_owner_id as extract_network_owner_id;
+use crate::owner_identity::ProxyParentToolItemAuthorizer;
+use crate::owner_identity::extract_parent_tool_item_id;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_PROXY_DISABLED;
@@ -111,7 +111,7 @@ async fn run_socks5_with_listener(
     base.set_auth_optional(true);
     let base = base
         .with_connector(socks_connector)
-        .with_authorizer(ProxyOwnerAuthorizer);
+        .with_authorizer(ProxyParentToolItemAuthorizer);
 
     if enable_socks5_udp {
         let udp_state = state.clone();
@@ -156,7 +156,7 @@ async fn handle_socks5_tcp(
         .extensions()
         .get::<SocketInfo>()
         .map(|info| info.peer_addr().to_string());
-    let network_owner_id = extract_network_owner_id(&req);
+    let parent_tool_item_id = extract_parent_tool_item_id(&req);
 
     match app_state.enabled().await {
         Ok(true) => {}
@@ -182,7 +182,7 @@ async fn handle_socks5_tcp(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: REASON_PROXY_DISABLED.to_string(),
-                    network_owner_id: network_owner_id.clone(),
+                    parent_tool_item_id: parent_tool_item_id.clone(),
                     client: client.clone(),
                     method: None,
                     mode: None,
@@ -225,7 +225,7 @@ async fn handle_socks5_tcp(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: REASON_METHOD_NOT_ALLOWED.to_string(),
-                    network_owner_id: network_owner_id.clone(),
+                    parent_tool_item_id: parent_tool_item_id.clone(),
                     client: client.clone(),
                     method: None,
                     mode: Some(NetworkMode::Limited),
@@ -252,7 +252,7 @@ async fn handle_socks5_tcp(
         protocol: NetworkProtocol::Socks5Tcp,
         host: host.clone(),
         port,
-        network_owner_id: network_owner_id.clone(),
+        parent_tool_item_id: parent_tool_item_id.clone(),
         client_addr: client.clone(),
         method: None,
         command: None,
@@ -277,7 +277,7 @@ async fn handle_socks5_tcp(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: reason.clone(),
-                    network_owner_id,
+                    parent_tool_item_id,
                     client: client.clone(),
                     method: None,
                     mode: None,
@@ -325,7 +325,7 @@ async fn inspect_socks5_udp(
     let client = extensions
         .get::<SocketInfo>()
         .map(|info| info.peer_addr().to_string());
-    let network_owner_id = extract_network_owner_id(&extensions);
+    let parent_tool_item_id = extract_parent_tool_item_id(&extensions);
 
     match state.enabled().await {
         Ok(true) => {}
@@ -351,7 +351,7 @@ async fn inspect_socks5_udp(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: REASON_PROXY_DISABLED.to_string(),
-                    network_owner_id: network_owner_id.clone(),
+                    parent_tool_item_id: parent_tool_item_id.clone(),
                     client: client.clone(),
                     method: None,
                     mode: None,
@@ -394,7 +394,7 @@ async fn inspect_socks5_udp(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: REASON_METHOD_NOT_ALLOWED.to_string(),
-                    network_owner_id: network_owner_id.clone(),
+                    parent_tool_item_id: parent_tool_item_id.clone(),
                     client: client.clone(),
                     method: None,
                     mode: Some(NetworkMode::Limited),
@@ -417,7 +417,7 @@ async fn inspect_socks5_udp(
         protocol: NetworkProtocol::Socks5Udp,
         host: host.clone(),
         port,
-        network_owner_id: network_owner_id.clone(),
+        parent_tool_item_id: parent_tool_item_id.clone(),
         client_addr: client.clone(),
         method: None,
         command: None,
@@ -442,7 +442,7 @@ async fn inspect_socks5_udp(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: reason.clone(),
-                    network_owner_id,
+                    parent_tool_item_id,
                     client: client.clone(),
                     method: None,
                     mode: None,

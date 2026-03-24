@@ -7,16 +7,16 @@ use rama_net::user::authority::AuthorizeResult;
 use rama_net::user::authority::Authorizer;
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct ProxyOwnerAuthorizer;
+pub(crate) struct ProxyParentToolItemAuthorizer;
 
-impl AuthoritySync<Basic, ()> for ProxyOwnerAuthorizer {
+impl AuthoritySync<Basic, ()> for ProxyParentToolItemAuthorizer {
     fn authorized(&self, ext: &mut Extensions, credentials: &Basic) -> bool {
         ext.insert(UserId::Username(credentials.username().to_string()));
         true
     }
 }
 
-impl Authorizer<Basic> for ProxyOwnerAuthorizer {
+impl Authorizer<Basic> for ProxyParentToolItemAuthorizer {
     type Error = std::convert::Infallible;
 
     async fn authorize(&self, credentials: Basic) -> AuthorizeResult<Basic, Self::Error> {
@@ -29,7 +29,10 @@ impl Authorizer<Basic> for ProxyOwnerAuthorizer {
     }
 }
 
-pub(crate) fn network_owner_id<T: ExtensionsRef>(input: &T) -> Option<String> {
+/// Extract the parent tool item id from proxy auth/user extensions. Managed
+/// proxy callbacks carry the parent tool item id as the proxy auth username so
+/// core can attribute blocked requests back to the originating tool call.
+pub(crate) fn extract_parent_tool_item_id<T: ExtensionsRef>(input: &T) -> Option<String> {
     match input.extensions().get::<UserId>() {
         Some(UserId::Username(username)) => Some(username.clone()),
         Some(UserId::Token(token)) => String::from_utf8(token.clone()).ok(),

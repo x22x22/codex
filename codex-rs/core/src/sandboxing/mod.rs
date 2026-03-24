@@ -68,7 +68,9 @@ pub struct ExecRequest {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
-    pub network_owner_id: Option<String>,
+    /// Parent tool item id propagated into child process proxy settings for
+    /// blocked-request attribution.
+    pub parent_tool_item_id: Option<String>,
     pub expiration: ExecExpiration,
     pub capture_policy: ExecCapturePolicy,
     pub sandbox: SandboxType,
@@ -95,7 +97,10 @@ pub(crate) struct SandboxTransformRequest<'a> {
     // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
-    pub network_owner_id: Option<&'a str>,
+    /// Parent tool item id for the current tool call. This is threaded into
+    /// managed proxy credentials so the proxy can report blocked requests
+    /// against the exact originating call.
+    pub parent_tool_item_id: Option<&'a str>,
     pub sandbox_policy_cwd: &'a Path,
     #[cfg(target_os = "macos")]
     pub macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
@@ -594,7 +599,7 @@ impl SandboxManager {
             sandbox,
             enforce_managed_network,
             network,
-            network_owner_id,
+            parent_tool_item_id,
             sandbox_policy_cwd,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions,
@@ -712,7 +717,7 @@ impl SandboxManager {
             cwd: spec.cwd,
             env,
             network: network.cloned(),
-            network_owner_id: network_owner_id.map(ToString::to_string),
+            parent_tool_item_id: parent_tool_item_id.map(ToString::to_string),
             expiration: spec.expiration,
             capture_policy: spec.capture_policy,
             sandbox,

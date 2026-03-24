@@ -13,7 +13,6 @@ use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::sandboxing::SandboxManager;
-use crate::tools::network_approval::ActiveNetworkApproval;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::begin_network_approval;
@@ -65,19 +64,7 @@ impl ToolOrchestrator {
             tool.network_approval_spec(req, tool_ctx),
         )
         .await;
-        let network_approval_owner_id = network_approval
-            .as_ref()
-            .and_then(ActiveNetworkApproval::owner_id)
-            .map(ToString::to_string);
-
-        let attempt_tool_ctx = ToolCtx {
-            session: tool_ctx.session.clone(),
-            turn: tool_ctx.turn.clone(),
-            call_id: tool_ctx.call_id.clone(),
-            network_approval_owner_id,
-            tool_name: tool_ctx.tool_name.clone(),
-        };
-        let run_result = tool.run(req, attempt, &attempt_tool_ctx).await;
+        let run_result = tool.run(req, attempt, tool_ctx).await;
 
         let Some(network_approval) = network_approval else {
             return (run_result, None);

@@ -84,8 +84,11 @@ pub enum HostBlockDecision {
 pub struct BlockedRequest {
     pub host: String,
     pub reason: String,
+    /// Parent tool item id carried alongside the blocked request for
+    /// attribution in core. This is internal-only and is intentionally omitted
+    /// from serialized logs/snapshots.
     #[serde(skip_serializing)]
-    pub network_owner_id: Option<String>,
+    pub parent_tool_item_id: Option<String>,
     pub client: Option<String>,
     pub method: Option<String>,
     pub mode: Option<NetworkMode>,
@@ -102,7 +105,9 @@ pub struct BlockedRequest {
 pub struct BlockedRequestArgs {
     pub host: String,
     pub reason: String,
-    pub network_owner_id: Option<String>,
+    /// Parent tool item id carried alongside the blocked request for
+    /// attribution in core.
+    pub parent_tool_item_id: Option<String>,
     pub client: Option<String>,
     pub method: Option<String>,
     pub mode: Option<NetworkMode>,
@@ -117,7 +122,7 @@ impl BlockedRequest {
         let BlockedRequestArgs {
             host,
             reason,
-            network_owner_id,
+            parent_tool_item_id,
             client,
             method,
             mode,
@@ -129,7 +134,7 @@ impl BlockedRequest {
         Self {
             host,
             reason,
-            network_owner_id,
+            parent_tool_item_id,
             client,
             method,
             mode,
@@ -999,7 +1004,7 @@ mod tests {
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: "google.com".to_string(),
                 reason: "not_allowed".to_string(),
-                network_owner_id: None,
+                parent_tool_item_id: None,
                 client: None,
                 method: Some("GET".to_string()),
                 mode: None,
@@ -1040,7 +1045,7 @@ mod tests {
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: format!("example{idx}.com"),
                     reason: "not_allowed".to_string(),
-                    network_owner_id: None,
+                    parent_tool_item_id: None,
                     client: None,
                     method: Some("GET".to_string()),
                     mode: None,
@@ -1063,7 +1068,7 @@ mod tests {
         let entry = BlockedRequest {
             host: "google.com".to_string(),
             reason: "not_allowed".to_string(),
-            network_owner_id: None,
+            parent_tool_item_id: None,
             client: Some("127.0.0.1".to_string()),
             method: Some("GET".to_string()),
             mode: Some(NetworkMode::Full),
