@@ -4,17 +4,17 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::util::resolve_path;
-use codex_app_server_protocol::GitSha;
-use codex_exec_server::ExecutorFileSystem;
-use codex_protocol::protocol::GitInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::join_all;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
 use tokio::time::timeout;
+use ts_rs::TS;
+
+use crate::GitSha;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -39,6 +39,19 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
 
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+pub struct GitInfo {
+    /// Current commit hash (SHA)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_hash: Option<GitSha>,
+    /// Current branch name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Repository URL (if available from remote)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_url: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GitDiffToRemote {
@@ -79,7 +92,7 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
         && output.status.success()
         && let Ok(hash) = String::from_utf8(output.stdout)
     {
-        git_info.commit_hash = Some(hash.trim().to_string());
+        git_info.commit_hash = Some(GitSha::new(hash.trim()));
     }
 
     // Process branch name
@@ -129,7 +142,7 @@ pub async fn get_git_remote_urls_assume_git_repo(cwd: &Path) -> Option<BTreeMap<
 }
 
 /// Return the current HEAD commit hash without checking whether `cwd` is in a git repo.
-pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
+pub async fn get_head_commit_hash(cwd: &Path) -> Option<GitSha> {
     let output = run_git_command_with_timeout(&["rev-parse", "HEAD"], cwd).await?;
     if !output.status.success() {
         return None;
@@ -140,7 +153,7 @@ pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
     if hash.is_empty() {
         None
     } else {
-        Some(hash.to_string())
+        Some(GitSha::new(hash))
     }
 }
 
@@ -618,7 +631,11 @@ pub async fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    let git_dir_path = canonicalize_or_raw(resolve_path(&repo_root, &PathBuf::from(git_dir_rel)));
+    let git_dir_path = canonicalize_or_raw(
+        AbsolutePathBuf::resolve_path_against_base(git_dir_rel, &repo_root)
+            .ok()?
+            .into_path_buf(),
+    );
     let worktrees_dir = git_dir_path.parent()?;
     if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
         return None;
@@ -627,77 +644,6 @@ pub async fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
     let common_dir = worktrees_dir.parent()?;
     let main_repo_root = common_dir.parent()?;
     Some(canonicalize_or_raw(main_repo_root.to_path_buf()))
-}
-
-pub async fn resolve_root_git_project_for_trust_with_fs(
-    file_system: &dyn ExecutorFileSystem,
-    cwd: &Path,
-) -> Option<PathBuf> {
-    let mut repo_root = match file_system
-        .get_metadata(&AbsolutePathBuf::try_from(cwd).ok()?)
-        .await
-    {
-        Ok(metadata) if metadata.is_directory => cwd.to_path_buf(),
-        _ => cwd.parent()?.to_path_buf(),
-    };
-
-    let (dot_git, dot_git_is_directory) = loop {
-        let dot_git = repo_root.join(".git");
-        let metadata = match file_system
-            .get_metadata(&AbsolutePathBuf::try_from(dot_git.as_path()).ok()?)
-            .await
-        {
-            Ok(metadata) => metadata,
-            Err(_) => {
-                if !repo_root.pop() {
-                    return None;
-                }
-                continue;
-            }
-        };
-
-        if metadata.is_directory {
-            break (dot_git, true);
-        }
-        if metadata.is_file {
-            break (dot_git, false);
-        }
-        return None;
-    };
-
-    if dot_git_is_directory {
-        return Some(
-            AbsolutePathBuf::try_from(repo_root.as_path())
-                .map(AbsolutePathBuf::into_path_buf)
-                .unwrap_or(repo_root),
-        );
-    }
-
-    let git_dir_s = file_system
-        .read_to_string(&AbsolutePathBuf::try_from(dot_git.as_path()).ok()?)
-        .await
-        .ok()?;
-    let git_dir_rel = git_dir_s.trim().strip_prefix("gitdir:")?.trim();
-    if git_dir_rel.is_empty() {
-        return None;
-    }
-
-    let git_dir_path = resolve_path(&repo_root, &PathBuf::from(git_dir_rel));
-    let git_dir_path = AbsolutePathBuf::try_from(git_dir_path.as_path())
-        .map(AbsolutePathBuf::into_path_buf)
-        .unwrap_or(git_dir_path);
-    let worktrees_dir = git_dir_path.parent()?;
-    if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
-        return None;
-    }
-
-    let common_dir = worktrees_dir.parent()?;
-    let main_repo_root = common_dir.parent()?;
-    Some(
-        AbsolutePathBuf::try_from(main_repo_root)
-            .map(AbsolutePathBuf::into_path_buf)
-            .unwrap_or_else(|_| main_repo_root.to_path_buf()),
-    )
 }
 
 fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
@@ -762,7 +708,3 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
         .map(|s| s.trim().to_string())
         .filter(|name| !name.is_empty())
 }
-
-#[cfg(test)]
-#[path = "git_info_tests.rs"]
-mod tests;

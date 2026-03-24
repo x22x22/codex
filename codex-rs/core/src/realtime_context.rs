@@ -1,12 +1,10 @@
 use crate::codex::Session;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
-use crate::git_info::resolve_root_git_project_for_trust;
-use crate::git_info::resolve_root_git_project_for_trust_with_fs;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 use chrono::Utc;
-use codex_exec_server::ExecutorFileSystem;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::models::ResponseItem;
 use codex_state::SortKey;
 use codex_state::ThreadMetadata;
@@ -56,13 +54,11 @@ pub(crate) async fn build_realtime_startup_context(
 ) -> Option<String> {
     let config = sess.get_config().await;
     let cwd = config.cwd.clone();
-    let file_system = sess.services.environment.get_filesystem();
     let history = sess.clone_history().await;
     let current_thread_section = build_current_thread_section(history.raw_items());
     let recent_threads = load_recent_threads(sess).await;
     let recent_work_section = build_recent_work_section(&cwd, &recent_threads).await;
-    let workspace_section =
-        build_workspace_section_with_user_root(file_system.as_ref(), &cwd, home_dir()).await;
+    let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir()).await;
 
     if current_thread_section.is_none()
         && recent_work_section.is_none()
@@ -286,11 +282,10 @@ fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
 }
 
 async fn build_workspace_section_with_user_root(
-    file_system: &dyn ExecutorFileSystem,
     cwd: &Path,
     user_root: Option<PathBuf>,
 ) -> Option<String> {
-    let git_root = resolve_root_git_project_for_trust_with_fs(file_system, cwd).await;
+    let git_root = resolve_root_git_project_for_trust(cwd).await;
     let cwd_tree = render_tree(cwd);
     let git_root_tree = git_root
         .as_ref()

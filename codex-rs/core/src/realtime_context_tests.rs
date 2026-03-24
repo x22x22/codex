@@ -2,7 +2,6 @@ use super::build_recent_work_section;
 use super::build_workspace_section_with_user_root;
 use chrono::TimeZone;
 use chrono::Utc;
-use codex_exec_server::LOCAL_FS;
 use codex_protocol::ThreadId;
 use codex_state::ThreadMetadata;
 use pretty_assertions::assert_eq;
@@ -48,7 +47,7 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
 async fn workspace_section_requires_meaningful_structure() {
     let cwd = TempDir::new().expect("tempdir");
     assert_eq!(
-        build_workspace_section_with_user_root(&LOCAL_FS, cwd.path(), None).await,
+        build_workspace_section_with_user_root(cwd.path(), None).await,
         None
     );
 }
@@ -59,7 +58,7 @@ async fn workspace_section_includes_tree_when_entries_exist() {
     fs::create_dir(cwd.path().join("docs")).expect("create docs dir");
     fs::write(cwd.path().join("README.md"), "hello").expect("write readme");
 
-    let section = build_workspace_section_with_user_root(&LOCAL_FS, cwd.path(), None)
+    let section = build_workspace_section_with_user_root(cwd.path(), None)
         .await
         .expect("workspace section");
     assert!(section.contains("Working directory tree:"));
@@ -81,7 +80,7 @@ async fn workspace_section_includes_user_root_tree_when_distinct() {
     fs::create_dir_all(user_root.join("code")).expect("create user root child");
     fs::write(user_root.join(".zshrc"), "export TEST=1").expect("write home file");
 
-    let section = build_workspace_section_with_user_root(&LOCAL_FS, cwd.as_path(), Some(user_root))
+    let section = build_workspace_section_with_user_root(cwd.as_path(), Some(user_root))
         .await
         .expect("workspace section");
     assert!(section.contains("User root tree:"));

@@ -355,9 +355,7 @@ impl ChatWidget {
             };
             items.push(SelectionItem {
                 name: install_label.to_string(),
-                description: Some(
-                    "Open the same ChatGPT app management link used by /apps.".to_string(),
-                ),
+                description: Some("Open the ChatGPT app management page".to_string()),
                 selected_description: Some("Open the app page in your browser.".to_string()),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenUrlInBrowser {
@@ -368,7 +366,7 @@ impl ChatWidget {
             });
         } else {
             items.push(SelectionItem {
-                name: "ChatGPT link unavailable".to_string(),
+                name: "ChatGPT apps link unavailable".to_string(),
                 description: Some("This app did not provide an install/manage URL.".to_string()),
                 is_disabled: true,
                 ..Default::default()
@@ -480,7 +478,7 @@ impl ChatWidget {
         header.push(Line::from("Plugins".bold()));
         header.push(Line::from("Loading available plugins...".dim()));
         header.push(Line::from(
-            "This first pass shows the ChatGPT marketplace only.".dim(),
+            "Available marketplaces will appear here when ready.".dim(),
         ));
 
         SelectionViewParams {
@@ -508,9 +506,7 @@ impl ChatWidget {
             header: Box::new(header),
             items: vec![SelectionItem {
                 name: "Loading plugin details...".to_string(),
-                description: Some(
-                    "This updates when the plugin detail request finishes.".to_string(),
-                ),
+                description: Some("This updates when plugin details load.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -556,7 +552,7 @@ impl ChatWidget {
             header: Box::new(header),
             items: vec![SelectionItem {
                 name: "Uninstalling plugin...".to_string(),
-                description: Some("This updates when plugin removal completes.".to_string()),
+                description: Some("This updates when the plugin removal completes.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -673,14 +669,21 @@ impl ChatWidget {
                 .then_with(|| left.1.name.cmp(&right.1.name))
                 .then_with(|| left.1.id.cmp(&right.1.id))
         });
+        let status_label_width = plugin_entries
+            .iter()
+            .map(|(_, plugin, _)| plugin_status_label(plugin).chars().count())
+            .max()
+            .unwrap_or(0);
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for (marketplace, plugin, display_name) in plugin_entries {
             let marketplace_label = marketplace_display_name(marketplace);
             let status_label = plugin_status_label(plugin);
-            let description = plugin_brief_description(plugin, &marketplace_label);
+            let description =
+                plugin_brief_description(plugin, &marketplace_label, status_label_width);
+            let selected_status_label = format!("{status_label:<status_label_width$}");
             let selected_description =
-                format!("{status_label}. Press Enter to view plugin details.");
+                format!("{selected_status_label}   Press Enter to view plugin details.");
             let search_value = format!(
                 "{display_name} {} {} {}",
                 plugin.id, plugin.name, marketplace_label
@@ -691,7 +694,7 @@ impl ChatWidget {
             let plugin_name = plugin.name.clone();
 
             items.push(SelectionItem {
-                name: format!("{display_name} · {marketplace_label}"),
+                name: display_name,
                 description: Some(description),
                 selected_description: Some(selected_description),
                 search_value: Some(search_value),
@@ -876,8 +879,13 @@ fn plugin_display_name(plugin: &PluginSummary) -> String {
         .unwrap_or_else(|| plugin.name.clone())
 }
 
-fn plugin_brief_description(plugin: &PluginSummary, marketplace_label: &str) -> String {
+fn plugin_brief_description(
+    plugin: &PluginSummary,
+    marketplace_label: &str,
+    status_label_width: usize,
+) -> String {
     let status_label = plugin_status_label(plugin);
+    let status_label = format!("{status_label:<status_label_width$}");
     match plugin_description(plugin) {
         Some(description) => format!("{status_label} · {marketplace_label} · {description}"),
         None => format!("{status_label} · {marketplace_label}"),
@@ -894,7 +902,7 @@ fn plugin_status_label(plugin: &PluginSummary) -> &'static str {
     } else {
         match plugin.install_policy {
             PluginInstallPolicy::NotAvailable => "Not installable",
-            PluginInstallPolicy::Available => "Can be installed",
+            PluginInstallPolicy::Available => "Available",
             PluginInstallPolicy::InstalledByDefault => "Available by default",
         }
     }

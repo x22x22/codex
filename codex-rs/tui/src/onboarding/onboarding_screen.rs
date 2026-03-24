@@ -1,8 +1,8 @@
 use codex_core::AuthManager;
 use codex_core::config::Config;
-use codex_core::git_info::resolve_root_git_project_for_trust;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_git_utils::resolve_root_git_project_for_trust;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use crossterm::event::KeyCode;

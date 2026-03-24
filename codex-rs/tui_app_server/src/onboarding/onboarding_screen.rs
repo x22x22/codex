@@ -2,9 +2,9 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::config::Config;
-use codex_core::git_info::resolve_root_git_project_for_trust;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_git_utils::resolve_root_git_project_for_trust;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use crossterm::event::KeyCode;
@@ -210,6 +210,14 @@ impl OnboardingScreen {
         self.should_exit
     }
 
+    fn cancel_auth_if_active(&self) {
+        for step in &self.steps {
+            if let Step::Auth(widget) = step {
+                widget.cancel_active_attempt();
+            }
+        }
+    }
+
     fn auth_widget_mut(&mut self) -> Option<&mut AuthModeWidget> {
         self.steps.iter_mut().find_map(|step| match step {
             Step::Auth(widget) => Some(widget),
@@ -274,6 +282,7 @@ impl KeyboardHandler for OnboardingScreen {
         };
         if should_quit {
             if self.is_auth_in_progress() {
+                self.cancel_auth_if_active();
                 // If the user cancels the auth menu, exit the app rather than
                 // leave the user at a prompt in an unauthed state.
                 self.should_exit = true;
