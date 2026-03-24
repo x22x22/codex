@@ -5995,11 +5995,22 @@ pub(crate) async fn run_turn(
         sess.services.analytics_events_client.track_turn_event(
             tracking,
             CodexTurnEvent {
+                model_provider: turn_context.config.model_provider_id.clone(),
                 sandbox_policy: turn_context.sandbox_policy.get().clone(),
                 reasoning_effort: turn_context.reasoning_effort,
-                reasoning_summary: turn_context.reasoning_summary,
+                reasoning_summary: Some(turn_context.reasoning_summary),
                 service_tier: turn_context.config.service_tier,
+                approval_policy: turn_context.approval_policy.value(),
+                approvals_reviewer: turn_context.config.approvals_reviewer,
+                sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
                 collaboration_mode: turn_context.collaboration_mode.mode,
+                personality: turn_context.personality,
+                num_input_images: input
+                    .iter()
+                    .filter(|item| {
+                        matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
+                    })
+                    .count(),
             },
         );
     }

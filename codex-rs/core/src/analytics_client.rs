@@ -4,10 +4,13 @@ use crate::default_client::create_client;
 use crate::plugins::PluginTelemetryMetadata;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
@@ -30,11 +33,17 @@ pub(crate) struct TrackEventsContext {
 
 #[derive(Clone)]
 pub(crate) struct CodexTurnEvent {
+    pub(crate) model_provider: String,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
-    pub(crate) reasoning_summary: ReasoningSummary,
+    pub(crate) reasoning_summary: Option<ReasoningSummary>,
     pub(crate) service_tier: Option<ServiceTier>,
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) approvals_reviewer: ApprovalsReviewer,
+    pub(crate) sandbox_network_access: bool,
     pub(crate) collaboration_mode: ModeKind,
+    pub(crate) personality: Option<Personality>,
+    pub(crate) num_input_images: usize,
 }
 
 pub(crate) fn build_track_events_context(
@@ -385,15 +394,21 @@ struct CodexAppUsedEventRequest {
 
 #[derive(Serialize)]
 struct CodexTurnEventParams {
-    thread_id: Option<String>,
-    turn_id: Option<String>,
+    thread_id: String,
+    turn_id: String,
     product_client_id: Option<String>,
-    model_slug: Option<String>,
+    model: Option<String>,
+    model_provider: String,
     sandbox_policy: Option<&'static str>,
     reasoning_effort: Option<String>,
     reasoning_summary: Option<String>,
-    service_tier: Option<String>,
+    service_tier: String,
+    approval_policy: String,
+    approvals_reviewer: String,
+    sandbox_network_access: bool,
     collaboration_mode: Option<&'static str>,
+    personality: Option<String>,
+    num_input_images: usize,
 }
 
 #[derive(Serialize)]
@@ -731,15 +746,24 @@ fn codex_turn_event_params(
     turn_event: CodexTurnEvent,
 ) -> CodexTurnEventParams {
     CodexTurnEventParams {
-        thread_id: Some(tracking.thread_id.clone()),
-        turn_id: Some(tracking.turn_id.clone()),
+        thread_id: tracking.thread_id.clone(),
+        turn_id: tracking.turn_id.clone(),
         product_client_id: Some(crate::default_client::originator().value),
-        model_slug: Some(tracking.model_slug.clone()),
+        model: Some(tracking.model_slug.clone()),
+        model_provider: turn_event.model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&turn_event.sandbox_policy)),
         reasoning_effort: turn_event.reasoning_effort.map(|value| value.to_string()),
-        reasoning_summary: Some(turn_event.reasoning_summary.to_string()),
-        service_tier: turn_event.service_tier.map(|value| value.to_string()),
+        reasoning_summary: reasoning_summary_mode(turn_event.reasoning_summary),
+        service_tier: turn_event
+            .service_tier
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "default".to_string()),
+        approval_policy: turn_event.approval_policy.to_string(),
+        approvals_reviewer: turn_event.approvals_reviewer.to_string(),
+        sandbox_network_access: turn_event.sandbox_network_access,
         collaboration_mode: Some(collaboration_mode_mode(turn_event.collaboration_mode)),
+        personality: personality_mode(turn_event.personality),
+        num_input_images: turn_event.num_input_images,
     }
 }
 
@@ -755,9 +779,21 @@ fn sandbox_policy_mode(sandbox_policy: &SandboxPolicy) -> &'static str {
 fn collaboration_mode_mode(mode: ModeKind) -> &'static str {
     match mode {
         ModeKind::Plan => "plan",
-        ModeKind::Default => "default",
-        ModeKind::PairProgramming => "pair_programming",
-        ModeKind::Execute => "execute",
+        ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => "default",
+    }
+}
+
+fn reasoning_summary_mode(summary: Option<ReasoningSummary>) -> Option<String> {
+    match summary {
+        Some(ReasoningSummary::None) | None => None,
+        Some(summary) => Some(summary.to_string()),
+    }
+}
+
+fn personality_mode(personality: Option<Personality>) -> Option<String> {
+    match personality {
+        Some(Personality::None) | None => None,
+        Some(personality) => Some(personality.to_string()),
     }
 }
 

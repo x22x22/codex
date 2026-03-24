@@ -18,10 +18,13 @@ use crate::plugins::AppConnectorId;
 use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::PluginId;
 use crate::plugins::PluginTelemetryMetadata;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -205,11 +208,17 @@ fn turn_event_serializes_expected_shape() {
         event_params: codex_turn_event_params(
             &tracking,
             CodexTurnEvent {
+                model_provider: "openai".to_string(),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 reasoning_effort: Some(ReasoningEffort::High),
-                reasoning_summary: ReasoningSummary::Detailed,
+                reasoning_summary: Some(ReasoningSummary::Detailed),
                 service_tier: Some(ServiceTier::Flex),
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+                sandbox_network_access: true,
                 collaboration_mode: ModeKind::Plan,
+                personality: Some(Personality::Pragmatic),
+                num_input_images: 2,
             },
         ),
     });
@@ -224,12 +233,18 @@ fn turn_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "product_client_id": crate::default_client::originator().value,
-                "model_slug": "gpt-5",
+                "model": "gpt-5",
+                "model_provider": "openai",
                 "sandbox_policy": "read_only",
                 "reasoning_effort": "high",
                 "reasoning_summary": "detailed",
                 "service_tier": "flex",
-                "collaboration_mode": "plan"
+                "approval_policy": "on-request",
+                "approvals_reviewer": "guardian_subagent",
+                "sandbox_network_access": true,
+                "collaboration_mode": "plan",
+                "personality": "pragmatic",
+                "num_input_images": 2
             }
         })
     );

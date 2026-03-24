@@ -214,11 +214,23 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
         event_params["product_client_id"],
         serde_json::json!(codex_core::default_client::originator().value)
     );
-    assert_eq!(event_params["model_slug"], session_configured.model);
+    assert_eq!(event_params["model"], session_configured.model);
+    assert_eq!(event_params["model_provider"], config.model_provider_id);
     assert_eq!(event_params["reasoning_effort"], "high");
     assert_eq!(event_params["reasoning_summary"], "detailed");
     assert_eq!(event_params["service_tier"], "flex");
+    assert_eq!(event_params["approval_policy"], "never");
+    assert_eq!(
+        event_params["approvals_reviewer"],
+        config.approvals_reviewer.to_string()
+    );
+    assert_eq!(
+        event_params["sandbox_network_access"],
+        config.permissions.network_sandbox_policy.is_enabled()
+    );
     assert_eq!(event_params["collaboration_mode"], "plan");
+    assert!(event_params["personality"].is_null());
+    assert_eq!(event_params["num_input_images"], 0);
     assert!(event_params["thread_id"].as_str().is_some());
     assert!(event_params["turn_id"].as_str().is_some());
 
