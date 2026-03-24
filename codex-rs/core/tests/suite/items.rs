@@ -163,7 +163,7 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_tracks_turn_start_analytics() -> anyhow::Result<()> {
+async fn user_turn_tracks_turn_event_analytics() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -210,6 +210,7 @@ async fn user_turn_tracks_turn_start_analytics() -> anyhow::Result<()> {
                 },
             }),
             personality: None,
+            user_message_type: None,
         })
         .await?;
 
@@ -243,7 +244,7 @@ async fn user_turn_tracks_turn_start_analytics() -> anyhow::Result<()> {
 
     let event_params = &event["event_params"];
 
-    assert_eq!(event_params["turn_type"], "prompt");
+    assert_eq!(event_params["submission_origin"], "prompt");
     assert_eq!(event_params["sandbox_policy"], "read_only");
     assert_eq!(
         event_params["product_client_id"],
@@ -261,7 +262,7 @@ async fn user_turn_tracks_turn_start_analytics() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_tracks_turn_start_prompt_type_analytics() -> anyhow::Result<()> {
+async fn user_turn_tracks_turn_event_prompt_type_analytics() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -308,6 +309,7 @@ async fn user_turn_tracks_turn_start_prompt_type_analytics() -> anyhow::Result<(
                 },
             }),
             personality: None,
+            user_message_type: None,
         })
         .await?;
 
@@ -315,12 +317,12 @@ async fn user_turn_tracks_turn_start_prompt_type_analytics() -> anyhow::Result<(
 
     let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
         event["event_params"]["turn_event_type"] == "start"
-            && event["event_params"]["turn_type"] == "prompt"
+            && event["event_params"]["submission_origin"] == "prompt"
     })
     .await;
     let event_params = &event["event_params"];
 
-    assert_eq!(event_params["turn_type"], "prompt");
+    assert_eq!(event_params["submission_origin"], "prompt");
     assert_eq!(
         event_params["product_client_id"],
         serde_json::json!(codex_core::default_client::originator().value)
@@ -396,6 +398,7 @@ async fn user_turn_tracks_turn_steer_analytics() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            user_message_type: None,
         })
         .await?;
 
@@ -857,6 +860,7 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            user_message_type: None,
         })
         .await?;
 
@@ -934,6 +938,7 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            user_message_type: None,
         })
         .await?;
 
@@ -1043,6 +1048,7 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            user_message_type: None,
         })
         .await?;
 
@@ -1230,6 +1236,7 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            user_message_type: None,
         })
         .await?;
 
@@ -1344,6 +1351,7 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            user_message_type: None,
         })
         .await?;
 

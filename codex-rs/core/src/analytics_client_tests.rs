@@ -4,20 +4,20 @@ use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
+use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
+use super::CodexTurnSteerEvent;
 use super::InvocationType;
+use super::SubmissionOrigin;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::TurnEventType;
-use super::TurnMetadata;
-use super::TurnType;
-use super::UserMessageMetadata;
 use super::UserMessageType;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
-use super::codex_turn_start_event;
-use super::codex_turn_steer_event;
+use super::codex_turn_event_params;
+use super::codex_turn_steer_event_params;
 use super::normalize_path_for_skill_id;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginCapabilitySummary;
@@ -199,7 +199,7 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
 }
 
 #[test]
-fn turn_start_event_serializes_expected_shape() {
+fn turn_event_serializes_expected_shape() {
     let tracking = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-2".to_string(),
@@ -207,10 +207,10 @@ fn turn_start_event_serializes_expected_shape() {
     };
     let event = TrackEventRequest::TurnEvent(CodexTurnEventRequest {
         event_type: "codex_turn_event",
-        event_params: codex_turn_start_event(
+        event_params: codex_turn_event_params(
             &tracking,
-            TurnMetadata {
-                turn_type: Some(TurnType::Prompt),
+            CodexTurnEvent {
+                submission_origin: Some(SubmissionOrigin::Prompt),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 reasoning_effort: Some(ReasoningEffort::High),
                 reasoning_summary: ReasoningSummary::Detailed,
@@ -220,7 +220,7 @@ fn turn_start_event_serializes_expected_shape() {
         ),
     });
 
-    let payload = serde_json::to_value(&event).expect("serialize turn metadata event");
+    let payload = serde_json::to_value(&event).expect("serialize codex turn event");
 
     assert_eq!(
         payload,
@@ -232,7 +232,7 @@ fn turn_start_event_serializes_expected_shape() {
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
                 "turn_event_type": "start",
-                "turn_type": "prompt",
+                "submission_origin": "prompt",
                 "user_message_type": null,
                 "sandbox_policy": "read_only",
                 "reasoning_effort": "high",
@@ -253,15 +253,15 @@ fn turn_steer_event_serializes_expected_shape() {
     };
     let event = TrackEventRequest::TurnEvent(CodexTurnEventRequest {
         event_type: "codex_turn_event",
-        event_params: codex_turn_steer_event(
+        event_params: codex_turn_steer_event_params(
             &tracking,
-            UserMessageMetadata {
+            CodexTurnSteerEvent {
                 user_message_type: UserMessageType::PromptSteering,
             },
         ),
     });
 
-    let payload = serde_json::to_value(&event).expect("serialize input message metadata event");
+    let payload = serde_json::to_value(&event).expect("serialize codex turn steer event");
 
     assert_eq!(
         payload,
@@ -273,7 +273,7 @@ fn turn_steer_event_serializes_expected_shape() {
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
                 "turn_event_type": "steer",
-                "turn_type": null,
+                "submission_origin": null,
                 "user_message_type": "prompt_steering",
                 "sandbox_policy": null,
                 "reasoning_effort": null,
