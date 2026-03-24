@@ -2696,7 +2696,10 @@ impl ChatWidget {
                 .map(|pending| pending.user_message)
                 .collect();
             if !pending_steers.is_empty() {
-                self.submit_user_message(merge_user_messages(pending_steers));
+                self.submit_user_message_with_type(
+                    merge_user_messages(pending_steers),
+                    Some(UserMessageType::PromptSteering),
+                );
             } else if let Some(combined) = self.drain_pending_messages_for_restore() {
                 self.restore_user_message_to_composer(combined);
             }
@@ -5200,6 +5203,14 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_with_type(user_message, None);
+    }
+
+    fn submit_user_message_with_type(
+        &mut self,
+        user_message: UserMessage,
+        user_message_type: Option<UserMessageType>,
+    ) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -5415,6 +5426,7 @@ impl ChatWidget {
             /*final_output_json_schema*/ None,
             collaboration_mode,
             personality,
+            user_message_type,
         );
 
         if !self.submit_op(op) {
@@ -6874,8 +6886,13 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() {
             return;
         }
+        let user_message_type = if self.rejected_steers_queue.is_empty() {
+            UserMessageType::PromptQueued
+        } else {
+            UserMessageType::PromptSteering
+        };
         if let Some(user_message) = self.pop_next_queued_user_message() {
-            self.submit_user_message(user_message);
+            self.submit_user_message_with_type(user_message, Some(user_message_type));
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();

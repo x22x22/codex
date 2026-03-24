@@ -6,12 +6,12 @@ use super::CodexInputMessageMetadataEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
 use super::CodexTurnMetadataEventRequest;
-use super::InputMessageMetadata;
-use super::InputMessageRole;
 use super::InvocationType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::TurnMetadata;
+use super::TurnType;
+use super::UserMessageMetadata;
 use super::UserMessageType;
 use super::codex_app_metadata;
 use super::codex_input_message_metadata;
@@ -210,6 +210,7 @@ fn turn_metadata_event_serializes_expected_shape() {
         event_params: codex_turn_metadata(
             &tracking,
             TurnMetadata {
+                turn_type: Some(TurnType::Prompt),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 reasoning_effort: Some(ReasoningEffort::High),
                 reasoning_summary: ReasoningSummary::Detailed,
@@ -230,6 +231,7 @@ fn turn_metadata_event_serializes_expected_shape() {
                 "turn_id": "turn-2",
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
+                "turn_type": "prompt",
                 "sandbox_policy": "read_only",
                 "reasoning_effort": "high",
                 "reasoning_summary": "detailed",
@@ -251,8 +253,7 @@ fn input_message_metadata_event_serializes_expected_shape() {
         event_type: "codex_input_message_metadata",
         event_params: codex_input_message_metadata(
             &tracking,
-            InputMessageMetadata {
-                message_role: InputMessageRole::User,
+            UserMessageMetadata {
                 user_message_type: UserMessageType::PromptSteering,
             },
         ),
@@ -269,7 +270,6 @@ fn input_message_metadata_event_serializes_expected_shape() {
                 "turn_id": "turn-2",
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
-                "message_role": "user",
                 "user_message_type": "prompt_steering"
             }
         })

@@ -242,6 +242,7 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
 
     let event_params = &event["event_params"];
 
+    assert_eq!(event_params["turn_type"], "prompt");
     assert_eq!(event_params["sandbox_policy"], "read_only");
     assert_eq!(
         event_params["product_client_id"],
@@ -259,7 +260,7 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_tracks_input_message_prompt_metadata_analytics() -> anyhow::Result<()> {
+async fn user_turn_tracks_turn_type_prompt_metadata_analytics() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -311,14 +312,13 @@ async fn user_turn_tracks_input_message_prompt_metadata_analytics() -> anyhow::R
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let event = wait_for_analytics_event(&server, "codex_input_message_metadata", |event| {
-        event["event_params"]["user_message_type"] == "prompt"
+    let event = wait_for_analytics_event(&server, "codex_turn_metadata", |event| {
+        event["event_params"]["turn_type"] == "prompt"
     })
     .await;
     let event_params = &event["event_params"];
 
-    assert_eq!(event_params["message_role"], "user");
-    assert_eq!(event_params["user_message_type"], "prompt");
+    assert_eq!(event_params["turn_type"], "prompt");
     assert_eq!(
         event_params["product_client_id"],
         serde_json::json!(codex_core::default_client::originator().value)
@@ -432,7 +432,6 @@ async fn user_turn_tracks_input_message_prompt_steering_metadata_analytics() -> 
     .await;
     let event_params = &event["event_params"];
 
-    assert_eq!(event_params["message_role"], "user");
     assert_eq!(event_params["user_message_type"], "prompt_steering");
     assert_eq!(
         event_params["product_client_id"],
