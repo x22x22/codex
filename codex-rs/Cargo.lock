@@ -1678,6 +1678,7 @@ dependencies = [
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
+ "codex-sandboxing",
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
@@ -1870,6 +1871,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-sandboxing",
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
@@ -2445,6 +2447,15 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
+]
+
+[[package]]
+name = "codex-sandboxing"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "pretty_assertions",
+ "serde_json",
 ]
 
 [[package]]
