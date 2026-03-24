@@ -50,6 +50,9 @@ pub(crate) enum GuardianApprovalDecision {
 }
 
 impl GuardianApprovalDecision {
+    // ReviewDecision is the generic approval-response type shared across user
+    // and guardian review flows. It does not have a dedicated timeout variant,
+    // so guardian timeouts fail closed when projected into that broader type.
     pub(crate) fn into_review_decision(self) -> codex_protocol::protocol::ReviewDecision {
         match self {
             Self::Approved => codex_protocol::protocol::ReviewDecision::Approved,
