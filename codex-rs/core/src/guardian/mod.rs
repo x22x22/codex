@@ -25,11 +25,12 @@ pub(crate) use approval_request::GuardianApprovalRequest;
 pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::guardian_approval_request_to_json;
 pub(crate) use review::GUARDIAN_REJECTION_MESSAGE;
+pub(crate) use review::GUARDIAN_TIMEOUT_MESSAGE;
+pub(crate) use review::GuardianApprovalDecision;
 pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::review_approval_request;
 pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
-pub(crate) use review::take_guardian_timeout_message;
 pub(crate) use review_session::GuardianReviewSessionManager;
 
 const GUARDIAN_PREFERRED_MODEL: &str = "gpt-5.4";

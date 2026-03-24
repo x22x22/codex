@@ -19,12 +19,13 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppToolApproval;
 use crate::connectors;
+use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
+use crate::guardian::GuardianApprovalDecision;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
-use crate::guardian::take_guardian_timeout_message;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
@@ -564,13 +565,7 @@ async fn maybe_request_mcp_tool_approval(
             monitor_reason.clone(),
         )
         .await;
-        let decision = if (decision == ReviewDecision::Denied || decision == ReviewDecision::Abort)
-            && let Some(message) = take_guardian_timeout_message(sess.as_ref(), call_id).await
-        {
-            McpToolApprovalDecision::TimedOut(message)
-        } else {
-            mcp_tool_approval_decision_from_guardian(decision)
-        };
+        let decision = mcp_tool_approval_decision_from_guardian(decision);
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
@@ -763,13 +758,17 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
     }
 }
 
-fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpToolApprovalDecision {
+fn mcp_tool_approval_decision_from_guardian(
+    decision: GuardianApprovalDecision,
+) -> McpToolApprovalDecision {
     match decision {
-        ReviewDecision::Approved
-        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-        | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
-        ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied | ReviewDecision::Abort => McpToolApprovalDecision::Decline,
+        GuardianApprovalDecision::Approved => McpToolApprovalDecision::Accept,
+        GuardianApprovalDecision::Denied | GuardianApprovalDecision::Aborted => {
+            McpToolApprovalDecision::Decline
+        }
+        GuardianApprovalDecision::TimedOut => {
+            McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
+        }
     }
 }
 

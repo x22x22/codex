@@ -7,6 +7,7 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
+use crate::guardian::GuardianApprovalDecision;
 #[cfg(test)]
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::ExecOptions;
@@ -113,6 +114,36 @@ where
     }
 
     decision
+}
+
+#[derive(Debug)]
+pub(crate) enum ApprovalOutcome {
+    Decision(ReviewDecision),
+    TimedOut,
+}
+
+impl ApprovalOutcome {
+    pub(crate) fn decision_for_telemetry(&self) -> ReviewDecision {
+        match self {
+            Self::Decision(decision) => decision.clone(),
+            Self::TimedOut => ReviewDecision::Denied,
+        }
+    }
+}
+
+impl From<ReviewDecision> for ApprovalOutcome {
+    fn from(value: ReviewDecision) -> Self {
+        Self::Decision(value)
+    }
+}
+
+impl From<GuardianApprovalDecision> for ApprovalOutcome {
+    fn from(value: GuardianApprovalDecision) -> Self {
+        match value {
+            GuardianApprovalDecision::TimedOut => Self::TimedOut,
+            decision => Self::Decision(decision.into_review_decision()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -281,7 +312,7 @@ pub(crate) trait Approvable<Req> {
         &'a mut self,
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision>;
+    ) -> BoxFuture<'a, ApprovalOutcome>;
 }
 
 pub(crate) trait Sandboxable {

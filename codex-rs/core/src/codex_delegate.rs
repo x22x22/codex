@@ -739,7 +739,7 @@ fn spawn_guardian_review(
             retry_reason,
             cancel_token,
         ));
-        let _ = tx.send(decision);
+        let _ = tx.send(decision.into_review_decision());
     });
     rx
 }

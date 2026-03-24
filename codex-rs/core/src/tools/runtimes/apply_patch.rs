@@ -14,6 +14,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ApprovalOutcome;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
@@ -128,7 +129,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         &'a mut self,
         req: &'a ApplyPatchRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision> {
+    ) -> BoxFuture<'a, ApprovalOutcome> {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -138,10 +139,12 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
-                return review_approval_request(session, turn, action, retry_reason).await;
+                return review_approval_request(session, turn, action, retry_reason)
+                    .await
+                    .into();
             }
             if req.permissions_preapproved && retry_reason.is_none() {
-                return ReviewDecision::Approved;
+                return ApprovalOutcome::Decision(ReviewDecision::Approved);
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -153,7 +156,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         /*grant_root*/ None,
                     )
                     .await;
-                return rx_approve.await.unwrap_or_default();
+                return ApprovalOutcome::Decision(rx_approve.await.unwrap_or_default());
             }
 
             with_cached_approval(
@@ -170,6 +173,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 },
             )
             .await
+            .into()
         })
     }
 

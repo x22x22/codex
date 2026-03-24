@@ -6,6 +6,8 @@ use crate::config::types::AppConfig;
 use crate::config::types::AppToolConfig;
 use crate::config::types::AppToolsConfig;
 use crate::config::types::AppsConfigToml;
+use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
+use crate::guardian::GuardianApprovalDecision;
 use codex_config::CONFIG_TOML_FILE;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -693,16 +695,20 @@ fn prepare_arc_request_action_serializes_mcp_tool_call_shape() {
 #[test]
 fn guardian_review_decision_maps_to_mcp_tool_decision() {
     assert_eq!(
-        mcp_tool_approval_decision_from_guardian(ReviewDecision::Approved),
+        mcp_tool_approval_decision_from_guardian(GuardianApprovalDecision::Approved),
         McpToolApprovalDecision::Accept
     );
     assert_eq!(
-        mcp_tool_approval_decision_from_guardian(ReviewDecision::Denied),
+        mcp_tool_approval_decision_from_guardian(GuardianApprovalDecision::Denied),
         McpToolApprovalDecision::Decline
     );
     assert_eq!(
-        mcp_tool_approval_decision_from_guardian(ReviewDecision::Abort),
+        mcp_tool_approval_decision_from_guardian(GuardianApprovalDecision::Aborted),
         McpToolApprovalDecision::Decline
+    );
+    assert_eq!(
+        mcp_tool_approval_decision_from_guardian(GuardianApprovalDecision::TimedOut),
+        McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
     );
 }
 

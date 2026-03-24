@@ -6,7 +6,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
-use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use tokio_util::sync::CancellationToken;
@@ -42,23 +41,29 @@ pub(crate) const GUARDIAN_TIMEOUT_MESSAGE: &str = concat!(
     "The action was not intentionally rejected, and a retry may succeed.",
 );
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GuardianApprovalDecision {
+    Approved,
+    Denied,
+    TimedOut,
+    Aborted,
+}
+
+impl GuardianApprovalDecision {
+    pub(crate) fn into_review_decision(self) -> codex_protocol::protocol::ReviewDecision {
+        match self {
+            Self::Approved => codex_protocol::protocol::ReviewDecision::Approved,
+            Self::Denied | Self::TimedOut => codex_protocol::protocol::ReviewDecision::Denied,
+            Self::Aborted => codex_protocol::protocol::ReviewDecision::Abort,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum GuardianReviewOutcome {
     Completed(anyhow::Result<GuardianAssessment>),
     TimedOut,
     Aborted,
-}
-
-pub(crate) async fn take_guardian_timeout_message(
-    session: &Session,
-    request_id: &str,
-) -> Option<String> {
-    session
-        .services
-        .guardian_review_timeouts
-        .lock()
-        .await
-        .remove(request_id)
 }
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
@@ -95,16 +100,10 @@ async fn run_guardian_review(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     external_cancel: Option<CancellationToken>,
-) -> ReviewDecision {
+) -> GuardianApprovalDecision {
     let assessment_id = guardian_request_id(&request).to_string();
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action_value(&request);
-    session
-        .services
-        .guardian_review_timeouts
-        .lock()
-        .await
-        .remove(&assessment_id);
     session
         .send_event(
             turn.as_ref(),
@@ -138,7 +137,7 @@ async fn run_guardian_review(
                 }),
             )
             .await;
-        return ReviewDecision::Abort;
+        return GuardianApprovalDecision::Aborted;
     }
 
     let schema = guardian_output_schema();
@@ -175,23 +174,15 @@ async fn run_guardian_review(
             },
             GuardianAssessmentStatus::Denied,
         ),
-        GuardianReviewOutcome::TimedOut => {
-            session
-                .services
-                .guardian_review_timeouts
-                .lock()
-                .await
-                .insert(assessment_id.clone(), GUARDIAN_TIMEOUT_MESSAGE.to_string());
-            (
-                GuardianAssessment {
-                    risk_level: GuardianRiskLevel::High,
-                    risk_score: 100,
-                    rationale: GUARDIAN_TIMEOUT_MESSAGE.to_string(),
-                    evidence: vec![],
-                },
-                GuardianAssessmentStatus::TimedOut,
-            )
-        }
+        GuardianReviewOutcome::TimedOut => (
+            GuardianAssessment {
+                risk_level: GuardianRiskLevel::High,
+                risk_score: 100,
+                rationale: GUARDIAN_TIMEOUT_MESSAGE.to_string(),
+                evidence: vec![],
+            },
+            GuardianAssessmentStatus::TimedOut,
+        ),
         GuardianReviewOutcome::Aborted => {
             session
                 .send_event(
@@ -207,7 +198,7 @@ async fn run_guardian_review(
                     }),
                 )
                 .await;
-            return ReviewDecision::Abort;
+            return GuardianApprovalDecision::Aborted;
         }
     };
 
@@ -255,10 +246,13 @@ async fn run_guardian_review(
         )
         .await;
 
-    if status == GuardianAssessmentStatus::Approved {
-        ReviewDecision::Approved
-    } else {
-        ReviewDecision::Denied
+    match status {
+        GuardianAssessmentStatus::Approved => GuardianApprovalDecision::Approved,
+        GuardianAssessmentStatus::Denied => GuardianApprovalDecision::Denied,
+        GuardianAssessmentStatus::TimedOut => GuardianApprovalDecision::TimedOut,
+        GuardianAssessmentStatus::InProgress | GuardianAssessmentStatus::Aborted => {
+            unreachable!("guardian terminal decision should not use non-terminal statuses")
+        }
     }
 }
 
@@ -268,7 +262,7 @@ pub(crate) async fn review_approval_request(
     turn: &Arc<TurnContext>,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
-) -> ReviewDecision {
+) -> GuardianApprovalDecision {
     run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
@@ -285,7 +279,7 @@ pub(crate) async fn review_approval_request_with_cancel(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     cancel_token: CancellationToken,
-) -> ReviewDecision {
+) -> GuardianApprovalDecision {
     run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),

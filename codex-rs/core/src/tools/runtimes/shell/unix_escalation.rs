@@ -5,10 +5,10 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::is_likely_sandbox_denied;
+use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
-use crate::guardian::take_guardian_timeout_message;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -16,6 +16,7 @@ use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::sandboxing::ApprovalOutcome;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
@@ -423,7 +424,7 @@ impl CoreShellActionProvider {
         stopwatch: &Stopwatch,
         additional_permissions: Option<PermissionProfile>,
         decision_source: &DecisionSource,
-    ) -> anyhow::Result<ReviewDecision> {
+    ) -> anyhow::Result<ApprovalOutcome> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.to_path_buf();
         let session = self.session.clone();
@@ -447,7 +448,8 @@ impl CoreShellActionProvider {
                         },
                         /*retry_reason*/ None,
                     )
-                    .await;
+                    .await
+                    .into();
                 }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),
@@ -486,6 +488,7 @@ impl CoreShellActionProvider {
                         Some(available_decisions),
                     )
                     .await
+                    .into()
             })
             .await)
     }
@@ -549,15 +552,20 @@ impl CoreShellActionProvider {
                         )
                         .await?
                     {
-                        ReviewDecision::Approved
-                        | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                        ApprovalOutcome::TimedOut => {
+                            EscalationDecision::deny(Some(GUARDIAN_TIMEOUT_MESSAGE.to_string()))
+                        }
+                        ApprovalOutcome::Decision(
+                            ReviewDecision::Approved
+                            | ReviewDecision::ApprovedExecpolicyAmendment { .. },
+                        ) => {
                             if needs_escalation {
                                 EscalationDecision::escalate(escalation_execution.clone())
                             } else {
                                 EscalationDecision::run()
                             }
                         }
-                        ReviewDecision::ApprovedForSession => {
+                        ApprovalOutcome::Decision(ReviewDecision::ApprovedForSession) => {
                             // Currently, we only add session approvals for
                             // skill scripts because we are storing only the
                             // `program` whereas prefix rules may be restricted by a longer prefix.
@@ -584,9 +592,9 @@ impl CoreShellActionProvider {
                                 EscalationDecision::run()
                             }
                         }
-                        ReviewDecision::NetworkPolicyAmendment {
+                        ApprovalOutcome::Decision(ReviewDecision::NetworkPolicyAmendment {
                             network_policy_amendment,
-                        } => match network_policy_amendment.action {
+                        }) => match network_policy_amendment.action {
                             NetworkPolicyRuleAction::Allow => {
                                 if needs_escalation {
                                     EscalationDecision::escalate(escalation_execution.clone())
@@ -598,27 +606,11 @@ impl CoreShellActionProvider {
                                 EscalationDecision::deny(Some("User denied execution".to_string()))
                             }
                         },
-                        ReviewDecision::Denied => {
-                            if let Some(message) =
-                                take_guardian_timeout_message(self.session.as_ref(), &self.call_id)
-                                    .await
-                            {
-                                EscalationDecision::deny(Some(message))
-                            } else {
-                                EscalationDecision::deny(Some("User denied execution".to_string()))
-                            }
+                        ApprovalOutcome::Decision(ReviewDecision::Denied) => {
+                            EscalationDecision::deny(Some("User denied execution".to_string()))
                         }
-                        ReviewDecision::Abort => {
-                            if let Some(message) =
-                                take_guardian_timeout_message(self.session.as_ref(), &self.call_id)
-                                    .await
-                            {
-                                EscalationDecision::deny(Some(message))
-                            } else {
-                                EscalationDecision::deny(Some(
-                                    "User cancelled execution".to_string(),
-                                ))
-                            }
+                        ApprovalOutcome::Decision(ReviewDecision::Abort) => {
+                            EscalationDecision::deny(Some("User cancelled execution".to_string()))
                         }
                     }
                 }
