@@ -1,5 +1,7 @@
 use super::SandboxManager;
+#[cfg(unix)]
 use crate::exec::ExecCapturePolicy;
+#[cfg(unix)]
 use crate::exec::ExecExpiration;
 use crate::exec::SandboxType;
 use crate::protocol::NetworkAccess;
