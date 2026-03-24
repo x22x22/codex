@@ -952,6 +952,7 @@ impl MessageProcessor {
                         BrowserSessionUpdatedNotification {
                             browser_session_id: response.browser_session_id.clone(),
                             browser_state: response.browser_state.clone(),
+                            artifacts: response.artifacts.clone(),
                         },
                     ))
                     .await;

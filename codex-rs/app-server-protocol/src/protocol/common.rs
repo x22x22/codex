@@ -1661,6 +1661,12 @@ mod tests {
                         selected: true,
                     }],
                 },
+                artifacts: Some(v2::BrowserSessionArtifacts {
+                    screenshot_image_url: Some("data:image/png;base64,AAA".to_string()),
+                    replay_gif_image_url: Some("data:image/gif;base64,R0lGODlh".to_string()),
+                    replay_frame_count: Some(2),
+                    replay_frame_duration_ms: Some(700),
+                }),
             });
         assert_eq!(
             json!({
@@ -1677,6 +1683,12 @@ mod tests {
                                 "selected": true
                             }
                         ]
+                    },
+                    "artifacts": {
+                        "screenshotImageUrl": "data:image/png;base64,AAA",
+                        "replayGifImageUrl": "data:image/gif;base64,R0lGODlh",
+                        "replayFrameCount": 2,
+                        "replayFrameDurationMs": 700
                     }
                 }
             }),
@@ -1718,6 +1730,7 @@ mod tests {
                     selected_tab_id: String::new(),
                     tabs: Vec::new(),
                 },
+                artifacts: None,
             });
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
         assert_eq!(reason, Some("browserSession/updated"));

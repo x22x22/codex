@@ -5,6 +5,7 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use codex_app_server_protocol::BrowserSessionArtifacts;
 use codex_app_server_protocol::BrowserSessionUpdatedNotification;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
@@ -293,7 +294,10 @@ async fn remote_browser_dynamic_tool_calls_are_handled_internally() -> Result<()
                 }]
             },
             "artifacts": {
-                "screenshotBase64": "AAA"
+                "screenshotBase64": "AAA",
+                "replayGifBase64": "R0lGODlh",
+                "replayFrameCount": 2,
+                "replayFrameDurationMs": 700
             }
         })))
         .mount(&remote_browser_server)
@@ -358,6 +362,15 @@ async fn remote_browser_dynamic_tool_calls_are_handled_internally() -> Result<()
     assert_eq!(browser_update.browser_state.selected_tab_id, "tab_123");
     assert_eq!(browser_update.browser_state.tabs.len(), 1);
     assert_eq!(browser_update.browser_state.tabs[0].title, "Hacker News");
+    assert_eq!(
+        browser_update.artifacts,
+        Some(BrowserSessionArtifacts {
+            screenshot_image_url: Some("data:image/png;base64,AAA".to_string()),
+            replay_gif_image_url: Some("data:image/gif;base64,R0lGODlh".to_string()),
+            replay_frame_count: Some(2),
+            replay_frame_duration_ms: Some(700),
+        })
+    );
 
     let completed = wait_for_dynamic_tool_completed(&mut mcp, call_id).await?;
     let ThreadItem::DynamicToolCall {
@@ -393,6 +406,9 @@ async fn remote_browser_dynamic_tool_calls_are_handled_internally() -> Result<()
             },
             DynamicToolCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+            },
+            DynamicToolCallOutputContentItem::InputImage {
+                image_url: "data:image/gif;base64,R0lGODlh".to_string(),
             },
         ])
     );
@@ -433,6 +449,10 @@ async fn remote_browser_dynamic_tool_calls_are_handled_internally() -> Result<()
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/gif;base64,R0lGODlh".to_string(),
                 detail: None,
             },
         ]

@@ -272,6 +272,7 @@ async fn handle_remote_browser_dynamic_tool_request(
                         BrowserSessionUpdatedNotification {
                             browser_session_id: outcome.browser_session_id.clone(),
                             browser_state,
+                            artifacts: outcome.to_public_artifacts(),
                         },
                     ))
                     .await;

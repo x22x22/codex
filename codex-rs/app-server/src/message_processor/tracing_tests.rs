@@ -9,6 +9,7 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::BrowserSessionCommandParams;
 use codex_app_server_protocol::BrowserSessionCommandResponse;
+use codex_app_server_protocol::BrowserSessionArtifacts;
 use codex_app_server_protocol::BrowserSessionState;
 use codex_app_server_protocol::BrowserSessionUpdatedNotification;
 use codex_app_server_protocol::BrowserTabState;
@@ -695,6 +696,12 @@ async fn browser_session_command_posts_and_emits_state_notification() -> Result<
                 "url": "https://example.com",
                 "selected": true,
             }]
+        },
+        "artifacts": {
+            "screenshotBase64": "AAA",
+            "replayGifBase64": "R0lGODlh",
+            "replayFrameCount": 2,
+            "replayFrameDurationMs": 700
         }
     });
 
@@ -732,10 +739,20 @@ async fn browser_session_command_posts_and_emits_state_notification() -> Result<
     assert_eq!(response.browser_session_id, "sess_123");
     assert_eq!(response.result, serde_json::json!({"ok": true}));
     assert_eq!(response.browser_state, browser_state);
+    assert_eq!(
+        response.artifacts,
+        Some(BrowserSessionArtifacts {
+            screenshot_image_url: Some("data:image/png;base64,AAA".to_string()),
+            replay_gif_image_url: Some("data:image/gif;base64,R0lGODlh".to_string()),
+            replay_frame_count: Some(2),
+            replay_frame_duration_ms: Some(700),
+        })
+    );
 
     let notification = read_browser_session_updated_notification(&mut harness.outgoing_rx).await;
     assert_eq!(notification.browser_session_id, "sess_123");
     assert_eq!(notification.browser_state, browser_state);
+    assert_eq!(notification.artifacts, response.artifacts);
     harness.shutdown().await;
 
     remote_browser.verify().await;

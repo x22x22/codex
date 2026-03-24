@@ -55,6 +55,9 @@ pub(crate) fn build_dynamic_tool_response(
     if let Some(image_url) = outcome.screenshot_data_url() {
         content_items.push(DynamicToolCallOutputContentItem::InputImage { image_url });
     }
+    if let Some(image_url) = outcome.replay_gif_data_url() {
+        content_items.push(DynamicToolCallOutputContentItem::InputImage { image_url });
+    }
 
     DynamicToolCallResponse {
         content_items,

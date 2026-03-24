@@ -2120,6 +2120,24 @@ pub struct BrowserSessionState {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct BrowserSessionArtifacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub screenshot_image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub replay_gif_image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub replay_frame_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub replay_frame_duration_ms: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct BrowserSessionCommandParams {
     #[ts(optional = nullable)]
     pub browser_session_id: Option<String>,
@@ -2135,6 +2153,9 @@ pub struct BrowserSessionCommandResponse {
     pub browser_session_id: String,
     pub result: JsonValue,
     pub browser_state: BrowserSessionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub artifacts: Option<BrowserSessionArtifacts>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2143,6 +2164,9 @@ pub struct BrowserSessionCommandResponse {
 pub struct BrowserSessionUpdatedNotification {
     pub browser_session_id: String,
     pub browser_state: BrowserSessionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub artifacts: Option<BrowserSessionArtifacts>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

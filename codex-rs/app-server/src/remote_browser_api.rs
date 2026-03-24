@@ -1,5 +1,6 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use codex_app_server_protocol::BrowserSessionArtifacts;
 use codex_app_server_protocol::BrowserSessionCommandParams;
 use codex_app_server_protocol::BrowserSessionCommandResponse;
 use codex_app_server_protocol::BrowserSessionState;
@@ -41,6 +42,12 @@ pub(crate) struct RemoteBrowserState {
 struct RemoteBrowserArtifacts {
     #[serde(default)]
     screenshot_base64: Option<String>,
+    #[serde(default)]
+    replay_gif_base64: Option<String>,
+    #[serde(default)]
+    replay_frame_count: Option<u32>,
+    #[serde(default)]
+    replay_frame_duration_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -98,6 +105,7 @@ impl RemoteBrowserCommandOutcome {
             browser_session_id: self.browser_session_id.clone(),
             result: self.result.clone(),
             browser_state,
+            artifacts: self.to_public_artifacts(),
         })
     }
 
@@ -106,6 +114,35 @@ impl RemoteBrowserCommandOutcome {
             .screenshot_base64
             .as_ref()
             .map(|encoded| format!("data:image/png;base64,{encoded}"))
+    }
+
+    pub(crate) fn replay_gif_data_url(&self) -> Option<String> {
+        self.artifacts
+            .replay_gif_base64
+            .as_ref()
+            .map(|encoded| format!("data:image/gif;base64,{encoded}"))
+    }
+
+    pub(crate) fn to_public_artifacts(&self) -> Option<BrowserSessionArtifacts> {
+        let screenshot_image_url = self.screenshot_data_url();
+        let replay_gif_image_url = self.replay_gif_data_url();
+        let replay_frame_count = self.artifacts.replay_frame_count;
+        let replay_frame_duration_ms = self.artifacts.replay_frame_duration_ms;
+
+        if screenshot_image_url.is_none()
+            && replay_gif_image_url.is_none()
+            && replay_frame_count.is_none()
+            && replay_frame_duration_ms.is_none()
+        {
+            return None;
+        }
+
+        Some(BrowserSessionArtifacts {
+            screenshot_image_url,
+            replay_gif_image_url,
+            replay_frame_count,
+            replay_frame_duration_ms,
+        })
     }
 
     pub(crate) fn browser_state_json(&self) -> JsonValue {
