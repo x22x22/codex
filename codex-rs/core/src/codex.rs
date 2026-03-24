@@ -259,7 +259,7 @@ use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
-use crate::plugins::build_plugin_injections;
+use crate::plugins::build_plugin_developer_sections;
 use crate::plugins::render_plugins_section;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
@@ -2575,6 +2575,20 @@ impl Session {
         reference_context_item: Option<&TurnContextItem>,
         current_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        self.build_settings_update_items_with_additional_developer_sections(
+            reference_context_item,
+            current_context,
+            Vec::new(),
+        )
+        .await
+    }
+
+    async fn build_settings_update_items_with_additional_developer_sections(
+        &self,
+        reference_context_item: Option<&TurnContextItem>,
+        current_context: &TurnContext,
+        additional_developer_sections: Vec<String>,
+    ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
         // context (shell, exec policy, feature gates, previous-turn bridge) should be persisted
@@ -2592,6 +2606,7 @@ impl Session {
             shell.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
+            additional_developer_sections,
         )
     }
 
@@ -3435,6 +3450,15 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        self.build_initial_context_with_additional_developer_sections(turn_context, Vec::new())
+            .await
+    }
+
+    async fn build_initial_context_with_additional_developer_sections(
+        &self,
+        turn_context: &TurnContext,
+        additional_developer_sections: Vec<String>,
+    ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
@@ -3554,6 +3578,7 @@ impl Session {
         {
             developer_sections.push(plugin_section);
         }
+        developer_sections.extend(additional_developer_sections);
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
@@ -3645,17 +3670,48 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) {
+        self.record_context_updates_with_additional_developer_sections(turn_context, Vec::new())
+            .await;
+    }
+
+    // Some turn-local guidance, such as explicit plugin mention hints, belongs in the canonical
+    // pre-user developer message for the current turn but should not become durable
+    // `TurnContextItem` state. Thread those sections into the context builders here so they share
+    // the standard developer envelope without affecting the persisted diff baseline.
+    async fn record_context_updates_with_additional_developer_sections(
+        &self,
+        turn_context: &TurnContext,
+        additional_developer_sections: Vec<String>,
+    ) {
         let reference_context_item = {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
         let should_inject_full_context = reference_context_item.is_none();
+        let has_additional_developer_sections = !additional_developer_sections.is_empty();
         let context_items = if should_inject_full_context {
-            self.build_initial_context(turn_context).await
+            if has_additional_developer_sections {
+                self.build_initial_context_with_additional_developer_sections(
+                    turn_context,
+                    additional_developer_sections,
+                )
+                .await
+            } else {
+                self.build_initial_context(turn_context).await
+            }
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
-            self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
+            if has_additional_developer_sections {
+                self.build_settings_update_items_with_additional_developer_sections(
+                    reference_context_item.as_ref(),
+                    turn_context,
+                    additional_developer_sections,
+                )
                 .await
+            } else {
+                self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
+                    .await
+            }
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
@@ -5528,9 +5584,6 @@ pub(crate) async fn run_turn(
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
-        .await;
-
     let loaded_plugins = sess
         .services
         .plugins_manager
@@ -5622,12 +5675,23 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    let plugin_items =
-        build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    let plugin_developer_sections =
+        build_plugin_developer_sections(&mentioned_plugins, &mcp_tools, &available_connectors);
     let mentioned_plugin_metadata = mentioned_plugins
         .iter()
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
         .collect::<Vec<_>>();
+
+    if plugin_developer_sections.is_empty() {
+        sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+            .await;
+    } else {
+        sess.record_context_updates_with_additional_developer_sections(
+            turn_context.as_ref(),
+            plugin_developer_sections,
+        )
+        .await;
+    }
 
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
@@ -5672,10 +5736,6 @@ pub(crate) async fn run_turn(
             )
             .await;
             return None;
-        }
-        if !plugin_items.is_empty() {
-            sess.record_conversation_items(&turn_context, &plugin_items)
-                .await;
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await;

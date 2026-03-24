@@ -12,7 +12,7 @@ pub(crate) mod test_support;
 mod toggles;
 
 pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
-pub(crate) use injection::build_plugin_injections;
+pub(crate) use injection::build_plugin_developer_sections;
 pub use manager::AppConnectorId;
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;
