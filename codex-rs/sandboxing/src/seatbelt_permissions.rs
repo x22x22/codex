@@ -3,10 +3,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-pub use codex_protocol::models::MacOsAutomationPermission;
-pub use codex_protocol::models::MacOsContactsPermission;
-pub use codex_protocol::models::MacOsPreferencesPermission;
-pub use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::models::MacOsAutomationPermission;
+use codex_protocol::models::MacOsContactsPermission;
+use codex_protocol::models::MacOsPreferencesPermission;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct SeatbeltExtensionPolicy {
