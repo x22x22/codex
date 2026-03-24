@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
-const FILE_SEARCH_LIMIT: usize = 50;
+const FILE_SEARCH_LIMIT: usize = 100;
 
 pub(crate) struct FileSearchManager {
     state: Arc<Mutex<SearchState>>,
