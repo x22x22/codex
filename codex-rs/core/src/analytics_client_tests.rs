@@ -11,7 +11,6 @@ use super::InvocationType;
 use super::SubmissionType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
-use super::TurnEventType;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
@@ -230,7 +229,6 @@ fn turn_event_serializes_expected_shape() {
                 "turn_id": "turn-2",
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
-                "turn_event_type": "start",
                 "submission_type": "prompt",
                 "sandbox_policy": "read_only",
                 "reasoning_effort": "high",
@@ -265,7 +263,6 @@ fn turn_steer_event_serializes_expected_shape() {
                 "turn_id": "turn-2",
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
-                "turn_event_type": "steer",
                 "submission_type": null,
                 "sandbox_policy": null,
                 "reasoning_effort": null,
