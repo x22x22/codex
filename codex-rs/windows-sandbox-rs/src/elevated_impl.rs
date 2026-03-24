@@ -3,6 +3,7 @@ mod windows_impl {
     use crate::allow::compute_allow_paths;
     use crate::allow::AllowDenyPaths;
     use crate::cap::load_or_create_cap_sids;
+    use crate::cap::write_cap_sid_for_root;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
@@ -239,25 +240,40 @@ mod windows_impl {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
         let caps = load_or_create_cap_sids(codex_home)?;
+        let AllowDenyPaths { allow, deny: _ } =
+            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+        let canonical_cwd = crate::path_normalization::canonicalize_path(&current_dir);
+        let mut allow_roots: Vec<PathBuf> = allow.into_iter().collect();
+        allow_roots.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
         let (psid_to_use, cap_sids) = match &policy {
             SandboxPolicy::ReadOnly { .. } => (
                 unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
                 vec![caps.readonly.clone()],
             ),
-            SandboxPolicy::WorkspaceWrite { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
-                vec![
-                    caps.workspace.clone(),
-                    crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
-                ],
-            ),
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                let mut cap_sids = Vec::with_capacity(allow_roots.len());
+                for root in &allow_roots {
+                    let sid = if crate::workspace_acl::is_command_cwd_root(root, &canonical_cwd) {
+                        crate::cap::workspace_cap_sid_for_cwd(codex_home, root)?
+                    } else {
+                        write_cap_sid_for_root(codex_home, root)?
+                    };
+                    cap_sids.push(sid);
+                }
+                let psid_to_use = unsafe {
+                    convert_string_sid_to_sid(
+                        cap_sids
+                            .first()
+                            .expect("workspace-write should always have a writable root"),
+                    )
+                    .unwrap()
+                };
+                (psid_to_use, cap_sids)
+            }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("DangerFullAccess handled above")
             }
         };
-
-        let AllowDenyPaths { allow: _, deny: _ } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
         // Deny/allow ACEs are now applied during setup; avoid per-command churn.
         unsafe {
             allow_null_device(psid_to_use);

@@ -15,11 +15,13 @@ use crate::path_normalization::canonical_path_key;
 pub struct CapSids {
     pub workspace: String,
     pub readonly: String,
-    /// Per-workspace capability SIDs keyed by canonicalized CWD string.
+    /// Path-scoped capability SIDs keyed by canonicalized writable-root strings.
     ///
-    /// This is used to isolate workspaces from other workspace sandbox writes and to
-    /// apply per-workspace denies (e.g. protect `CWD/.codex`)
-    /// without permanently affecting other workspaces.
+    /// This is used to isolate writable roots from one another so stale ACL grants on
+    /// one workspace do not automatically authorize later sessions in unrelated roots.
+    ///
+    /// The serialized field name is kept for backwards compatibility with existing
+    /// `cap_sid` files on disk.
     #[serde(default)]
     pub workspace_by_cwd: HashMap<String, String>,
 }
@@ -77,9 +79,14 @@ pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
 
 /// Returns the workspace-specific capability SID for `cwd`, creating and persisting it if missing.
 pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String> {
+    write_cap_sid_for_root(codex_home, cwd)
+}
+
+/// Returns the path-scoped capability SID for `root`, creating and persisting it if missing.
+pub fn write_cap_sid_for_root(codex_home: &Path, root: &Path) -> Result<String> {
     let path = cap_sid_file(codex_home);
     let mut caps = load_or_create_cap_sids(codex_home)?;
-    let key = canonical_path_key(cwd);
+    let key = canonical_path_key(root);
     if let Some(sid) = caps.workspace_by_cwd.get(&key) {
         return Ok(sid.clone());
     }
@@ -92,8 +99,10 @@ pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::load_or_create_cap_sids;
+    use super::write_cap_sid_for_root;
     use super::workspace_cap_sid_for_cwd;
     use pretty_assertions::assert_eq;
+    use std::collections::HashSet;
     use std::path::PathBuf;
 
     #[test]
@@ -117,5 +126,26 @@ mod tests {
 
         let caps = load_or_create_cap_sids(&codex_home).expect("load caps");
         assert_eq!(caps.workspace_by_cwd.len(), 1);
+    }
+
+    #[test]
+    fn distinct_writable_roots_get_distinct_sids() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        std::fs::create_dir_all(&codex_home).expect("create codex home");
+
+        let workspace_a = temp.path().join("WorkspaceA");
+        let workspace_b = temp.path().join("WorkspaceB");
+        std::fs::create_dir_all(&workspace_a).expect("create workspace a");
+        std::fs::create_dir_all(&workspace_b).expect("create workspace b");
+
+        let sid_a = write_cap_sid_for_root(&codex_home, &workspace_a).expect("sid a");
+        let sid_b = write_cap_sid_for_root(&codex_home, &workspace_b).expect("sid b");
+
+        assert_ne!(sid_a, sid_b);
+
+        let caps = load_or_create_cap_sids(&codex_home).expect("load caps");
+        let values: HashSet<_> = caps.workspace_by_cwd.values().cloned().collect();
+        assert_eq!(values.len(), 2);
     }
 }

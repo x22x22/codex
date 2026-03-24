@@ -64,6 +64,8 @@ pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_cap_sid_for_cwd;
 #[cfg(target_os = "windows")]
+pub use cap::write_cap_sid_for_root;
+#[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
 #[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
@@ -179,6 +181,7 @@ mod windows_impl {
     use super::allow::AllowDenyPaths;
     use super::cap::load_or_create_cap_sids;
     use super::cap::workspace_cap_sid_for_cwd;
+    use super::cap::write_cap_sid_for_root;
     use super::env::apply_no_network_to_env;
     use super::env::ensure_non_interactive_pager;
     use super::env::normalize_null_device_env;
@@ -212,6 +215,40 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::INFINITE;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
+
+    fn sorted_allow_roots(allow: &std::collections::HashSet<PathBuf>) -> Vec<PathBuf> {
+        let mut roots: Vec<PathBuf> = allow.iter().cloned().collect();
+        roots.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+        roots
+    }
+
+    fn capability_sid_strings_for_allow_roots(
+        codex_home: &Path,
+        allow_roots: &[PathBuf],
+        canonical_cwd: &Path,
+    ) -> Result<HashMap<PathBuf, String>> {
+        let mut sid_by_root = HashMap::new();
+        for root in allow_roots {
+            let sid = if is_command_cwd_root(root, canonical_cwd) {
+                workspace_cap_sid_for_cwd(codex_home, root)?
+            } else {
+                write_cap_sid_for_root(codex_home, root)?
+            };
+            sid_by_root.insert(root.clone(), sid);
+        }
+        Ok(sid_by_root)
+    }
+
+    fn capability_sid_for_path<'a>(
+        sid_by_root: &'a HashMap<PathBuf, *mut c_void>,
+        sorted_allow_roots: &[PathBuf],
+        path: &Path,
+    ) -> Option<*mut c_void> {
+        sorted_allow_roots
+            .iter()
+            .find(|root| path.starts_with(root))
+            .and_then(|root| sid_by_root.get(root).copied())
+    }
 
     fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
         !policy.has_full_network_access()
@@ -282,6 +319,11 @@ mod windows_impl {
         let logs_base_dir = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
         let is_workspace_write = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. });
+        let current_dir = cwd.to_path_buf();
+        let AllowDenyPaths { allow, deny } =
+            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+        let canonical_cwd = canonicalize_path(&current_dir);
+        let sorted_allow_roots = sorted_allow_roots(&allow);
 
         if matches!(
             &policy,
@@ -295,25 +337,38 @@ mod windows_impl {
             );
         }
         let caps = load_or_create_cap_sids(codex_home)?;
-        let (h_token, psid_generic, psid_workspace): (HANDLE, *mut c_void, Option<*mut c_void>) = unsafe {
+        let sid_strings_by_root = capability_sid_strings_for_allow_roots(
+            codex_home,
+            &sorted_allow_roots,
+            &canonical_cwd,
+        )?;
+        let (h_token, psid_readonly, psids_by_root): (
+            HANDLE,
+            Option<*mut c_void>,
+            HashMap<PathBuf, *mut c_void>,
+        ) = unsafe {
             match &policy {
                 SandboxPolicy::ReadOnly { .. } => {
                     let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
                     let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
-                    (h, psid, None)
+                    (h, Some(psid), HashMap::new())
                 }
                 SandboxPolicy::WorkspaceWrite { .. } => {
-                    let psid_generic = convert_string_sid_to_sid(&caps.workspace).unwrap();
-                    let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
-                    let psid_workspace = convert_string_sid_to_sid(&ws_sid).unwrap();
+                    let mut psids_by_root = HashMap::new();
+                    let mut token_caps = Vec::with_capacity(sorted_allow_roots.len());
+                    for root in &sorted_allow_roots {
+                        let sid = sid_strings_by_root
+                            .get(root)
+                            .expect("missing writable-root SID");
+                        let psid = convert_string_sid_to_sid(sid).unwrap();
+                        token_caps.push(psid);
+                        psids_by_root.insert(root.clone(), psid);
+                    }
                     let base = super::token::get_current_token_for_restriction()?;
-                    let h_res = create_workspace_write_token_with_caps_from(
-                        base,
-                        &[psid_generic, psid_workspace],
-                    );
+                    let h_res = create_workspace_write_token_with_caps_from(base, &token_caps);
                     windows_sys::Win32::Foundation::CloseHandle(base);
                     let h = h_res?;
-                    (h, psid_generic, Some(psid_workspace))
+                    (h, None, psids_by_root)
                 }
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                     unreachable!("DangerFullAccess handled above")
@@ -335,16 +390,15 @@ mod windows_impl {
         }
 
         let persist_aces = is_workspace_write;
-        let AllowDenyPaths { allow, deny } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
-        let canonical_cwd = canonicalize_path(&current_dir);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
             for p in &allow {
-                let psid = if is_workspace_write && is_command_cwd_root(p, &canonical_cwd) {
-                    psid_workspace.unwrap_or(psid_generic)
+                let Some(psid) = (if is_workspace_write {
+                    capability_sid_for_path(&psids_by_root, &sorted_allow_roots, p)
                 } else {
-                    psid_generic
+                    psid_readonly
+                }) else {
+                    continue;
                 };
                 if let Ok(added) = add_allow_ace(p, psid) {
                     if added {
@@ -359,15 +413,28 @@ mod windows_impl {
                 }
             }
             for p in &deny {
-                if let Ok(added) = add_deny_write_ace(p, psid_generic) {
+                let Some(psid) = (if is_workspace_write {
+                    capability_sid_for_path(&psids_by_root, &sorted_allow_roots, p)
+                } else {
+                    psid_readonly
+                }) else {
+                    continue;
+                };
+                if let Ok(added) = add_deny_write_ace(p, psid) {
                     if added && !persist_aces {
-                        guards.push((p.clone(), psid_generic));
+                        guards.push((p.clone(), psid));
                     }
                 }
             }
-            allow_null_device(psid_generic);
-            if let Some(psid) = psid_workspace {
+            if let Some(psid) = psid_readonly {
                 allow_null_device(psid);
+            }
+            for psid in psids_by_root.values().copied() {
+                allow_null_device(psid);
+            }
+            if let Some(psid) =
+                capability_sid_for_path(&psids_by_root, &sorted_allow_roots, &current_dir)
+            {
                 let _ = protect_workspace_codex_dir(&current_dir, psid);
                 let _ = protect_workspace_agents_dir(&current_dir, psid);
             }
@@ -525,33 +592,49 @@ mod windows_impl {
         }
 
         ensure_codex_home_exists(codex_home)?;
-        let caps = load_or_create_cap_sids(codex_home)?;
-        let psid_generic =
-            unsafe { convert_string_sid_to_sid(&caps.workspace) }.expect("valid workspace SID");
-        let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
-        let psid_workspace =
-            unsafe { convert_string_sid_to_sid(&ws_sid) }.expect("valid workspace SID");
         let current_dir = cwd.to_path_buf();
         let AllowDenyPaths { allow, deny } =
             compute_allow_paths(sandbox_policy, sandbox_policy_cwd, &current_dir, env_map);
         let canonical_cwd = canonicalize_path(&current_dir);
+        let sorted_allow_roots = sorted_allow_roots(&allow);
+        let sid_strings_by_root = capability_sid_strings_for_allow_roots(
+            codex_home,
+            &sorted_allow_roots,
+            &canonical_cwd,
+        )?;
+        let mut psids_by_root = HashMap::new();
+        for root in &sorted_allow_roots {
+            let sid = sid_strings_by_root
+                .get(root)
+                .expect("missing writable-root SID");
+            let psid = unsafe { convert_string_sid_to_sid(sid) }.expect("valid workspace SID");
+            psids_by_root.insert(root.clone(), psid);
+        }
 
         unsafe {
             for p in &allow {
-                let psid = if is_command_cwd_root(p, &canonical_cwd) {
-                    psid_workspace
-                } else {
-                    psid_generic
+                let Some(psid) = capability_sid_for_path(&psids_by_root, &sorted_allow_roots, p)
+                else {
+                    continue;
                 };
                 let _ = add_allow_ace(p, psid);
             }
             for p in &deny {
-                let _ = add_deny_write_ace(p, psid_generic);
+                let Some(psid) = capability_sid_for_path(&psids_by_root, &sorted_allow_roots, p)
+                else {
+                    continue;
+                };
+                let _ = add_deny_write_ace(p, psid);
             }
-            allow_null_device(psid_generic);
-            allow_null_device(psid_workspace);
-            let _ = protect_workspace_codex_dir(&current_dir, psid_workspace);
-            let _ = protect_workspace_agents_dir(&current_dir, psid_workspace);
+            for psid in psids_by_root.values().copied() {
+                allow_null_device(psid);
+            }
+            if let Some(psid) =
+                capability_sid_for_path(&psids_by_root, &sorted_allow_roots, &current_dir)
+            {
+                let _ = protect_workspace_codex_dir(&current_dir, psid);
+                let _ = protect_workspace_agents_dir(&current_dir, psid);
+            }
         }
 
         Ok(())

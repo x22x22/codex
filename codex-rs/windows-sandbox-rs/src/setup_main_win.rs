@@ -13,7 +13,6 @@ use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::is_command_cwd_root;
-use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
 use codex_windows_sandbox::protect_workspace_agents_dir;
@@ -24,6 +23,7 @@ use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::workspace_cap_sid_for_cwd;
+use codex_windows_sandbox::write_cap_sid_for_root;
 use codex_windows_sandbox::write_setup_error_report;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
@@ -551,25 +551,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         ))
     })?;
 
-    let caps = load_or_create_cap_sids(&payload.codex_home).map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperCapabilitySidFailed,
-            format!("load or create capability SIDs failed: {err}"),
-        ))
-    })?;
-    let cap_psid = unsafe {
-        convert_string_sid_to_sid(&caps.workspace).ok_or_else(|| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperCapabilitySidFailed,
-                format!("convert capability SID {} failed", caps.workspace),
-            ))
-        })?
-    };
-    let workspace_sid_str = workspace_cap_sid_for_cwd(&payload.codex_home, &payload.command_cwd)?;
-    let workspace_psid = unsafe {
-        convert_string_sid_to_sid(&workspace_sid_str)
-            .ok_or_else(|| anyhow::anyhow!("convert workspace capability SID failed"))?
-    };
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
         let firewall_result = firewall::ensure_offline_outbound_block(&offline_sid_str, log);
@@ -616,7 +597,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    let cap_sid_str = caps.workspace.clone();
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
     let write_mask =
@@ -639,19 +619,18 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
         let mut need_grant = false;
         let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
-        let cap_label = if is_command_cwd {
-            "workspace_cap"
+        let cap_sid_str_for_root = if is_command_cwd {
+            workspace_cap_sid_for_cwd(&payload.codex_home, root)?
         } else {
-            "cap"
+            write_cap_sid_for_root(&payload.codex_home, root)?
         };
-        let cap_psid_for_root = if is_command_cwd {
-            workspace_psid
-        } else {
-            cap_psid
+        let cap_psid_for_root = unsafe {
+            convert_string_sid_to_sid(&cap_sid_str_for_root)
+                .ok_or_else(|| anyhow::anyhow!("convert writable-root capability SID failed"))?
         };
         for (label, psid) in [
             ("sandbox_group", sandbox_group_psid),
-            (cap_label, cap_psid_for_root),
+            ("path_cap", cap_psid_for_root),
         ] {
             let has =
                 match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
@@ -694,9 +673,15 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         for root in grant_tasks {
             let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
             let sid_strings = if is_command_cwd {
-                vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
+                vec![
+                    sandbox_group_sid_str.clone(),
+                    workspace_cap_sid_for_cwd(&payload.codex_home, &root)?,
+                ]
             } else {
-                vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
+                vec![
+                    sandbox_group_sid_str.clone(),
+                    write_cap_sid_for_root(&payload.codex_home, &root)?,
+                ]
             };
             let tx = tx.clone();
             scope.spawn(move || {
