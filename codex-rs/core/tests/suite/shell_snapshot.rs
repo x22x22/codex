@@ -587,13 +587,15 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     })
     .await;
 
-    assert!(saw_patch_begin, "expected apply_patch to emit PatchApplyBegin");
+    assert!(
+        saw_patch_begin,
+        "expected apply_patch to emit PatchApplyBegin"
+    );
     let patch_end = patch_end.expect("expected apply_patch to emit PatchApplyEnd");
     assert!(
         patch_end.success,
         "expected apply_patch to finish successfully: stdout={:?} stderr={:?}",
-        patch_end.stdout,
-        patch_end.stderr,
+        patch_end.stdout, patch_end.stderr,
     );
 
     assert_eq!(
