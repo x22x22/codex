@@ -15,6 +15,7 @@ use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::CodexTurnEvent;
+use crate::analytics_client::CodexTurnSteerEvent;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
@@ -2739,6 +2740,16 @@ impl Session {
         ))
     }
 
+    async fn active_turn_tracking(&self) -> Option<crate::analytics_client::TrackEventsContext> {
+        let active = self.active_turn.lock().await;
+        let (_, task) = active.as_ref()?.tasks.first()?;
+        Some(build_track_events_context(
+            task.turn_context.model_info.slug.clone(),
+            self.conversation_id.to_string(),
+            task.turn_context.sub_id.clone(),
+        ))
+    }
+
     pub(crate) async fn record_execpolicy_amendment_message(
         &self,
         sub_id: &str,
@@ -3913,6 +3924,13 @@ impl Session {
 
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input.into());
+        drop(turn_state);
+        drop(active);
+        if let Some(tracking) = self.active_turn_tracking().await {
+            self.services
+                .analytics_events_client
+                .track_turn_steer(tracking, CodexTurnSteerEvent);
+        }
         Ok(active_turn_id.clone())
     }
 
