@@ -206,8 +206,8 @@ fn turn_metadata_event_serializes_expected_shape() {
             &tracking,
             TurnMetadata {
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                effort: Some(ReasoningEffort::High),
-                summary: ReasoningSummary::Detailed,
+                reasoning_effort: Some(ReasoningEffort::High),
+                reasoning_summary: ReasoningSummary::Detailed,
                 service_tier: Some(ServiceTier::Flex),
                 collaboration_mode: ModeKind::Plan,
             },
@@ -226,8 +226,8 @@ fn turn_metadata_event_serializes_expected_shape() {
                 "product_client_id": crate::default_client::originator().value,
                 "model_slug": "gpt-5",
                 "sandbox_policy": "read_only",
-                "effort": "high",
-                "summary": "detailed",
+                "reasoning_effort": "high",
+                "reasoning_summary": "detailed",
                 "service_tier": "flex",
                 "collaboration_mode": "plan"
             }

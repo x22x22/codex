@@ -5666,8 +5666,8 @@ pub(crate) async fn run_turn(
             tracking.clone(),
             TurnMetadata {
                 sandbox_policy: turn_context.sandbox_policy.get().clone(),
-                effort: turn_context.reasoning_effort,
-                summary: turn_context.reasoning_summary,
+                reasoning_effort: turn_context.reasoning_effort,
+                reasoning_summary: turn_context.reasoning_summary,
                 service_tier: turn_context.config.service_tier,
                 collaboration_mode: turn_context.collaboration_mode.mode,
             },

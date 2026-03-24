@@ -215,8 +215,8 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
         serde_json::json!(codex_core::default_client::originator().value)
     );
     assert_eq!(event_params["model_slug"], session_configured.model);
-    assert_eq!(event_params["effort"], "high");
-    assert_eq!(event_params["summary"], "detailed");
+    assert_eq!(event_params["reasoning_effort"], "high");
+    assert_eq!(event_params["reasoning_summary"], "detailed");
     assert_eq!(event_params["service_tier"], "flex");
     assert_eq!(event_params["collaboration_mode"], "plan");
     assert!(event_params["thread_id"].as_str().is_some());

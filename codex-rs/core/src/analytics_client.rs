@@ -31,8 +31,8 @@ pub(crate) struct TrackEventsContext {
 #[derive(Clone)]
 pub(crate) struct TurnMetadata {
     pub(crate) sandbox_policy: SandboxPolicy,
-    pub(crate) effort: Option<ReasoningEffort>,
-    pub(crate) summary: ReasoningSummary,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
+    pub(crate) reasoning_summary: ReasoningSummary,
     pub(crate) service_tier: Option<ServiceTier>,
     pub(crate) collaboration_mode: ModeKind,
 }
@@ -390,8 +390,8 @@ struct CodexTurnMetadata {
     product_client_id: Option<String>,
     model_slug: Option<String>,
     sandbox_policy: Option<&'static str>,
-    effort: Option<String>,
-    summary: Option<String>,
+    reasoning_effort: Option<String>,
+    reasoning_summary: Option<String>,
     service_tier: Option<String>,
     collaboration_mode: Option<&'static str>,
 }
@@ -738,8 +738,10 @@ fn codex_turn_metadata(
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
         sandbox_policy: Some(sandbox_policy_mode(&turn_metadata.sandbox_policy)),
-        effort: turn_metadata.effort.map(|value| value.to_string()),
-        summary: Some(turn_metadata.summary.to_string()),
+        reasoning_effort: turn_metadata
+            .reasoning_effort
+            .map(|value| value.to_string()),
+        reasoning_summary: Some(turn_metadata.reasoning_summary.to_string()),
         service_tier: turn_metadata.service_tier.map(|value| value.to_string()),
         collaboration_mode: Some(collaboration_mode_mode(turn_metadata.collaboration_mode)),
     }
