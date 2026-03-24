@@ -482,3 +482,45 @@ fn maybe_wrap_shell_lc_with_snapshot_appends_runtime_git_config_after_snapshot()
         "2|user.name|Pavel|core.hooksPath|/codex/hooks"
     );
 }
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_skips_duplicate_runtime_git_config_from_snapshot() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport GIT_CONFIG_COUNT='1'\nexport GIT_CONFIG_KEY_0='core.hooksPath'\nexport GIT_CONFIG_VALUE_0='/user/hooks'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path,
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s|%s|%s|%s|%s' \"${GIT_CONFIG_COUNT:-}\" \"${GIT_CONFIG_KEY_0:-}\" \"${GIT_CONFIG_VALUE_0:-}\" \"${GIT_CONFIG_KEY_1:-}\" \"${GIT_CONFIG_VALUE_1:-}\"".to_string(),
+    ];
+    let runtime_git_config_overrides =
+        vec![("core.hooksPath".to_string(), "/codex/hooks".to_string())];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &runtime_git_config_overrides,
+    );
+
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "1|core.hooksPath|/user/hooks||"
+    );
+}

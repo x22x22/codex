@@ -172,13 +172,30 @@ fn build_runtime_git_config_appends(runtime_git_config_overrides: &[(String, Str
         "\ncase \"${GIT_CONFIG_COUNT:-}\" in\n  ''|*[!0-9]*) __CODEX_GIT_CONFIG_INDEX=0 ;;\n  *) __CODEX_GIT_CONFIG_INDEX=\"$GIT_CONFIG_COUNT\" ;;\nesac\n",
     );
 
+    script.push_str(
+        "__codex_has_runtime_git_config_key() {\n\
+  __CODEX_GIT_CONFIG_LOOKUP_KEY=\"$1\"\n\
+  __CODEX_GIT_CONFIG_SCAN_INDEX=0\n\
+  while [ \"$__CODEX_GIT_CONFIG_SCAN_INDEX\" -lt \"$__CODEX_GIT_CONFIG_INDEX\" ]; do\n\
+    eval \"__CODEX_GIT_CONFIG_EXISTING_KEY=\\${GIT_CONFIG_KEY_${__CODEX_GIT_CONFIG_SCAN_INDEX}-}\"\n\
+    if [ \"$__CODEX_GIT_CONFIG_EXISTING_KEY\" = \"$__CODEX_GIT_CONFIG_LOOKUP_KEY\" ]; then\n\
+      return 0\n\
+    fi\n\
+    __CODEX_GIT_CONFIG_SCAN_INDEX=$((__CODEX_GIT_CONFIG_SCAN_INDEX + 1))\n\
+  done\n\
+  return 1\n\
+}\n",
+    );
+
     for (key, value) in runtime_git_config_overrides {
         let key = shell_single_quote(key);
         let value = shell_single_quote(value);
         script.push_str(&format!(
-            "eval \"export GIT_CONFIG_KEY_${{__CODEX_GIT_CONFIG_INDEX}}='{key}'\"\n\
+            "if ! __codex_has_runtime_git_config_key '{key}'; then\n\
+  eval \"export GIT_CONFIG_KEY_${{__CODEX_GIT_CONFIG_INDEX}}='{key}'\"\n\
 eval \"export GIT_CONFIG_VALUE_${{__CODEX_GIT_CONFIG_INDEX}}='{value}'\"\n\
-__CODEX_GIT_CONFIG_INDEX=$((__CODEX_GIT_CONFIG_INDEX + 1))\n"
+__CODEX_GIT_CONFIG_INDEX=$((__CODEX_GIT_CONFIG_INDEX + 1))\n\
+fi\n"
         ));
     }
 
