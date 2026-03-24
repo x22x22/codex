@@ -4,6 +4,7 @@ import android.app.agent.AgentSessionInfo
 import android.app.agent.GenieRequest
 import android.app.agent.GenieService
 import android.util.Log
+import com.openai.codex.bridge.DetachedTargetCompat
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 
@@ -53,11 +54,14 @@ class CodexGenieService : GenieService() {
             )
 
             if (request.isDetachedModeAllowed) {
-                callback.requestLaunchDetachedTargetHidden(sessionId)
-                callback.publishTrace(sessionId, "Requested detached target launch for ${request.targetPackage}.")
+                val detachedLaunch = DetachedTargetCompat.ensureDetachedTargetHidden(callback, sessionId)
+                callback.publishTrace(sessionId, detachedLaunch.summary("ensure hidden"))
+                check(detachedLaunch.isOk()) {
+                    "Failed to prepare detached target for ${request.targetPackage}: ${detachedLaunch.summary("ensure hidden")}"
+                }
                 callback.publishTrace(
                     sessionId,
-                    "Detached-session contract active for ${request.targetPackage}: the framework already launched the target hidden. Codex must use framework target controls plus UI inspection/input, not plain shell relaunches of the target package.",
+                    "Detached-session contract active for ${request.targetPackage}: the framework owns detached launch and recovery. Codex must use framework target controls plus UI inspection/input, not plain shell relaunches of the target package.",
                 )
             }
 

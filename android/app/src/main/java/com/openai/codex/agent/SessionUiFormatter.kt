@@ -53,6 +53,7 @@ object SessionUiFormatter {
             session.targetPackage?.let { append(" ($it)") }
             append("\nState: ${session.stateLabel}\n")
             append("Target presentation: ${session.targetPresentationLabel}\n")
+            append("Target runtime: ${session.targetRuntimeLabel}\n")
             session.requiredFinalPresentationPolicy?.let { policy ->
                 append("Required final presentation: ${policy.wireValue}\n")
             }

@@ -78,6 +78,10 @@ The current repo now contains these implementation slices:
   launched the target hidden, Codex must not relaunch that same target package
   with plain shell launchers. That bypasses detached hosting and can be blocked
   by Android background-activity-launch policy.
+- Detached-session state now distinguishes presentation from runtime existence.
+  The app consumes `targetRuntime`, typed detached control results, and typed
+  capture results so a missing detached target can be restored through
+  framework-owned recovery instead of guessed ordinary app launch.
 
 The Android app now owns auth origination, runtime status, and per-session
 transport configuration handoff. Active Genie model traffic is framework-owned.
@@ -177,8 +181,8 @@ the Android Agent/Genie flow.
 - Per-session framework transport provisioning in
   `android/bridge/src/main/java/com/openai/codex/bridge/FrameworkSessionTransportCompat.kt`
 - Framework-only Android dynamic tools registered on the Genie Codex thread with:
-  - detached target show/hide/attach/close
-  - detached frame capture
+  - detached target ensure-hidden/show/hide/attach/close
+  - typed detached frame capture with runtime-aware recovery
 - `request_user_input` bridged from hosted Codex back into AgentSDK questions
 - Agent-owned question notifications for Genie questions that need user input
 - Agent-mediated free-form answers for Genie questions, using the hosted Agent
@@ -236,12 +240,6 @@ Set the Agent Platform stub SDK zip path:
 export ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP=/path/to/android-agent-platform-stub-sdk.zip
 ```
 
-Build both Android binaries first:
-
-```bash
-just android-build
-```
-
 Build both Android apps:
 
 ```bash
@@ -249,8 +247,9 @@ cd android
 ./gradlew :genie:assembleDebug :app:assembleDebug
 ```
 
-The Agent app and Genie app both depend on `just android-build` for the
-packaged `codex` JNI binaries.
+The Android Gradle build depends on `just android-build` for the packaged
+`codex` JNI binaries and will run it automatically when the native artifact is
+out of date.
 
 ## Next Implementation Steps
 

@@ -298,6 +298,7 @@ class AgentFrameworkToolBridge(
                     .put("state", session.stateLabel)
                     .put("targetDetached", session.targetDetached)
                     .put("targetPresentation", session.targetPresentationLabel)
+                    .put("targetRuntime", session.targetRuntimeLabel)
                     .put(
                         "requiredFinalPresentation",
                         session.requiredFinalPresentationPolicy?.wireValue,

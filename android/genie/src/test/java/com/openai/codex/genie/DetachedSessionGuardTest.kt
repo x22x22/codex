@@ -11,6 +11,7 @@ class DetachedSessionGuardTest {
 
         assertTrue(instructions.contains("com.aurora.store"))
         assertTrue(instructions.contains("Do not relaunch"))
+        assertTrue(instructions.contains("android_target_ensure_hidden"))
         assertTrue(instructions.contains("android_target_show"))
     }
 

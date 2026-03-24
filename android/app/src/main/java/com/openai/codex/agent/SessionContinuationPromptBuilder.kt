@@ -21,6 +21,7 @@ object SessionContinuationPromptBuilder {
             selectedSession.targetPackage?.let { appendLine("- Target package: $it") }
             appendLine("- Previous state: ${selectedSession.stateLabel}")
             appendLine("- Previous presentation: ${selectedSession.targetPresentationLabel}")
+            appendLine("- Previous runtime: ${selectedSession.targetRuntimeLabel}")
             selectedSession.latestResult
                 ?.takeIf(String::isNotBlank)
                 ?.let { appendLine("- Previous result: ${it.take(MAX_DETAIL_CHARS)}") }

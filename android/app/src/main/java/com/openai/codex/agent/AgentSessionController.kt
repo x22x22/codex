@@ -7,6 +7,7 @@ import android.content.Context
 import android.os.Binder
 import android.os.Process
 import android.util.Log
+import com.openai.codex.bridge.DetachedTargetCompat
 import com.openai.codex.bridge.FrameworkSessionTransportCompat
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.util.concurrent.Executor
@@ -76,6 +77,7 @@ class AgentSessionController(context: Context) {
         presentationPolicyStore.prunePolicies(sessions.map { it.sessionId }.toSet())
         executionSettingsStore.pruneSettings(sessions.map { it.sessionId }.toSet())
         var sessionDetails = sessions.map { session ->
+            val targetRuntime = DetachedTargetCompat.getTargetRuntime(session)
             AgentSessionDetails(
                 sessionId = session.sessionId,
                 parentSessionId = session.parentSessionId,
@@ -85,6 +87,8 @@ class AgentSessionController(context: Context) {
                 stateLabel = stateToString(session.state),
                 targetPresentation = session.targetPresentation,
                 targetPresentationLabel = targetPresentationToString(session.targetPresentation),
+                targetRuntime = targetRuntime.value,
+                targetRuntimeLabel = targetRuntime.label,
                 targetDetached = session.isTargetDetached,
                 requiredFinalPresentationPolicy = presentationPolicyStore.getPolicy(session.sessionId),
                 latestQuestion = null,
@@ -665,6 +669,8 @@ data class AgentSessionDetails(
     val stateLabel: String,
     val targetPresentation: Int,
     val targetPresentationLabel: String,
+    val targetRuntime: Int?,
+    val targetRuntimeLabel: String,
     val targetDetached: Boolean,
     val requiredFinalPresentationPolicy: SessionFinalPresentationPolicy?,
     val latestQuestion: String?,

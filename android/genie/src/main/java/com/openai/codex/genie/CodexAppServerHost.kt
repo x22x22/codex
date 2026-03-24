@@ -589,6 +589,7 @@ class CodexAppServerHost(
             If a direct command or intent clearly accomplishes the objective, stop and report success instead of continuing exploratory UI actions.
             The Genie may request detached target launch through the framework callback, and after that it should treat the target as already launched by the framework.
             Use detached-target tools to show or inspect the target, then continue with supported shell input and inspection surfaces rather than relaunching the target package.
+            If detached recovery is needed because the target disappeared, use android_target_ensure_hidden before retrying UI inspection.
             Use Android dynamic tools only for framework-only detached target operations that do not have a working shell equivalent in the paired app sandbox.
             $detachedSessionInstructions
             The delegated objective may include a required final target presentation such as ATTACHED, DETACHED_HIDDEN, or DETACHED_SHOWN. Treat that as a hard completion requirement and do not report success until the framework session actually matches it.
@@ -607,6 +608,7 @@ class CodexAppServerHost(
             Detached-session requirement:
             - The framework already launched ${request.targetPackage} hidden for this session.
             - Do not relaunch ${request.targetPackage} with shell launch commands. Use framework target controls plus UI inspection and input instead.
+            - If the detached target disappears or looks empty, use android_target_ensure_hidden to request framework-owned recovery.
             """.trimIndent()
         } else {
             ""
@@ -623,6 +625,7 @@ class CodexAppServerHost(
 
     private fun buildDynamicToolSpecs(): JSONArray {
         return JSONArray()
+            .put(dynamicToolSpec(AndroidGenieToolExecutor.ENSURE_HIDDEN_TARGET_TOOL, "Ensure the detached target exists and remains hidden. Use this to restore a missing detached target.", emptyObjectSchema()))
             .put(dynamicToolSpec(AndroidGenieToolExecutor.SHOW_TARGET_TOOL, "Show the detached target window.", emptyObjectSchema()))
             .put(dynamicToolSpec(AndroidGenieToolExecutor.HIDE_TARGET_TOOL, "Hide the detached target window.", emptyObjectSchema()))
             .put(dynamicToolSpec(AndroidGenieToolExecutor.ATTACH_TARGET_TOOL, "Reattach the detached target back to the main display.", emptyObjectSchema()))
