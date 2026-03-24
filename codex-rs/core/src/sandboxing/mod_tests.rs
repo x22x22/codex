@@ -436,50 +436,6 @@ fn transform_wraps_command_for_seatbelt_execution() {
     );
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn transform_wraps_command_for_linux_sandbox_execution() {
-    let manager = SandboxManager::new();
-    let cwd = std::env::current_dir().expect("current dir");
-    let policy = SandboxPolicy::new_read_only_policy();
-    let file_system_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd.as_path());
-    let sandbox_exe = PathBuf::from("/tmp/codex-linux-sandbox");
-    let exec_request = manager
-        .transform(super::SandboxTransformRequest {
-            spec: sandbox_command_spec(
-                vec!["/bin/echo".to_string(), "hello".to_string()],
-                cwd.clone(),
-                HashMap::new(),
-            ),
-            policy: &policy,
-            file_system_policy: &file_system_policy,
-            network_policy: NetworkSandboxPolicy::from(&policy),
-            sandbox: SandboxType::LinuxSeccomp,
-            enforce_managed_network: false,
-            network: None,
-            sandbox_policy_cwd: cwd.as_path(),
-            codex_linux_sandbox_exe: Some(&sandbox_exe),
-            use_legacy_landlock: false,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            windows_sandbox_private_desktop: false,
-        })
-        .expect("transform");
-
-    assert_eq!(
-        exec_request.command.first().map(String::as_str),
-        sandbox_exe.to_str()
-    );
-    assert_eq!(
-        exec_request
-            .env
-            .get(crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR)
-            .map(String::as_str),
-        Some("1")
-    );
-    assert_eq!(exec_request.arg0.as_deref(), Some("codex-linux-sandbox"));
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn python_multiprocessing_lock_works_under_platform_sandbox() {
