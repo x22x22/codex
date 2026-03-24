@@ -509,8 +509,8 @@ impl ContextManager {
     /// that boundary.
     ///
     /// If any trimmed developer message was a mixed `build_initial_context` bundle containing both
-    /// rollback-trimmable contextual fragments and persistent developer text, this also clears the
-    /// stored `reference_context_item` baseline so the next real turn falls back to full
+    /// rollback-trimmable contextual fragments and persistent developer text, this shadows the
+    /// stored turn context as a model-visible baseline so the next real turn falls back to full
     /// reinjection.
     fn trim_pre_turn_context_updates(
         &mut self,
@@ -527,7 +527,7 @@ impl ContextManager {
                         // Mixed `build_initial_context` bundles are not reconstructible from
                         // steady-state diffs once trimmed, so the next real turn must fully
                         // reinject context instead of diffing against a stale baseline.
-                        self.reference_context_item = None;
+                        self.set_reference_context_item(None);
                     }
                     cut_idx -= 1;
                 }
