@@ -4,6 +4,7 @@
 use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::features::Feature;
+use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -56,6 +57,21 @@ fn exec_command_event(call_id: &str, command: &str) -> Result<Value> {
     let args = json!({
         "cmd": command,
         "yield_time_ms": 1_000_u64,
+    });
+    let args_str = serde_json::to_string(&args)?;
+    Ok(ev_function_call(call_id, "exec_command", &args_str))
+}
+
+fn exec_command_event_with_request_permissions(
+    call_id: &str,
+    command: &str,
+    additional_permissions: &RequestPermissionProfile,
+) -> Result<Value> {
+    let args = json!({
+        "cmd": command,
+        "yield_time_ms": 1_000_u64,
+        "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
+        "additional_permissions": additional_permissions,
     });
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "exec_command", &args_str))
@@ -181,8 +197,7 @@ async fn expect_request_permissions_event(
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
-async fn approved_folder_write_request_permissions_unblocks_later_exec_without_sandbox_args()
--> Result<()> {
+async fn approved_folder_write_request_permissions_unblocks_explicit_followup_exec() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -229,7 +244,11 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
             ]),
             sse(vec![
                 ev_response_created("resp-request-permissions-2"),
-                exec_command_event("exec-call", &command)?,
+                exec_command_event_with_request_permissions(
+                    "exec-call",
+                    &command,
+                    &requested_permissions,
+                )?,
                 ev_completed("resp-request-permissions-2"),
             ]),
             sse(vec![
@@ -303,7 +322,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
-async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_without_prompt()
+async fn approved_folder_write_request_permissions_unblocks_explicit_followup_apply_patch()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));

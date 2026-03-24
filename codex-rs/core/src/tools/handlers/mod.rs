@@ -169,16 +169,12 @@ pub(super) fn implicit_granted_permissions(
     additional_permissions: Option<&PermissionProfile>,
     effective_additional_permissions: &EffectiveAdditionalPermissions,
 ) -> Option<PermissionProfile> {
-    if !sandbox_permissions.uses_additional_permissions()
-        && !matches!(sandbox_permissions, SandboxPermissions::RequireEscalated)
-        && additional_permissions.is_none()
-    {
-        effective_additional_permissions
-            .additional_permissions
-            .clone()
-    } else {
-        None
-    }
+    let _ = (
+        sandbox_permissions,
+        additional_permissions,
+        effective_additional_permissions,
+    );
+    None
 }
 
 pub(super) async fn apply_granted_turn_permissions(
@@ -309,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn implicit_sticky_grants_bypass_inline_permission_validation() {
+    fn implicit_sticky_grants_do_not_auto_apply_to_plain_commands() {
         let cwd = tempdir().expect("tempdir");
         let granted_permissions = file_system_permissions(cwd.path());
         let implicit_permissions = implicit_granted_permissions(
@@ -322,7 +318,7 @@ mod tests {
             },
         );
 
-        assert_eq!(implicit_permissions, Some(granted_permissions));
+        assert_eq!(implicit_permissions, None);
     }
 
     #[test]
