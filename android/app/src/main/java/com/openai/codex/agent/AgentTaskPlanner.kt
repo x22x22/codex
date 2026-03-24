@@ -27,6 +27,7 @@ data class AgentDelegationPlan(
 object AgentTaskPlanner {
     private const val TAG = "AgentTaskPlanner"
     private const val PLANNER_ATTEMPTS = 2
+    private const val PLANNER_REQUEST_TIMEOUT_MS = 90_000L
 
     private val PLANNER_INSTRUCTIONS =
         """
@@ -144,6 +145,28 @@ object AgentTaskPlanner {
                 allowDetachedMode = allowDetachedMode,
             )
         }
+        val request = planSession(
+            context = context,
+            userObjective = userObjective,
+            executionSettings = executionSettings,
+            sessionController = sessionController,
+            requestUserInputHandler = requestUserInputHandler,
+        )
+        val sessionStartResult = sessionController.startDirectSession(
+            plan = request.plan,
+            allowDetachedMode = allowDetachedMode && request.allowDetachedMode,
+        )
+        Log.i(TAG, "Planner sessionStartResult=$sessionStartResult")
+        return sessionStartResult
+    }
+
+    fun planSession(
+        context: Context,
+        userObjective: String,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+        sessionController: AgentSessionController,
+        requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
+    ): AgentFrameworkToolBridge.StartDirectSessionRequest {
         Log.i(TAG, "Planning Agent session for objective=${userObjective.take(160)}")
         val isEligibleTargetPackage = { packageName: String ->
             sessionController.canStartSessionForTarget(packageName) &&
@@ -169,6 +192,7 @@ object AgentTaskPlanner {
                 outputSchema = PLANNER_OUTPUT_SCHEMA,
                 requestUserInputHandler = requestUserInputHandler,
                 executionSettings = executionSettings,
+                requestTimeoutMs = PLANNER_REQUEST_TIMEOUT_MS,
             )
             Log.i(TAG, "Planner response=${plannerResponse.take(400)}")
             previousPlannerResponse = plannerResponse
@@ -189,14 +213,8 @@ object AgentTaskPlanner {
             plannerRequest = parsedRequest
             break
         }
-        val request = plannerRequest ?: throw (lastPlannerError
+        return plannerRequest ?: throw (lastPlannerError
             ?: IOException("Planner did not return a valid session plan"))
-        val sessionStartResult = sessionController.startDirectSession(
-            plan = request.plan,
-            allowDetachedMode = allowDetachedMode && request.allowDetachedMode,
-        )
-        Log.i(TAG, "Planner sessionStartResult=$sessionStartResult")
-        return sessionStartResult
     }
 
     private fun buildPlannerPrompt(

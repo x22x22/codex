@@ -139,32 +139,76 @@ class AgentSessionController(context: Context) {
         allowDetachedMode: Boolean,
         executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
     ): SessionStartResult {
+        val pendingSession = createPendingDirectSession(
+            objective = plan.originalObjective,
+            executionSettings = executionSettings,
+        )
+        return startDirectSessionChildren(
+            parentSessionId = pendingSession.parentSessionId,
+            geniePackage = pendingSession.geniePackage,
+            plan = plan,
+            allowDetachedMode = allowDetachedMode,
+            executionSettings = executionSettings,
+            cancelParentOnFailure = true,
+        )
+    }
+
+    fun createPendingDirectSession(
+        objective: String,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+    ): PendingDirectSessionStart {
+        val manager = requireAgentManager()
+        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
+            ?: throw IllegalStateException("No GENIE role holder configured")
+        val parentSession = manager.createDirectSession(currentUserId())
+        try {
+            executionSettingsStore.saveSettings(parentSession.sessionId, executionSettings)
+            manager.publishTrace(
+                parentSession.sessionId,
+                "Planning Codex direct session for objective: $objective",
+            )
+            manager.updateSessionState(parentSession.sessionId, AgentSessionInfo.STATE_RUNNING)
+            return PendingDirectSessionStart(
+                parentSessionId = parentSession.sessionId,
+                geniePackage = geniePackage,
+            )
+        } catch (err: RuntimeException) {
+            runCatching { manager.cancelSession(parentSession.sessionId) }
+            executionSettingsStore.removeSettings(parentSession.sessionId)
+            throw err
+        }
+    }
+
+    fun startDirectSessionChildren(
+        parentSessionId: String,
+        geniePackage: String,
+        plan: AgentDelegationPlan,
+        allowDetachedMode: Boolean,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+        cancelParentOnFailure: Boolean = false,
+    ): SessionStartResult {
         val manager = requireAgentManager()
         val detachedPolicyTargets = plan.targets.filter { it.finalPresentationPolicy.requiresDetachedMode() }
         check(allowDetachedMode || detachedPolicyTargets.isEmpty()) {
             "Detached final presentation requires detached mode for ${detachedPolicyTargets.joinToString(", ") { it.packageName }}"
         }
-        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
-            ?: throw IllegalStateException("No GENIE role holder configured")
-        val parentSession = manager.createDirectSession(currentUserId())
         val childSessionIds = mutableListOf<String>()
         try {
-            executionSettingsStore.saveSettings(parentSession.sessionId, executionSettings)
             manager.publishTrace(
-                parentSession.sessionId,
+                parentSessionId,
                 "Starting Codex direct session for objective: ${plan.originalObjective}",
             )
             plan.rationale?.let { rationale ->
-                manager.publishTrace(parentSession.sessionId, "Planning rationale: $rationale")
+                manager.publishTrace(parentSessionId, "Planning rationale: $rationale")
             }
             plan.targets.forEach { target ->
-                val childSession = manager.createChildSession(parentSession.sessionId, target.packageName)
+                val childSession = manager.createChildSession(parentSessionId, target.packageName)
                 childSessionIds += childSession.sessionId
                 presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
                 executionSettingsStore.saveSettings(childSession.sessionId, executionSettings)
                 provisionSessionNetworkConfig(childSession.sessionId)
                 manager.publishTrace(
-                    parentSession.sessionId,
+                    parentSessionId,
                     "Created child session ${childSession.sessionId} for ${target.packageName} with required final presentation ${target.finalPresentationPolicy.wireValue}.",
                 )
                 manager.startGenieSession(
@@ -175,7 +219,7 @@ class AgentSessionController(context: Context) {
                 )
             }
             return SessionStartResult(
-                parentSessionId = parentSession.sessionId,
+                parentSessionId = parentSessionId,
                 childSessionIds = childSessionIds,
                 plannedTargets = plan.targets.map(AgentDelegationTarget::packageName),
                 geniePackage = geniePackage,
@@ -187,8 +231,10 @@ class AgentSessionController(context: Context) {
                 presentationPolicyStore.removePolicy(childSessionId)
                 executionSettingsStore.removeSettings(childSessionId)
             }
-            runCatching { manager.cancelSession(parentSession.sessionId) }
-            executionSettingsStore.removeSettings(parentSession.sessionId)
+            if (cancelParentOnFailure) {
+                runCatching { manager.cancelSession(parentSessionId) }
+                executionSettingsStore.removeSettings(parentSessionId)
+            }
             throw err
         }
     }
@@ -364,6 +410,21 @@ class AgentSessionController(context: Context) {
 
     fun cancelSession(sessionId: String) {
         requireAgentManager().cancelSession(sessionId)
+    }
+
+    fun failDirectSession(
+        sessionId: String,
+        message: String,
+    ) {
+        val manager = requireAgentManager()
+        manager.publishError(sessionId, message)
+        manager.updateSessionState(sessionId, AgentSessionInfo.STATE_FAILED)
+    }
+
+    fun isTerminalSession(sessionId: String): Boolean {
+        val manager = agentManager ?: return true
+        val session = manager.getSessions(currentUserId()).firstOrNull { it.sessionId == sessionId } ?: return true
+        return isTerminalState(session.state)
     }
 
     fun cancelActiveSessions(): CancelActiveSessionsResult {
@@ -704,6 +765,11 @@ data class SessionStartResult(
     val plannedTargets: List<String>,
     val geniePackage: String,
     val anchor: Int,
+)
+
+data class PendingDirectSessionStart(
+    val parentSessionId: String,
+    val geniePackage: String,
 )
 
 data class CancelActiveSessionsResult(

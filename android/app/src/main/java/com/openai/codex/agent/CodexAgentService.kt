@@ -137,7 +137,7 @@ class CodexAgentService : AgentService() {
                 Log.w(TAG, "Failed to attach target for $childSessionId", err)
             }
         }
-        if (parentSession.state != rollup.state && !isTerminalSessionState(parentSession.state)) {
+        if (shouldUpdateParentSessionState(parentSession.state, rollup.state)) {
             runCatching {
                 manager.updateSessionState(parentSessionId, rollup.state)
             }.onFailure { err ->
@@ -170,6 +170,22 @@ class CodexAgentService : AgentService() {
             return false
         }
         return !isTerminalSessionState(session.state)
+    }
+
+    private fun shouldUpdateParentSessionState(
+        currentState: Int,
+        proposedState: Int,
+    ): Boolean {
+        if (currentState == proposedState || isTerminalSessionState(currentState)) {
+            return false
+        }
+        if (
+            (currentState == AgentSessionInfo.STATE_RUNNING || currentState == AgentSessionInfo.STATE_WAITING_FOR_USER) &&
+            (proposedState == AgentSessionInfo.STATE_CREATED || proposedState == AgentSessionInfo.STATE_QUEUED)
+        ) {
+            return false
+        }
+        return true
     }
 
     private fun isTerminalSessionState(state: Int): Boolean {

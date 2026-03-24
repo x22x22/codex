@@ -102,6 +102,7 @@ object AgentCodexAppServerClient {
         toolCallHandler: ((String, JSONObject) -> JSONObject)? = null,
         requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
         executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+        requestTimeoutMs: Long = REQUEST_TIMEOUT_MS,
     ): String = synchronized(lifecycleLock) {
         ensureStarted(context.applicationContext)
         activeRequests.incrementAndGet()
@@ -124,7 +125,7 @@ object AgentCodexAppServerClient {
                 outputSchema = outputSchema,
                 executionSettings = executionSettings,
             )
-            waitForTurnCompletion(toolCallHandler, requestUserInputHandler).also { response ->
+            waitForTurnCompletion(toolCallHandler, requestUserInputHandler, requestTimeoutMs).also { response ->
                 Log.i(TAG, "requestText completed response=${response.take(160)}")
             }
         } finally {
@@ -347,10 +348,11 @@ object AgentCodexAppServerClient {
     private fun waitForTurnCompletion(
         toolCallHandler: ((String, JSONObject) -> JSONObject)?,
         requestUserInputHandler: ((JSONArray) -> JSONObject)?,
+        requestTimeoutMs: Long,
     ): String {
         val streamedAgentMessages = mutableMapOf<String, StringBuilder>()
         var finalAgentMessage: String? = null
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(REQUEST_TIMEOUT_MS)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(requestTimeoutMs)
         while (true) {
             val remainingNanos = deadline - System.nanoTime()
             if (remainingNanos <= 0L) {

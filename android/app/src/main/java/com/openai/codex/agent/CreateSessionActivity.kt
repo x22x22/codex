@@ -212,7 +212,7 @@ class CreateSessionActivity : Activity() {
         startButton.isEnabled = false
         thread {
             runCatching {
-                AgentSessionLauncher.startSession(
+                AgentSessionLauncher.startSessionAsync(
                     context = this,
                     request = LaunchSessionRequest(
                         prompt = prompt,

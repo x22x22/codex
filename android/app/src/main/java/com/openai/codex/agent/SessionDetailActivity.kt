@@ -219,7 +219,11 @@ class SessionDetailActivity : Activity() {
                     session = child,
                     parentSession = topLevelSession,
                 )
-            } ?: "Select a child session to inspect it."
+            } ?: if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT && viewState.childSessions.isEmpty()) {
+                "No child sessions yet. The Agent is still planning targets or waiting to start them."
+            } else {
+                "Select a child session to inspect it."
+            }
         findViewById<TextView>(R.id.session_detail_timeline).text = renderTimeline(topLevelSession, selectedChildSession)
 
         val isWaitingForUser = actionableSession.state == AgentSessionInfo.STATE_WAITING_FOR_USER &&
@@ -239,7 +243,7 @@ class SessionDetailActivity : Activity() {
         val topLevelActionNote = findViewById<TextView>(R.id.session_detail_top_level_action_note)
         findViewById<Button>(R.id.session_detail_cancel_button).apply {
             visibility = if (isTopLevelActive) View.VISIBLE else View.GONE
-            text = if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT) {
+            text = if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT && viewState.childSessions.isNotEmpty()) {
                 "Cancel Child Sessions"
             } else {
                 "Cancel Session"
@@ -250,7 +254,9 @@ class SessionDetailActivity : Activity() {
         findViewById<Button>(R.id.session_detail_delete_button).text = "Delete Session"
         topLevelActionNote.visibility = View.VISIBLE
         topLevelActionNote.text = if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT) {
-            if (isTopLevelActive) {
+            if (isTopLevelActive && viewState.childSessions.isEmpty()) {
+                "This Agent-anchored session is still planning targets."
+            } else if (isTopLevelActive) {
                 "Cancelling the top-level session cancels all active child sessions."
             } else {
                 "Deleting the top-level session removes it and its child sessions from the Agent UI."
@@ -426,8 +432,12 @@ class SessionDetailActivity : Activity() {
                 if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT) {
                     val activeChildren = childSessions(latestSnapshot)
                         .filterNot { isTerminalState(it.state) }
-                    activeChildren.forEach { childSession ->
-                        sessionController.cancelSession(childSession.sessionId)
+                    if (activeChildren.isEmpty()) {
+                        sessionController.cancelSession(topLevelSession.sessionId)
+                    } else {
+                        activeChildren.forEach { childSession ->
+                            sessionController.cancelSession(childSession.sessionId)
+                        }
                     }
                 } else {
                     sessionController.cancelSession(topLevelSession.sessionId)
