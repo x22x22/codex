@@ -14,8 +14,11 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
+use crate::analytics_client::InputMessageMetadata;
+use crate::analytics_client::InputMessageRole;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::TurnMetadata;
+use crate::analytics_client::UserMessageType;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -107,6 +110,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
+use codex_protocol::protocol::UserMessageType as SubmittedUserMessageType;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -848,6 +852,7 @@ pub(crate) struct TurnContext {
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
+    pub(crate) user_message_type: Option<SubmittedUserMessageType>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
@@ -1185,6 +1190,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) user_message_type: Option<SubmittedUserMessageType>,
 }
 
 impl Session {
@@ -1403,6 +1409,7 @@ impl Session {
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
+            user_message_type: None,
             approval_policy: session_configuration.approval_policy.clone(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
@@ -2394,6 +2401,7 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
+                updates.user_message_type,
                 sandbox_policy_changed,
             )
             .await)
@@ -2404,6 +2412,7 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        user_message_type: Option<SubmittedUserMessageType>,
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
@@ -2471,6 +2480,7 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
+        turn_context.user_message_type = user_message_type;
         let turn_context = Arc::new(turn_context);
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
@@ -2575,6 +2585,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            /*user_message_type*/ None,
             /*sandbox_policy_changed*/ false,
         )
         .await
@@ -2736,6 +2747,16 @@ impl Session {
         Some((
             Arc::clone(&task.turn_context),
             task.cancellation_token.child_token(),
+        ))
+    }
+
+    async fn active_turn_tracking(&self) -> Option<crate::analytics_client::TrackEventsContext> {
+        let active = self.active_turn.lock().await;
+        let (_, task) = active.as_ref()?.tasks.first()?;
+        Some(build_track_events_context(
+            task.turn_context.model_info.slug.clone(),
+            self.conversation_id.to_string(),
+            task.turn_context.sub_id.clone(),
         ))
     }
 
@@ -3886,6 +3907,7 @@ impl Session {
         let Some((active_turn_id, _)) = active_turn.tasks.first() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
+        let active_turn_id = active_turn_id.clone();
 
         if let Some(expected_turn_id) = expected_turn_id
             && expected_turn_id != active_turn_id
@@ -3913,7 +3935,20 @@ impl Session {
 
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input.into());
-        Ok(active_turn_id.clone())
+        drop(turn_state);
+        drop(active);
+        if let Some(tracking) = self.active_turn_tracking().await {
+            self.services
+                .analytics_events_client
+                .track_input_message_metadata(
+                    tracking,
+                    InputMessageMetadata {
+                        message_role: InputMessageRole::User,
+                        user_message_type: UserMessageType::PromptSteering,
+                    },
+                );
+        }
+        Ok(active_turn_id)
     }
 
     /// Returns the input if there was no task running to inject into.
@@ -4303,7 +4338,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     .await;
                     false
                 }
-                Op::UserInput { .. } | Op::UserTurn { .. } => {
+                Op::UserInput { .. } | Op::UserInputWithMetadata { .. } | Op::UserTurn { .. } => {
                     handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
@@ -4586,6 +4621,7 @@ mod handlers {
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                         app_server_client_name: None,
+                        user_message_type: None,
                     },
                 )
             }
@@ -4596,6 +4632,19 @@ mod handlers {
                 items,
                 SessionSettingsUpdate {
                     final_output_json_schema: Some(final_output_json_schema),
+                    user_message_type: None,
+                    ..Default::default()
+                },
+            ),
+            Op::UserInputWithMetadata {
+                items,
+                final_output_json_schema,
+                user_message_type,
+            } => (
+                items,
+                SessionSettingsUpdate {
+                    final_output_json_schema: Some(final_output_json_schema),
+                    user_message_type,
                     ..Default::default()
                 },
             ),
@@ -5662,6 +5711,18 @@ pub(crate) async fn run_turn(
         user_prompt_submit_outcome.additional_contexts
     };
     if !input.is_empty() {
+        let user_message_type = turn_context
+            .user_message_type
+            .unwrap_or(SubmittedUserMessageType::Prompt);
+        sess.services
+            .analytics_events_client
+            .track_input_message_metadata(
+                tracking.clone(),
+                InputMessageMetadata {
+                    message_role: InputMessageRole::User,
+                    user_message_type,
+                },
+            );
         sess.services.analytics_events_client.track_turn_metadata(
             tracking.clone(),
             TurnMetadata {

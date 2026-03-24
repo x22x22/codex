@@ -2,14 +2,19 @@ use super::AnalyticsEventsQueue;
 use super::AppInvocation;
 use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
+use super::CodexInputMessageMetadataEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
 use super::CodexTurnMetadataEventRequest;
+use super::InputMessageMetadata;
+use super::InputMessageRole;
 use super::InvocationType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::TurnMetadata;
+use super::UserMessageType;
 use super::codex_app_metadata;
+use super::codex_input_message_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
 use super::codex_turn_metadata;
@@ -230,6 +235,42 @@ fn turn_metadata_event_serializes_expected_shape() {
                 "reasoning_summary": "detailed",
                 "service_tier": "flex",
                 "collaboration_mode": "plan"
+            }
+        })
+    );
+}
+
+#[test]
+fn input_message_metadata_event_serializes_expected_shape() {
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-2".to_string(),
+        turn_id: "turn-2".to_string(),
+    };
+    let event = TrackEventRequest::InputMessageMetadata(CodexInputMessageMetadataEventRequest {
+        event_type: "codex_input_message_metadata",
+        event_params: codex_input_message_metadata(
+            &tracking,
+            InputMessageMetadata {
+                message_role: InputMessageRole::User,
+                user_message_type: UserMessageType::PromptSteering,
+            },
+        ),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize input message metadata event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_input_message_metadata",
+            "event_params": {
+                "thread_id": "thread-2",
+                "turn_id": "turn-2",
+                "product_client_id": crate::default_client::originator().value,
+                "model_slug": "gpt-5",
+                "message_role": "user",
+                "user_message_type": "prompt_steering"
             }
         })
     );

@@ -397,6 +397,7 @@ impl AppServerSession {
                     effort,
                     summary,
                     personality,
+                    user_message_type: None,
                     output_schema,
                     collaboration_mode,
                 },

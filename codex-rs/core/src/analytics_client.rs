@@ -10,6 +10,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::UserMessageType;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -35,6 +36,18 @@ pub(crate) struct TurnMetadata {
     pub(crate) reasoning_summary: ReasoningSummary,
     pub(crate) service_tier: Option<ServiceTier>,
     pub(crate) collaboration_mode: ModeKind,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct InputMessageMetadata {
+    pub(crate) message_role: InputMessageRole,
+    pub(crate) user_message_type: UserMessageType,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InputMessageRole {
+    User,
 }
 
 pub(crate) fn build_track_events_context(
@@ -100,6 +113,9 @@ impl AnalyticsEventsQueue {
                     }
                     TrackEventsJob::TurnMetadata(job) => {
                         send_track_turn_metadata(&auth_manager, job).await;
+                    }
+                    TrackEventsJob::InputMessageMetadata(job) => {
+                        send_track_input_message_metadata(&auth_manager, job).await;
                     }
                     TrackEventsJob::PluginUsed(job) => {
                         send_track_plugin_used(&auth_manager, job).await;
@@ -227,6 +243,19 @@ impl AnalyticsEventsClient {
         );
     }
 
+    pub(crate) fn track_input_message_metadata(
+        &self,
+        tracking: TrackEventsContext,
+        input_message_metadata: InputMessageMetadata,
+    ) {
+        track_input_message_metadata(
+            &self.queue,
+            Arc::clone(&self.config),
+            Some(tracking),
+            input_message_metadata,
+        );
+    }
+
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
@@ -269,6 +298,7 @@ enum TrackEventsJob {
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
     TurnMetadata(TrackTurnMetadataJob),
+    InputMessageMetadata(TrackInputMessageMetadataJob),
     PluginUsed(TrackPluginUsedJob),
     PluginInstalled(TrackPluginManagementJob),
     PluginUninstalled(TrackPluginManagementJob),
@@ -298,6 +328,12 @@ struct TrackTurnMetadataJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
     turn_metadata: TurnMetadata,
+}
+
+struct TrackInputMessageMetadataJob {
+    config: Arc<Config>,
+    tracking: TrackEventsContext,
+    input_message_metadata: InputMessageMetadata,
 }
 
 struct TrackPluginUsedJob {
@@ -335,6 +371,7 @@ enum TrackEventRequest {
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     TurnMetadata(CodexTurnMetadataEventRequest),
+    InputMessageMetadata(CodexInputMessageMetadataEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -400,6 +437,22 @@ struct CodexTurnMetadata {
 struct CodexTurnMetadataEventRequest {
     event_type: &'static str,
     event_params: CodexTurnMetadata,
+}
+
+#[derive(Serialize)]
+struct CodexInputMessageMetadata {
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    product_client_id: Option<String>,
+    model_slug: Option<String>,
+    message_role: Option<InputMessageRole>,
+    user_message_type: Option<UserMessageType>,
+}
+
+#[derive(Serialize)]
+struct CodexInputMessageMetadataEventRequest {
+    event_type: &'static str,
+    event_params: CodexInputMessageMetadata,
 }
 
 #[derive(Serialize)]
@@ -519,6 +572,26 @@ pub(crate) fn track_turn_metadata(
         config,
         tracking,
         turn_metadata,
+    });
+    queue.try_send(job);
+}
+
+pub(crate) fn track_input_message_metadata(
+    queue: &AnalyticsEventsQueue,
+    config: Arc<Config>,
+    tracking: Option<TrackEventsContext>,
+    input_message_metadata: InputMessageMetadata,
+) {
+    if config.analytics_enabled == Some(false) {
+        return;
+    }
+    let Some(tracking) = tracking else {
+        return;
+    };
+    let job = TrackEventsJob::InputMessageMetadata(TrackInputMessageMetadataJob {
+        config,
+        tracking,
+        input_message_metadata,
     });
     queue.try_send(job);
 }
@@ -664,6 +737,25 @@ async fn send_track_turn_metadata(auth_manager: &AuthManager, job: TrackTurnMeta
     send_track_events(auth_manager, config, events).await;
 }
 
+async fn send_track_input_message_metadata(
+    auth_manager: &AuthManager,
+    job: TrackInputMessageMetadataJob,
+) {
+    let TrackInputMessageMetadataJob {
+        config,
+        tracking,
+        input_message_metadata,
+    } = job;
+    let events = vec![TrackEventRequest::InputMessageMetadata(
+        CodexInputMessageMetadataEventRequest {
+            event_type: "codex_input_message_metadata",
+            event_params: codex_input_message_metadata(&tracking, input_message_metadata),
+        },
+    )];
+
+    send_track_events(auth_manager, config, events).await;
+}
+
 async fn send_track_plugin_used(auth_manager: &AuthManager, job: TrackPluginUsedJob) {
     let TrackPluginUsedJob {
         config,
@@ -744,6 +836,20 @@ fn codex_turn_metadata(
         reasoning_summary: Some(turn_metadata.reasoning_summary.to_string()),
         service_tier: turn_metadata.service_tier.map(|value| value.to_string()),
         collaboration_mode: Some(collaboration_mode_mode(turn_metadata.collaboration_mode)),
+    }
+}
+
+fn codex_input_message_metadata(
+    tracking: &TrackEventsContext,
+    input_message_metadata: InputMessageMetadata,
+) -> CodexInputMessageMetadata {
+    CodexInputMessageMetadata {
+        thread_id: Some(tracking.thread_id.clone()),
+        turn_id: Some(tracking.turn_id.clone()),
+        product_client_id: Some(crate::default_client::originator().value),
+        model_slug: Some(tracking.model_slug.clone()),
+        message_role: Some(input_message_metadata.message_role),
+        user_message_type: Some(input_message_metadata.user_message_type),
     }
 }
 
