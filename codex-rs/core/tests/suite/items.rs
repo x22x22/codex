@@ -237,10 +237,10 @@ async fn user_turn_tracks_turn_event_analytics() -> anyhow::Result<()> {
         .and_then(|events| {
             events.iter().find(|event| {
                 event["event_type"] == "codex_turn_event"
-                    && event["event_params"]["turn_event_type"] == "start"
+                    && event["event_params"]["submission_type"] == "prompt"
             })
         })
-        .expect("codex_turn_event start event should be present");
+        .expect("codex_turn_event prompt event should be present");
 
     let event_params = &event["event_params"];
 
@@ -328,8 +328,7 @@ async fn user_turn_tracks_turn_event_prompt_type_analytics() -> anyhow::Result<(
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
-        event["event_params"]["turn_event_type"] == "start"
-            && event["event_params"]["submission_type"] == "prompt"
+        event["event_params"]["submission_type"] == "prompt"
     })
     .await;
     let event_params = &event["event_params"];
@@ -444,7 +443,8 @@ async fn user_turn_tracks_turn_steer_analytics() -> anyhow::Result<()> {
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let event = wait_for_analytics_event(&server, "codex_turn_event", |event| {
-        event["event_params"]["turn_event_type"] == "steer"
+        event["event_params"]["submission_type"].is_null()
+            && event["event_params"]["sandbox_policy"].is_null()
     })
     .await;
     let event_params = &event["event_params"];

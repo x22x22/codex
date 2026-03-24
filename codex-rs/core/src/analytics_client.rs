@@ -48,13 +48,6 @@ pub(crate) struct CodexTurnEvent {
     pub(crate) num_input_images: usize,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum TurnEventType {
-    Start,
-    Steer,
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct CodexTurnSteerEvent;
 
@@ -433,7 +426,6 @@ struct CodexTurnEventParams {
     turn_id: Option<String>,
     product_client_id: Option<String>,
     model_slug: Option<String>,
-    turn_event_type: TurnEventType,
     submission_type: Option<SubmissionType>,
     model_provider: Option<String>,
     sandbox_policy: Option<&'static str>,
@@ -821,7 +813,6 @@ fn codex_turn_event_params(
         turn_id: Some(tracking.turn_id.clone()),
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
-        turn_event_type: TurnEventType::Start,
         submission_type: turn_event.submission_type,
         model_provider: Some(turn_event.model_provider),
         sandbox_policy: Some(sandbox_policy_mode(&turn_event.sandbox_policy)),
@@ -851,7 +842,6 @@ fn codex_turn_steer_event_params(
         turn_id: Some(tracking.turn_id.clone()),
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
-        turn_event_type: TurnEventType::Steer,
         submission_type: None,
         model_provider: None,
         sandbox_policy: None,
