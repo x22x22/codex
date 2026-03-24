@@ -6,6 +6,9 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::remote_browser_api::RemoteBrowserApi;
+use crate::remote_browser_tools::build_dynamic_tool_response;
+use crate::remote_browser_tools::is_remote_browser_dynamic_tool;
 use crate::server_request_error::is_turn_transition_server_request_error;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
@@ -17,6 +20,8 @@ use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermis
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
+use codex_app_server_protocol::BrowserSessionCommandParams;
+use codex_app_server_protocol::BrowserSessionUpdatedNotification;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
@@ -192,6 +197,94 @@ async fn resolve_server_request_on_thread_listener(
     }
 }
 
+fn to_core_dynamic_tool_response(
+    response: codex_app_server_protocol::DynamicToolCallResponse,
+) -> CoreDynamicToolResponse {
+    CoreDynamicToolResponse {
+        content_items: response
+            .content_items
+            .into_iter()
+            .map(|item| match item {
+                DynamicToolCallOutputContentItem::InputText { text } => {
+                    CoreDynamicToolCallOutputContentItem::InputText { text }
+                }
+                DynamicToolCallOutputContentItem::InputImage { image_url } => {
+                    CoreDynamicToolCallOutputContentItem::InputImage { image_url }
+                }
+            })
+            .collect(),
+        success: response.success,
+    }
+}
+
+fn remote_browser_error_response(message: String) -> CoreDynamicToolResponse {
+    CoreDynamicToolResponse {
+        content_items: vec![CoreDynamicToolCallOutputContentItem::InputText { text: message }],
+        success: false,
+    }
+}
+
+async fn submit_dynamic_tool_response(
+    conversation: Arc<CodexThread>,
+    call_id: String,
+    response: CoreDynamicToolResponse,
+) {
+    if let Err(err) = conversation
+        .submit(Op::DynamicToolResponse {
+            id: call_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit DynamicToolResponse: {err}");
+    }
+}
+
+async fn handle_remote_browser_dynamic_tool_request(
+    call_id: String,
+    tool: String,
+    arguments: JsonValue,
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+    outgoing: ThreadScopedOutgoingMessageSender,
+    remote_browser_api: RemoteBrowserApi,
+) {
+    let browser_session_id = { thread_state.lock().await.remote_browser_session_id.clone() };
+    let params = BrowserSessionCommandParams {
+        browser_session_id,
+        command: tool,
+        arguments: match arguments {
+            JsonValue::Null => None,
+            value => Some(value),
+        },
+    };
+
+    let response = match remote_browser_api.command_with_artifacts(params).await {
+        Ok(outcome) => {
+            {
+                let mut state = thread_state.lock().await;
+                state.remote_browser_session_id = Some(outcome.browser_session_id.clone());
+            }
+
+            if let Some(browser_state) = outcome.browser_state.to_public_state() {
+                outgoing
+                    .send_server_notification(ServerNotification::BrowserSessionUpdated(
+                        BrowserSessionUpdatedNotification {
+                            browser_session_id: outcome.browser_session_id.clone(),
+                            browser_state,
+                        },
+                    ))
+                    .await;
+            }
+
+            to_core_dynamic_tool_response(build_dynamic_tool_response(outcome))
+        }
+        Err(err) => remote_browser_error_response(err.message),
+    };
+
+    submit_dynamic_tool_response(conversation, call_id, response).await;
+}
+
 fn guardian_auto_approval_review_notification(
     conversation_id: &ThreadId,
     event_turn_id: &str,
@@ -260,6 +353,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     thread_manager: Arc<ThreadManager>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
+    remote_browser_api: RemoteBrowserApi,
     thread_watch_manager: ThreadWatchManager,
     api_version: ApiVersion,
     fallback_model_provider: String,
@@ -918,19 +1012,31 @@ pub(crate) async fn apply_bespoke_event_handling(
                 outgoing
                     .send_server_notification(ServerNotification::ItemStarted(notification))
                     .await;
-                let params = DynamicToolCallParams {
-                    thread_id: conversation_id.to_string(),
-                    turn_id: turn_id.clone(),
-                    call_id: call_id.clone(),
-                    tool: tool.clone(),
-                    arguments: arguments.clone(),
-                };
-                let (_pending_request_id, rx) = outgoing
-                    .send_request(ServerRequestPayload::DynamicToolCall(params))
-                    .await;
-                tokio::spawn(async move {
-                    crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
-                });
+                if remote_browser_api.is_configured() && is_remote_browser_dynamic_tool(&tool) {
+                    tokio::spawn(handle_remote_browser_dynamic_tool_request(
+                        call_id,
+                        tool,
+                        arguments,
+                        conversation,
+                        thread_state.clone(),
+                        outgoing.clone(),
+                        remote_browser_api.clone(),
+                    ));
+                } else {
+                    let params = DynamicToolCallParams {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: turn_id.clone(),
+                        call_id: call_id.clone(),
+                        tool: tool.clone(),
+                        arguments: arguments.clone(),
+                    };
+                    let (_pending_request_id, rx) = outgoing
+                        .send_request(ServerRequestPayload::DynamicToolCall(params))
+                        .await;
+                    tokio::spawn(async move {
+                        crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
+                    });
+                }
             } else {
                 error!(
                     "dynamic tool calls are only supported on api v2 (call_id: {})",

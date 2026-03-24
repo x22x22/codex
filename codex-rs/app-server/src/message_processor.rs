@@ -239,10 +239,12 @@ impl MessageProcessor {
             .set_analytics_events_client(analytics_events_client.clone());
 
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
+        let remote_browser_api = RemoteBrowserApi::new(remote_browser_endpoint);
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),
             outgoing: outgoing.clone(),
+            remote_browser_api: remote_browser_api.clone(),
             arg0_paths,
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
@@ -265,7 +267,6 @@ impl MessageProcessor {
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
         let fs_api = FsApi::default();
-        let remote_browser_api = RemoteBrowserApi::new(remote_browser_endpoint);
 
         Self {
             outgoing,

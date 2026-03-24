@@ -72,6 +72,7 @@ mod message_processor;
 mod models;
 mod outgoing_message;
 mod remote_browser_api;
+mod remote_browser_tools;
 mod server_request_error;
 mod thread_state;
 mod thread_status;

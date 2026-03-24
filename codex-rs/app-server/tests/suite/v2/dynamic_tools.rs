@@ -2,8 +2,10 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
+use codex_app_server_protocol::BrowserSessionUpdatedNotification;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallResponse;
@@ -32,7 +34,11 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -186,6 +192,266 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
             .iter()
             .all(|body| find_tool(body, &dynamic_tool.name).is_none()),
         "hidden dynamic tool should not be sent to the model"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_auto_injects_remote_browser_tools_when_endpoint_is_configured() -> Result<()>
+{
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let remote_browser_server = MockServer::start().await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let remote_browser_endpoint = format!("{}/remote_browser", remote_browser_server.uri());
+    let mut mcp = McpProcess::new_with_args(
+        codex_home.path(),
+        &["--remote-browser-endpoint", &remote_browser_endpoint],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let bodies = responses_bodies(&server).await?;
+    let body = bodies
+        .first()
+        .context("expected at least one responses request")?;
+    assert!(find_tool(body, "create_tab").is_some());
+    assert!(find_tool(body, "tabs_content").is_some());
+    assert!(find_tool(body, "playwright_screenshot").is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_browser_dynamic_tool_calls_are_handled_internally() -> Result<()> {
+    let call_id = "dyn-browser-1";
+    let tool_name = "create_tab";
+    let tool_args = json!({ "url": "https://news.ycombinator.com/" });
+    let tool_call_arguments = serde_json::to_string(&tool_args)?;
+
+    let responses = vec![
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            responses::ev_completed("resp-1"),
+        ]),
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let remote_browser_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/remote_browser"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "browserSessionId": "sess_123",
+            "result": {
+                "tab_id": "tab_123",
+                "selected_tab_id": "tab_123"
+            },
+            "browserState": {
+                "selectedTabId": "tab_123",
+                "tabs": [{
+                    "id": "tab_123",
+                    "title": "Hacker News",
+                    "url": "https://news.ycombinator.com/",
+                    "selected": true
+                }]
+            },
+            "artifacts": {
+                "screenshotBase64": "AAA"
+            }
+        })))
+        .mount(&remote_browser_server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let remote_browser_endpoint = format!("{}/remote_browser", remote_browser_server.uri());
+    let mut mcp = McpProcess::new_with_args(
+        codex_home.path(),
+        &["--remote-browser-endpoint", &remote_browser_endpoint],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+    let thread_id = thread.id.clone();
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "open Hacker News".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+    let turn_id = turn.id.clone();
+
+    let started = wait_for_dynamic_tool_started(&mut mcp, call_id).await?;
+    assert_eq!(started.thread_id, thread_id);
+    assert_eq!(started.turn_id, turn_id.clone());
+
+    assert!(
+        timeout(
+            Duration::from_millis(500),
+            mcp.read_stream_until_request_message()
+        )
+        .await
+        .is_err(),
+        "remote browser tool call should not be forwarded back to the client"
+    );
+
+    let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.browser_session_id, "sess_123");
+    assert_eq!(browser_update.browser_state.selected_tab_id, "tab_123");
+    assert_eq!(browser_update.browser_state.tabs.len(), 1);
+    assert_eq!(browser_update.browser_state.tabs[0].title, "Hacker News");
+
+    let completed = wait_for_dynamic_tool_completed(&mut mcp, call_id).await?;
+    let ThreadItem::DynamicToolCall {
+        status,
+        content_items,
+        success,
+        ..
+    } = completed.item
+    else {
+        panic!("expected dynamic tool call item");
+    };
+    assert_eq!(status, DynamicToolCallStatus::Completed);
+    assert_eq!(success, Some(true));
+    assert_eq!(
+        content_items,
+        Some(vec![
+            DynamicToolCallOutputContentItem::InputText {
+                text: serde_json::to_string_pretty(&json!({
+                    "result": {
+                        "tab_id": "tab_123",
+                        "selected_tab_id": "tab_123"
+                    },
+                    "browser_state": {
+                        "selectedTabId": "tab_123",
+                        "tabs": [{
+                            "id": "tab_123",
+                            "title": "Hacker News",
+                            "url": "https://news.ycombinator.com/",
+                            "selected": true
+                        }]
+                    }
+                }))?
+            },
+            DynamicToolCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+            },
+        ])
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let bodies = responses_bodies(&server).await?;
+    let payload = bodies
+        .iter()
+        .find_map(|body| function_call_output_payload(body, call_id))
+        .context("expected function_call_output in follow-up request")?;
+    let FunctionCallOutputBody::ContentItems(content_items) = payload.body else {
+        panic!("expected content items payload");
+    };
+    assert_eq!(
+        content_items,
+        vec![
+            FunctionCallOutputContentItem::InputText {
+                text: serde_json::to_string_pretty(&json!({
+                    "result": {
+                        "tab_id": "tab_123",
+                        "selected_tab_id": "tab_123"
+                    },
+                    "browser_state": {
+                        "selectedTabId": "tab_123",
+                        "tabs": [{
+                            "id": "tab_123",
+                            "title": "Hacker News",
+                            "url": "https://news.ycombinator.com/",
+                            "selected": true
+                        }]
+                    }
+                }))?,
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
+            },
+        ]
+    );
+
+    let remote_browser_requests = remote_browser_server
+        .received_requests()
+        .await
+        .context("failed to fetch remote browser requests")?;
+    assert_eq!(remote_browser_requests.len(), 1);
+    assert_eq!(
+        remote_browser_requests[0].body_json::<Value>()?,
+        json!({
+            "browserSessionId": null,
+            "command": "create_tab",
+            "arguments": {
+                "url": "https://news.ycombinator.com/"
+            }
+        })
     );
 
     Ok(())
@@ -634,6 +900,20 @@ async fn wait_for_dynamic_tool_completed(
             return Ok(completed);
         }
     }
+}
+
+async fn wait_for_browser_session_updated(
+    mcp: &mut McpProcess,
+) -> Result<BrowserSessionUpdatedNotification> {
+    let notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("browserSession/updated"),
+    )
+    .await??;
+    let params = notification
+        .params
+        .context("browserSession/updated should include params")?;
+    Ok(serde_json::from_value(params)?)
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {

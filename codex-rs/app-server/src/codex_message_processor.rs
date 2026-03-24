@@ -15,6 +15,8 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use crate::outgoing_message::RequestContext;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
+use crate::remote_browser_api::RemoteBrowserApi;
+use crate::remote_browser_tools::merge_remote_browser_dynamic_tools;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
 use chrono::DateTime;
@@ -369,6 +371,7 @@ pub(crate) struct CodexMessageProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
+    remote_browser_api: RemoteBrowserApi,
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
     cli_overrides: Vec<(String, TomlValue)>,
@@ -398,6 +401,7 @@ struct ListenerTaskContext {
     thread_manager: Arc<ThreadManager>,
     thread_state_manager: ThreadStateManager,
     outgoing: Arc<OutgoingMessageSender>,
+    remote_browser_api: RemoteBrowserApi,
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
@@ -413,6 +417,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) thread_manager: Arc<ThreadManager>,
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) remote_browser_api: RemoteBrowserApi,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
@@ -476,6 +481,7 @@ impl CodexMessageProcessor {
             auth_manager,
             thread_manager,
             outgoing,
+            remote_browser_api,
             arg0_paths,
             config,
             cli_overrides,
@@ -487,6 +493,7 @@ impl CodexMessageProcessor {
             auth_manager,
             thread_manager,
             outgoing: outgoing.clone(),
+            remote_browser_api,
             arg0_paths,
             config,
             cli_overrides,
@@ -1879,6 +1886,7 @@ impl CodexMessageProcessor {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
+            remote_browser_api: self.remote_browser_api.clone(),
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.clone(),
@@ -1983,7 +1991,11 @@ impl CodexMessageProcessor {
             }
         };
 
-        let dynamic_tools = dynamic_tools.unwrap_or_default();
+        let dynamic_tools = if listener_task_context.remote_browser_api.is_configured() {
+            merge_remote_browser_dynamic_tools(dynamic_tools.unwrap_or_default())
+        } else {
+            dynamic_tools.unwrap_or_default()
+        };
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
@@ -6694,6 +6706,7 @@ impl CodexMessageProcessor {
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
+                remote_browser_api: self.remote_browser_api.clone(),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
@@ -6781,6 +6794,7 @@ impl CodexMessageProcessor {
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
+                remote_browser_api: self.remote_browser_api.clone(),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
@@ -6812,6 +6826,7 @@ impl CodexMessageProcessor {
             outgoing,
             thread_manager,
             thread_state_manager,
+            remote_browser_api,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
@@ -6906,6 +6921,7 @@ impl CodexMessageProcessor {
                             thread_manager.clone(),
                             thread_outgoing,
                             thread_state.clone(),
+                            remote_browser_api.clone(),
                             thread_watch_manager.clone(),
                             api_version,
                             fallback_model_provider.clone(),
