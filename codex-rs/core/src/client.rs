@@ -269,7 +269,7 @@ impl ModelClient {
     ) -> Self {
         Self::new_with_agent_identity_manager(
             auth_manager,
-            None,
+            /*agent_identity_manager*/ None,
             conversation_id,
             provider,
             session_source,
@@ -319,7 +319,7 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
-        self.new_session_with_agent_task(None)
+        self.new_session_with_agent_task(/*agent_task*/ None)
     }
 
     pub(crate) fn new_session_with_agent_task(
@@ -398,7 +398,7 @@ impl ModelClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
-        let client_setup = self.current_client_setup(None).await?;
+        let client_setup = self.current_client_setup(/*agent_task*/ None).await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
@@ -467,7 +467,7 @@ impl ModelClient {
             return Ok(Vec::new());
         }
 
-        let client_setup = self.current_client_setup(None).await?;
+        let client_setup = self.current_client_setup(/*agent_task*/ None).await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
@@ -602,7 +602,7 @@ impl ModelClient {
                     );
                     CoreAuthProvider::from_authorization_header_value(
                         Some(authorization_header_value),
-                        None,
+                        /*account_id*/ None,
                     )
                 } else {
                     auth_provider_from_auth(auth.clone(), &self.state.provider)?
