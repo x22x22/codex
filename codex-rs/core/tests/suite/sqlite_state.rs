@@ -403,6 +403,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            user_message_type: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {

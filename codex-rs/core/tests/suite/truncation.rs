@@ -494,6 +494,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            user_message_type: None,
         })
         .await?;
 

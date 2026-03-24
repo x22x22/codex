@@ -14,10 +14,10 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
+use crate::analytics_client::CodexTurnEvent;
+use crate::analytics_client::CodexTurnSteerEvent;
 use crate::analytics_client::InvocationType;
-use crate::analytics_client::TurnMetadata;
-use crate::analytics_client::TurnType;
-use crate::analytics_client::UserMessageMetadata;
+use crate::analytics_client::SubmissionOrigin;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -3940,7 +3940,7 @@ impl Session {
         if let Some(tracking) = self.active_turn_tracking().await {
             self.services.analytics_events_client.track_turn_steer(
                 tracking,
-                UserMessageMetadata {
+                CodexTurnSteerEvent {
                     user_message_type: SubmittedUserMessageType::PromptSteering,
                 },
             );
@@ -5709,37 +5709,6 @@ pub(crate) async fn run_turn(
             .await;
         user_prompt_submit_outcome.additional_contexts
     };
-    if !input.is_empty() {
-        let user_message_type = turn_context
-            .user_message_type
-            .unwrap_or(SubmittedUserMessageType::Prompt);
-        sess.services.analytics_events_client.track_turn_start(
-            tracking.clone(),
-            TurnMetadata {
-                model_provider: turn_context.config.model_provider_id.clone(),
-                turn_type: match user_message_type {
-                    SubmittedUserMessageType::Prompt => Some(TurnType::Prompt),
-                    SubmittedUserMessageType::PromptQueued => Some(TurnType::PromptQueued),
-                    SubmittedUserMessageType::PromptSteering => None,
-                },
-                sandbox_policy: turn_context.sandbox_policy.get().clone(),
-                reasoning_effort: turn_context.reasoning_effort,
-                reasoning_summary: Some(turn_context.reasoning_summary),
-                service_tier: turn_context.config.service_tier,
-                approval_policy: turn_context.approval_policy.value(),
-                approvals_reviewer: turn_context.config.approvals_reviewer,
-                sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
-                collaboration_mode: turn_context.collaboration_mode.mode,
-                personality: turn_context.personality,
-                num_input_images: input
-                    .iter()
-                    .filter(|item| {
-                        matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
-                    })
-                    .count(),
-            },
-        );
-    }
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -6051,6 +6020,38 @@ pub(crate) async fn run_turn(
                 break;
             }
         }
+    }
+
+    if !input.is_empty() {
+        let user_message_type = turn_context
+            .user_message_type
+            .unwrap_or(SubmittedUserMessageType::Prompt);
+        sess.services.analytics_events_client.track_turn_event(
+            tracking,
+            CodexTurnEvent {
+                submission_origin: match user_message_type {
+                    SubmittedUserMessageType::Prompt => Some(SubmissionOrigin::Prompt),
+                    SubmittedUserMessageType::PromptQueued => Some(SubmissionOrigin::PromptQueued),
+                    SubmittedUserMessageType::PromptSteering => None,
+                },
+                model_provider: turn_context.config.model_provider_id.clone(),
+                sandbox_policy: turn_context.sandbox_policy.get().clone(),
+                reasoning_effort: turn_context.reasoning_effort,
+                reasoning_summary: turn_context.reasoning_summary,
+                service_tier: turn_context.config.service_tier,
+                approval_policy: turn_context.approval_policy.value(),
+                approvals_reviewer: turn_context.config.approvals_reviewer,
+                sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
+                collaboration_mode: turn_context.collaboration_mode.mode,
+                personality: turn_context.personality,
+                num_input_images: input
+                    .iter()
+                    .filter(|item| {
+                        matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
+                    })
+                    .count(),
+            },
+        );
     }
 
     last_agent_message
