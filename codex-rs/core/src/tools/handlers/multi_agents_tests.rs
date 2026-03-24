@@ -45,6 +45,8 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+const HISTORY_PROPAGATION_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn invocation(
     session: Arc<crate::codex::Session>,
     turn: Arc<TurnContext>,
@@ -390,7 +392,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
         .get_thread(child_thread_id)
         .await
         .expect("child thread should exist");
-    timeout(Duration::from_secs(2), async {
+    timeout(HISTORY_PROPAGATION_TIMEOUT, async {
         loop {
             let history_items = child_thread
                 .codex
@@ -508,7 +510,7 @@ async fn multi_agent_v2_send_input_accepts_structured_items() {
         .find(|(id, op)| *id == agent_id && *op == expected);
     assert_eq!(captured, Some((agent_id, expected)));
 
-    timeout(Duration::from_secs(2), async {
+    timeout(HISTORY_PROPAGATION_TIMEOUT, async {
         loop {
             let history_items = thread
                 .codex

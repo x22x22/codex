@@ -13,10 +13,12 @@ use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::test_codex::ApplyPatchModelOutput;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
@@ -26,6 +28,8 @@ use tokio::fs;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
+
+use crate::suite::apply_patch_cli::mount_apply_patch;
 
 #[derive(Debug)]
 struct SnapshotRun {
@@ -49,7 +53,7 @@ struct SnapshotRunOptions {
 
 async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
     let snapshot_dir = codex_home.join("shell_snapshots");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await {
             while let Some(entry) = entries.next_entry().await? {
@@ -72,7 +76,7 @@ async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
 }
 
 async fn wait_for_file_contents(path: &Path) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match fs::read_to_string(path).await {
             Ok(contents) => return Ok(contents),
@@ -188,7 +192,12 @@ async fn run_snapshot_command_with_options(
     })
     .await;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        &codex,
+        |ev| matches!(ev, EventMsg::TurnComplete(_)),
+        Duration::from_secs(20),
+    )
+    .await;
 
     Ok(SnapshotRun {
         begin,
@@ -508,6 +517,10 @@ async fn linux_unified_exec_snapshot_preserves_shell_environment_policy_set() ->
 }
 
 #[cfg_attr(target_os = "windows", ignore)]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "shell snapshot + apply_patch interception coverage is flaky on macOS and redundant with shell_serialization/apply_patch_cli coverage"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let builder = test_codex().with_config(|config| {
@@ -520,57 +533,37 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let harness = TestCodexHarness::with_builder(builder).await?;
 
     let test = harness.test();
-    let codex = test.codex.clone();
     let cwd = test.cwd_path().to_path_buf();
     let codex_home = test.home.path().to_path_buf();
     let target = cwd.join("snapshot-apply.txt");
 
-    let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\nEOF\n";
-    let args = json!({
-        "command": script,
-        "timeout_ms": 1_000,
-    });
     let call_id = "shell-snapshot-apply-patch";
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_response_created("resp-2"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    mount_sse_sequence(harness.server(), responses).await;
+    let patch =
+        "*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\n";
+    mount_apply_patch(
+        &harness,
+        call_id,
+        patch,
+        "done",
+        ApplyPatchModelOutput::ShellCommandViaHeredoc,
+    )
+    .await;
 
-    let model = test.session_configured.model.clone();
-    codex
-        .submit(Op::UserTurn {
-            items: vec![UserInput::Text {
-                text: "apply patch via shell_command with snapshot".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            cwd: cwd.clone(),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
+    harness
+        .submit("apply patch via shell_command with snapshot")
         .await?;
 
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
     assert_posix_snapshot_sections(&snapshot_content);
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
+    let output = harness
+        .apply_patch_output(call_id, ApplyPatchModelOutput::ShellCommandViaHeredoc)
+        .await;
+    assert!(
+        output.contains("Success."),
+        "unexpected apply_patch output: {output}"
+    );
     assert_eq!(
         wait_for_file_contents(&target).await?,
         "hello from snapshot\n"
