@@ -14,11 +14,10 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
-use crate::analytics_client::InputMessageMetadata;
-use crate::analytics_client::InputMessageRole;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::TurnMetadata;
-use crate::analytics_client::UserMessageType;
+use crate::analytics_client::TurnType;
+use crate::analytics_client::UserMessageMetadata;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -949,6 +948,7 @@ impl TurnContext {
             provider: self.provider.clone(),
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
+            user_message_type: None,
             session_source: self.session_source.clone(),
             environment: Arc::clone(&self.environment),
             cwd: self.cwd.clone(),
@@ -3942,9 +3942,8 @@ impl Session {
                 .analytics_events_client
                 .track_input_message_metadata(
                     tracking,
-                    InputMessageMetadata {
-                        message_role: InputMessageRole::User,
-                        user_message_type: UserMessageType::PromptSteering,
+                    UserMessageMetadata {
+                        user_message_type: SubmittedUserMessageType::PromptSteering,
                     },
                 );
         }
@@ -4596,6 +4595,7 @@ mod handlers {
                 items,
                 collaboration_mode,
                 personality,
+                user_message_type,
             } => {
                 let collaboration_mode = collaboration_mode.or_else(|| {
                     Some(CollaborationMode {
@@ -4621,7 +4621,7 @@ mod handlers {
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                         app_server_client_name: None,
-                        user_message_type: None,
+                        user_message_type,
                     },
                 )
             }
@@ -5412,6 +5412,7 @@ async fn spawn_review_thread(
         provider: provider_for_context,
         reasoning_effort,
         reasoning_summary,
+        user_message_type: None,
         session_source,
         environment: Arc::clone(&parent_turn_context.environment),
         tools_config,
@@ -5714,19 +5715,15 @@ pub(crate) async fn run_turn(
         let user_message_type = turn_context
             .user_message_type
             .unwrap_or(SubmittedUserMessageType::Prompt);
-        sess.services
-            .analytics_events_client
-            .track_input_message_metadata(
-                tracking.clone(),
-                InputMessageMetadata {
-                    message_role: InputMessageRole::User,
-                    user_message_type,
-                },
-            );
         sess.services.analytics_events_client.track_turn_metadata(
             tracking.clone(),
             TurnMetadata {
                 model_provider: turn_context.config.model_provider_id.clone(),
+                turn_type: match user_message_type {
+                    SubmittedUserMessageType::Prompt => Some(TurnType::Prompt),
+                    SubmittedUserMessageType::PromptQueued => Some(TurnType::PromptQueued),
+                    SubmittedUserMessageType::PromptSteering => None,
+                },
                 sandbox_policy: turn_context.sandbox_policy.get().clone(),
                 reasoning_effort: turn_context.reasoning_effort,
                 reasoning_summary: Some(turn_context.reasoning_summary),

@@ -34,6 +34,7 @@ pub(crate) struct TrackEventsContext {
 
 #[derive(Clone)]
 pub(crate) struct TurnMetadata {
+    pub(crate) turn_type: Option<TurnType>,
     pub(crate) model_provider: String,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
@@ -47,16 +48,16 @@ pub(crate) struct TurnMetadata {
     pub(crate) num_input_images: usize,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct InputMessageMetadata {
-    pub(crate) message_role: InputMessageRole,
-    pub(crate) user_message_type: UserMessageType,
-}
-
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum InputMessageRole {
-    User,
+pub(crate) enum TurnType {
+    Prompt,
+    PromptQueued,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct UserMessageMetadata {
+    pub(crate) user_message_type: UserMessageType,
 }
 
 pub(crate) fn build_track_events_context(
@@ -255,7 +256,7 @@ impl AnalyticsEventsClient {
     pub(crate) fn track_input_message_metadata(
         &self,
         tracking: TrackEventsContext,
-        input_message_metadata: InputMessageMetadata,
+        input_message_metadata: UserMessageMetadata,
     ) {
         track_input_message_metadata(
             &self.queue,
@@ -342,7 +343,7 @@ struct TrackTurnMetadataJob {
 struct TrackInputMessageMetadataJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
-    input_message_metadata: InputMessageMetadata,
+    input_message_metadata: UserMessageMetadata,
 }
 
 struct TrackPluginUsedJob {
@@ -435,6 +436,7 @@ struct CodexTurnMetadata {
     turn_id: String,
     product_client_id: Option<String>,
     model: Option<String>,
+    turn_type: Option<TurnType>,
     model_provider: String,
     sandbox_policy: Option<&'static str>,
     reasoning_effort: Option<String>,
@@ -460,7 +462,6 @@ struct CodexInputMessageMetadata {
     turn_id: Option<String>,
     product_client_id: Option<String>,
     model_slug: Option<String>,
-    message_role: Option<InputMessageRole>,
     user_message_type: Option<UserMessageType>,
 }
 
@@ -595,7 +596,7 @@ pub(crate) fn track_input_message_metadata(
     queue: &AnalyticsEventsQueue,
     config: Arc<Config>,
     tracking: Option<TrackEventsContext>,
-    input_message_metadata: InputMessageMetadata,
+    input_message_metadata: UserMessageMetadata,
 ) {
     if config.analytics_enabled == Some(false) {
         return;
@@ -844,6 +845,7 @@ fn codex_turn_metadata(
         turn_id: tracking.turn_id.clone(),
         product_client_id: Some(crate::default_client::originator().value),
         model: Some(tracking.model_slug.clone()),
+        turn_type: turn_metadata.turn_type,
         model_provider: turn_metadata.model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&turn_metadata.sandbox_policy)),
         reasoning_effort: turn_metadata
@@ -865,14 +867,13 @@ fn codex_turn_metadata(
 
 fn codex_input_message_metadata(
     tracking: &TrackEventsContext,
-    input_message_metadata: InputMessageMetadata,
+    input_message_metadata: UserMessageMetadata,
 ) -> CodexInputMessageMetadata {
     CodexInputMessageMetadata {
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         product_client_id: Some(crate::default_client::originator().value),
         model_slug: Some(tracking.model_slug.clone()),
-        message_role: Some(input_message_metadata.message_role),
         user_message_type: Some(input_message_metadata.user_message_type),
     }
 }

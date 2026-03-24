@@ -319,6 +319,11 @@ pub enum Op {
         /// Optional personality override for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Semantic classification of this submitted user message when known by
+        /// the higher-level surface.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_message_type: Option<UserMessageType>,
     },
 
     /// Inter-agent communication that should be recorded as assistant history
