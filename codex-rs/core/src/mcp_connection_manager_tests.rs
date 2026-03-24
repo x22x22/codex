@@ -642,3 +642,72 @@ fn transport_origin_is_stdio_for_stdio_transport() {
 
     assert_eq!(transport_origin(&transport), Some("stdio".to_string()));
 }
+
+#[test]
+fn sandboxed_stdio_mcp_startup_error_blocks_windows_stdio_servers() {
+    let sandbox_state = SandboxState {
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        codex_linux_sandbox_exe: None,
+        sandbox_cwd: PathBuf::from("/tmp"),
+        use_legacy_landlock: false,
+    };
+    let transport = McpServerTransportConfig::Stdio {
+        command: "bridge-server".to_string(),
+        args: Vec::new(),
+        env: None,
+        env_vars: Vec::new(),
+        cwd: None,
+    };
+
+    let error = sandboxed_stdio_mcp_startup_error(&transport, &sandbox_state, true);
+
+    assert_eq!(
+        error,
+        Some(
+            "Local stdio MCP servers are disabled while Windows sandboxing is enabled because they run outside the sandbox and can access host resources. Use a streamable HTTP MCP server, or disable sandboxing if you intend to grant host access.".to_string()
+        )
+    );
+}
+
+#[test]
+fn sandboxed_stdio_mcp_startup_error_allows_http_servers() {
+    let sandbox_state = SandboxState {
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        codex_linux_sandbox_exe: None,
+        sandbox_cwd: PathBuf::from("/tmp"),
+        use_legacy_landlock: false,
+    };
+    let transport = McpServerTransportConfig::StreamableHttp {
+        url: "https://example.com/mcp".to_string(),
+        bearer_token_env_var: None,
+        http_headers: None,
+        env_http_headers: None,
+    };
+
+    assert_eq!(
+        sandboxed_stdio_mcp_startup_error(&transport, &sandbox_state, true),
+        None
+    );
+}
+
+#[test]
+fn sandboxed_stdio_mcp_startup_error_allows_stdio_without_windows_sandbox() {
+    let sandbox_state = SandboxState {
+        sandbox_policy: SandboxPolicy::DangerFullAccess,
+        codex_linux_sandbox_exe: None,
+        sandbox_cwd: PathBuf::from("/tmp"),
+        use_legacy_landlock: false,
+    };
+    let transport = McpServerTransportConfig::Stdio {
+        command: "bridge-server".to_string(),
+        args: Vec::new(),
+        env: None,
+        env_vars: Vec::new(),
+        cwd: None,
+    };
+
+    assert_eq!(
+        sandboxed_stdio_mcp_startup_error(&transport, &sandbox_state, true),
+        None
+    );
+}

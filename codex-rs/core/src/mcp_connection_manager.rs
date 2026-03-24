@@ -501,6 +501,20 @@ impl AsyncManagedClient {
         }
     }
 
+    fn failed(tool_plugin_provenance: Arc<ToolPluginProvenance>, error: String) -> Self {
+        let startup_complete = Arc::new(AtomicBool::new(true));
+        let client = futures::future::ready(Err(StartupOutcomeError::Failed { error }))
+            .boxed()
+            .shared();
+
+        Self {
+            client,
+            startup_snapshot: None,
+            startup_complete,
+            tool_plugin_provenance,
+        }
+    }
+
     async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
         self.client.clone().await
     }
@@ -671,16 +685,24 @@ impl McpConnectionManager {
             } else {
                 None
             };
-            let async_managed_client = AsyncManagedClient::new(
-                server_name.clone(),
-                cfg,
-                store_mode,
-                cancel_token.clone(),
-                tx_event.clone(),
-                elicitation_requests.clone(),
-                codex_apps_tools_cache_context,
-                Arc::clone(&tool_plugin_provenance),
-            );
+            let async_managed_client = if let Some(error) = sandboxed_stdio_mcp_startup_error(
+                &cfg.transport,
+                &initial_sandbox_state,
+                cfg!(windows),
+            ) {
+                AsyncManagedClient::failed(Arc::clone(&tool_plugin_provenance), error)
+            } else {
+                AsyncManagedClient::new(
+                    server_name.clone(),
+                    cfg,
+                    store_mode,
+                    cancel_token.clone(),
+                    tx_event.clone(),
+                    elicitation_requests.clone(),
+                    codex_apps_tools_cache_context,
+                    Arc::clone(&tool_plugin_provenance),
+                )
+            };
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
@@ -1577,6 +1599,30 @@ fn transport_origin(transport: &McpServerTransportConfig) -> Option<String> {
             Some(parsed.origin().ascii_serialization())
         }
         McpServerTransportConfig::Stdio { .. } => Some("stdio".to_string()),
+    }
+}
+
+fn sandboxed_stdio_mcp_startup_error(
+    transport: &McpServerTransportConfig,
+    sandbox_state: &SandboxState,
+    is_windows_host: bool,
+) -> Option<String> {
+    if !is_windows_host {
+        return None;
+    }
+
+    if !matches!(
+        sandbox_state.sandbox_policy,
+        SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+    ) {
+        return None;
+    }
+
+    match transport {
+        McpServerTransportConfig::Stdio { .. } => Some(
+            "Local stdio MCP servers are disabled while Windows sandboxing is enabled because they run outside the sandbox and can access host resources. Use a streamable HTTP MCP server, or disable sandboxing if you intend to grant host access.".to_string(),
+        ),
+        McpServerTransportConfig::StreamableHttp { .. } => None,
     }
 }
 
