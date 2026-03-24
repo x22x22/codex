@@ -38,9 +38,8 @@ class AgentBridgeClient(
         private const val HEADER_VALUE_IDENTITY = "identity"
     }
 
+    private val frameworkCallback = callback
     private val bridgeFd: ParcelFileDescriptor = callback.openSessionBridge(sessionId)
-    private val frameworkHttpBridgeFd: ParcelFileDescriptor =
-        FrameworkSessionTransportCompat.openFrameworkSessionBridge(callback, sessionId)
     private val input = DataInputStream(BufferedInputStream(FileInputStream(bridgeFd.fileDescriptor)))
     private val output = DataOutputStream(BufferedOutputStream(FileOutputStream(bridgeFd.fileDescriptor)))
     private val ioLock = Any()
@@ -85,21 +84,20 @@ class AgentBridgeClient(
     }
 
     fun sendResponsesRequest(body: String): AgentResponsesHttpResponse {
-        val response = ParcelFileDescriptor.dup(frameworkHttpBridgeFd.fileDescriptor).use { requestBridge ->
-            FrameworkSessionTransportCompat.executeRequestAndReadFully(
-                bridge = requestBridge,
-                request = FrameworkSessionTransportCompat.HttpRequest(
-                    method = RESPONSES_METHOD,
-                    path = frameworkResponsesPath,
-                    headers = Bundle().apply {
-                        putString(HEADER_CONTENT_TYPE, HEADER_VALUE_APPLICATION_JSON)
-                        putString(HEADER_ACCEPT, HEADER_VALUE_TEXT_EVENT_STREAM)
-                        putString(HEADER_ACCEPT_ENCODING, HEADER_VALUE_IDENTITY)
-                    },
-                    body = body.toByteArray(StandardCharsets.UTF_8),
-                ),
-            )
-        }
+        val response = FrameworkSessionTransportCompat.executeStreamingRequest(
+            callback = frameworkCallback,
+            sessionId = sessionId,
+            request = FrameworkSessionTransportCompat.HttpRequest(
+                method = RESPONSES_METHOD,
+                path = frameworkResponsesPath,
+                headers = Bundle().apply {
+                    putString(HEADER_CONTENT_TYPE, HEADER_VALUE_APPLICATION_JSON)
+                    putString(HEADER_ACCEPT, HEADER_VALUE_TEXT_EVENT_STREAM)
+                    putString(HEADER_ACCEPT_ENCODING, HEADER_VALUE_IDENTITY)
+                },
+                body = body.toByteArray(StandardCharsets.UTF_8),
+            ),
+        )
         return AgentResponsesHttpResponse(
             statusCode = response.statusCode,
             body = response.bodyString,
@@ -111,7 +109,6 @@ class AgentBridgeClient(
             runCatching { input.close() }
             runCatching { output.close() }
             runCatching { bridgeFd.close() }
-            runCatching { frameworkHttpBridgeFd.close() }
         }
     }
 

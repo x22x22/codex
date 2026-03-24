@@ -177,7 +177,8 @@ the Android Agent/Genie flow.
 - Agent-hosted runtime metadata for Genie bootstrap
 - Shell-first Genie execution for package inspection, activity launch, input injection, and UI dumping
 - Hosted `codex app-server` inside Genie, with model traffic routed through the
-  app-server request/response channel and then through the framework-owned HTTP bridge
+  app-server request/response channel and then through the framework-owned
+  streaming HTTP exchange bridge
 - Per-session framework transport provisioning in
   `android/bridge/src/main/java/com/openai/codex/bridge/FrameworkSessionTransportCompat.kt`
 - Framework-only Android dynamic tools registered on the Genie Codex thread with:
@@ -228,7 +229,7 @@ the Android Agent/Genie flow.
   - Agent-owned Responses transport used by the hosted Agent runtime itself
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
   - Genie-side client for the framework-managed control bridge plus the
-    framework-owned HTTP bridge
+    framework-owned streaming HTTP exchange bridge
 - `android/app/src/main/java/com/openai/codex/agent/AgentCodexAppServerClient.kt`
   - hosted Agent `codex app-server` client for planning, orchestration, auto-answering, runtime metadata, and narrow Agent tool calls
 
