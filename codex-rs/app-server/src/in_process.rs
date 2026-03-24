@@ -77,6 +77,8 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::state_db::StateDbHandle;
+use codex_core::state_db::init;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::mpsc;
@@ -325,7 +327,13 @@ impl InProcessClientHandle {
 /// the runtime is shut down and an `InvalidData` error is returned.
 pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
     let initialize = args.initialize.clone();
-    let client = start_uninitialized(args);
+    let state_db = init(args.config.as_ref()).await.ok_or_else(|| {
+        IoError::other(format!(
+            "failed to initialize state db at {}",
+            args.config.sqlite_home.display()
+        ))
+    })?;
+    let client = start_uninitialized(args, state_db);
 
     let initialize_response = client
         .request(ClientRequest::Initialize {
@@ -345,7 +353,7 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
     Ok(client)
 }
 
-fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
+fn start_uninitialized(args: InProcessStartArgs, state_db: StateDbHandle) -> InProcessClientHandle {
     let channel_capacity = args.channel_capacity.max(1);
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
@@ -388,6 +396,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 cloud_requirements: args.cloud_requirements,
                 feedback: args.feedback,
                 log_db: None,
+                state_db,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 enable_codex_api_key_env: args.enable_codex_api_key_env,
@@ -693,13 +702,17 @@ mod tests {
     use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     async fn build_test_config() -> Config {
-        match ConfigBuilder::default().build().await {
-            Ok(config) => config,
-            Err(_) => Config::load_default_with_cli_overrides(Vec::new())
-                .expect("default config should load"),
-        }
+        let codex_home = TempDir::new().expect("create temp dir");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("test config should build");
+        std::mem::forget(codex_home);
+        config
     }
 
     async fn start_test_client_with_capacity(

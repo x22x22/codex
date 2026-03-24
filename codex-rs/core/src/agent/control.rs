@@ -205,6 +205,9 @@ impl AgentControl {
                         .or(find_thread_path_by_id_str(
                             config.codex_home.as_path(),
                             &parent_thread_id.to_string(),
+                            parent_thread
+                                .as_ref()
+                                .and_then(|parent_thread| parent_thread.state_db()),
                         )
                         .await?)
                         .ok_or_else(|| {
@@ -377,6 +380,7 @@ impl AgentControl {
         }
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let state_db_ctx = state_db::get_state_db(&config).await;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -386,7 +390,7 @@ impl AgentControl {
                 agent_nickname: _,
             }) => {
                 let (resumed_agent_nickname, resumed_agent_role) =
-                    if let Some(state_db_ctx) = state_db::get_state_db(&config).await {
+                    if let Some(state_db_ctx) = state_db_ctx.as_ref() {
                         match state_db_ctx.get_thread(thread_id).await {
                             Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
                             Ok(None) | Err(_) => (None, None),
@@ -413,18 +417,22 @@ impl AgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
-        let rollout_path =
-            match find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
-                .await?
-            {
-                Some(rollout_path) => rollout_path,
-                None => find_archived_thread_path_by_id_str(
-                    config.codex_home.as_path(),
-                    &thread_id.to_string(),
-                )
-                .await?
-                .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?,
-            };
+        let rollout_path = match find_thread_path_by_id_str(
+            config.codex_home.as_path(),
+            &thread_id.to_string(),
+            state_db_ctx.clone(),
+        )
+        .await?
+        {
+            Some(rollout_path) => rollout_path,
+            None => find_archived_thread_path_by_id_str(
+                config.codex_home.as_path(),
+                &thread_id.to_string(),
+                state_db_ctx,
+            )
+            .await?
+            .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?,
+        };
 
         let resumed_thread = state
             .resume_thread_from_rollout_with_source(

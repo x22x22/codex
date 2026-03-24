@@ -1251,25 +1251,9 @@ async fn find_thread_path_by_id_str_in_subdir(
 }
 
 /// Locate a recorded thread rollout file by its UUID string using the existing
-/// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
-/// or the id is invalid.
+/// paginated listing implementation. Uses `state_db_ctx` when available to avoid reopening
+/// SQLite. Returns `Ok(Some(path))` if found, `Ok(None)` if not present or the id is invalid.
 pub async fn find_thread_path_by_id_str(
-    codex_home: &Path,
-    id_str: &str,
-) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir(
-        codex_home,
-        SESSIONS_SUBDIR,
-        id_str,
-        /*state_db_ctx*/ None,
-    )
-    .await
-}
-
-/// Locate a recorded thread rollout file by its UUID string using an already-open SQLite handle
-/// when available. Returns `Ok(Some(path))` if found, `Ok(None)` if not present or the id is
-/// invalid.
-pub async fn find_thread_path_by_id_str_with_state_db(
     codex_home: &Path,
     id_str: &str,
     state_db_ctx: Option<crate::state_db::StateDbHandle>,
@@ -1277,23 +1261,9 @@ pub async fn find_thread_path_by_id_str_with_state_db(
     find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str, state_db_ctx).await
 }
 
-/// Locate an archived thread rollout file by its UUID string.
+/// Locate an archived thread rollout file by its UUID string. Uses `state_db_ctx` when available
+/// to avoid reopening SQLite.
 pub async fn find_archived_thread_path_by_id_str(
-    codex_home: &Path,
-    id_str: &str,
-) -> io::Result<Option<PathBuf>> {
-    find_thread_path_by_id_str_in_subdir(
-        codex_home,
-        ARCHIVED_SESSIONS_SUBDIR,
-        id_str,
-        /*state_db_ctx*/ None,
-    )
-    .await
-}
-
-/// Locate an archived thread rollout file by its UUID string using an already-open SQLite handle
-/// when available.
-pub async fn find_archived_thread_path_by_id_str_with_state_db(
     codex_home: &Path,
     id_str: &str,
     state_db_ctx: Option<crate::state_db::StateDbHandle>,

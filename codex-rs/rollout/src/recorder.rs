@@ -287,6 +287,12 @@ impl RolloutRecorder {
         )
         .await
         {
+            if db_page.items.is_empty() && !fs_page.items.is_empty() {
+                tracing::warn!(
+                    "state db discrepancy during list_threads_with_db_fallback: empty_db_page"
+                );
+                return Ok(truncate_fs_page(fs_page, page_size, sort_key));
+            }
             return Ok(db_page.into());
         }
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
