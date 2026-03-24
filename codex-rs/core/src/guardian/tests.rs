@@ -624,7 +624,7 @@ async fn replacing_parent_history_clears_guardian_parent_transcript_boundary() -
     let boundary = session.clone_history().await.raw_items().len();
     session
         .guardian_review_session
-        .set_parent_history_boundary(Some(boundary))
+        .set_parent_history_boundary(/*boundary*/ Some(boundary))
         .await;
 
     session
@@ -694,7 +694,7 @@ async fn out_of_range_parent_history_boundary_uses_current_history() -> anyhow::
     let out_of_range_boundary = session.clone_history().await.raw_items().len() + 1;
     session
         .guardian_review_session
-        .set_parent_history_boundary(Some(out_of_range_boundary))
+        .set_parent_history_boundary(/*boundary*/ Some(out_of_range_boundary))
         .await;
 
     let prompt = build_guardian_prompt_items(
@@ -714,6 +714,110 @@ async fn out_of_range_parent_history_boundary_uses_current_history() -> anyhow::
 
     assert!(prompt_text.contains("Please check the repo visibility"));
     assert!(prompt_text.contains("The repo is public; I now need approval"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_followup_prompt_layout_matches_snapshot() -> anyhow::Result<()> {
+    let (session, turn) = crate::codex::make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let initial_prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        Some("Sandbox denied outbound git push to github.com.".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-initial-diff".to_string(),
+            command: vec!["git".to_string(), "push".to_string(), "origin".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the first docs fix.".to_string()),
+        },
+    )
+    .await?;
+
+    let boundary = session.clone_history().await.raw_items().len();
+    session
+        .guardian_review_session
+        .set_parent_history_boundary(/*boundary*/ Some(boundary))
+        .await;
+
+    session
+        .record_into_history(
+            &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Show me the follow-up diff, then push the release branch."
+                            .to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "shell".to_string(),
+                    namespace: None,
+                    arguments: "{\"cmd\":\"git diff --stat HEAD~1..HEAD\"}".to_string(),
+                    call_id: "call-followup-diff".to_string(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "call-followup-diff".to_string(),
+                    output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                        " docs/guardian.md | 6 +++---\n 1 file changed, 3 insertions(+), 3 deletions(-)"
+                            .to_string(),
+                    ),
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "The follow-up diff only touches guardian docs; I now need approval to push the release branch."
+                            .to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+            ],
+            turn.as_ref(),
+        )
+        .await;
+
+    let followup_prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        Some("The earlier guardian review already approved the first docs fix.".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-followup-diff".to_string(),
+            command: vec!["git".to_string(), "push".to_string(), "release".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the release branch.".to_string()),
+        },
+    )
+    .await?;
+
+    let mut settings = Settings::clone_current();
+    settings.set_snapshot_path("snapshots");
+    settings.set_prepend_module_to_snapshot(false);
+    settings.bind(|| {
+        assert_snapshot!(
+            "codex_core__guardian__tests__guardian_followup_prompt_layout",
+            format!(
+                "Scenario: Guardian follow-up prompt layout\n\n\
+                 ## Initial Guardian Prompt\n\
+                 {}\n\n\
+                 ## Follow-up Guardian Prompt\n\
+                 {}",
+                guardian_prompt_text(&initial_prompt),
+                guardian_prompt_text(&followup_prompt),
+            )
+        );
+    });
 
     Ok(())
 }

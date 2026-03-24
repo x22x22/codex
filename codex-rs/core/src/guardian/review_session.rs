@@ -911,7 +911,9 @@ mod tests {
     async fn parent_history_boundary_persists_without_cached_trunk() {
         let manager = GuardianReviewSessionManager::default();
 
-        manager.set_parent_history_boundary(Some(7)).await;
+        manager
+            .set_parent_history_boundary(/*boundary*/ Some(7))
+            .await;
         assert_eq!(manager.parent_history_boundary().await, Some(7));
 
         let state = manager.state.lock().await;
@@ -923,8 +925,10 @@ mod tests {
     async fn clearing_parent_history_boundary_without_cached_trunk_updates_manager_state() {
         let manager = GuardianReviewSessionManager::default();
 
-        manager.set_parent_history_boundary(Some(7)).await;
-        manager.set_parent_history_boundary(None).await;
+        manager
+            .set_parent_history_boundary(/*boundary*/ Some(7))
+            .await;
+        manager.set_parent_history_boundary(/*boundary*/ None).await;
 
         assert_eq!(manager.parent_history_boundary().await, None);
         assert_eq!(manager.state.lock().await.parent_history_boundary, None);

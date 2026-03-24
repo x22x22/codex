@@ -56,7 +56,7 @@ async fn mark_terminal_guardian_review_boundary(session: &Session) {
     let boundary = session.clone_history().await.raw_items().len();
     session
         .guardian_review_session
-        .set_parent_history_boundary(Some(boundary))
+        .set_parent_history_boundary(/*boundary*/ Some(boundary))
         .await;
 }
 

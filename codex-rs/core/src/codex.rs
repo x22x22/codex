@@ -3392,7 +3392,7 @@ impl Session {
             state.replace_history(items, reference_context_item);
         }
         self.guardian_review_session
-            .set_parent_history_boundary(None)
+            .set_parent_history_boundary(/*boundary*/ None)
             .await;
     }
 
