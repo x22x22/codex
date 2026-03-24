@@ -8,9 +8,9 @@ use super::CodexThreadStartedEvent;
 use super::CodexThreadStartedEventRequest;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
+use super::InitialHistoryType;
 use super::InvocationType;
 use super::SubmissionType;
-use super::ThreadCreateSource;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::codex_app_metadata;
@@ -32,6 +32,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -279,8 +280,9 @@ fn thread_started_event_serializes_expected_shape() {
             personality: Some(Personality::Friendly),
             ephemeral: true,
             session_source: SessionSource::Exec,
+            initial_history_type: InitialHistoryType::New,
+            subagent_source: None,
             parent_thread_id: None,
-            create_source: ThreadCreateSource::ThreadStart,
             created_at: 1_716_000_000,
         }),
     });
@@ -307,12 +309,44 @@ fn thread_started_event_serializes_expected_shape() {
                 "personality": "friendly",
                 "ephemeral": true,
                 "session_source": "exec",
+                "initial_history_type": "new",
+                "subagent_source": null,
                 "parent_thread_id": null,
-                "create_source": "thread_start",
                 "created_at": 1716000000
             }
         })
     );
+}
+
+#[test]
+fn thread_started_event_serializes_subagent_source() {
+    let event = TrackEventRequest::ThreadStarted(CodexThreadStartedEventRequest {
+        event_type: "codex_thread_started",
+        event_params: codex_thread_started_event_params(CodexThreadStartedEvent {
+            thread_id: "thread-1".to_string(),
+            model: "gpt-5".to_string(),
+            model_provider: "openai".to_string(),
+            reasoning_effort: None,
+            reasoning_summary: None,
+            service_tier: None,
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_network_access: false,
+            collaboration_mode: ModeKind::Default,
+            personality: None,
+            ephemeral: false,
+            session_source: SessionSource::SubAgent(SubAgentSource::Review),
+            initial_history_type: InitialHistoryType::New,
+            subagent_source: Some(SubAgentSource::Review),
+            parent_thread_id: None,
+            created_at: 1,
+        }),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize subagent thread started event");
+    assert_eq!(payload["event_params"]["session_source"], "subagent");
+    assert_eq!(payload["event_params"]["subagent_source"], "review");
 }
 
 #[test]

@@ -14,6 +14,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::SubmissionType;
 use serde::Serialize;
 use sha1::Digest;
@@ -49,8 +50,9 @@ pub(crate) struct CodexThreadStartedEvent {
     pub(crate) personality: Option<Personality>,
     pub(crate) ephemeral: bool,
     pub(crate) session_source: SessionSource,
+    pub(crate) initial_history_type: InitialHistoryType,
+    pub(crate) subagent_source: Option<SubAgentSource>,
     pub(crate) parent_thread_id: Option<String>,
-    pub(crate) create_source: ThreadCreateSource,
     pub(crate) created_at: u64,
 }
 
@@ -73,10 +75,10 @@ pub(crate) struct CodexTurnEvent {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ThreadCreateSource {
-    ThreadStart,
-    ThreadFork,
-    DetachedReview,
+pub(crate) enum InitialHistoryType {
+    New,
+    Forked,
+    Resumed,
 }
 
 pub(crate) fn build_track_events_context(
@@ -432,9 +434,10 @@ struct CodexThreadStartedEventParams {
     collaboration_mode: &'static str,
     personality: Option<String>,
     ephemeral: bool,
-    session_source: SessionSource,
+    session_source: String,
+    initial_history_type: InitialHistoryType,
+    subagent_source: Option<String>,
     parent_thread_id: Option<String>,
-    create_source: ThreadCreateSource,
     created_at: u64,
 }
 
@@ -929,9 +932,10 @@ fn codex_thread_started_event_params(
         collaboration_mode: collaboration_mode_mode(thread_event.collaboration_mode),
         personality: thread_event.personality.map(|value| value.to_string()),
         ephemeral: thread_event.ephemeral,
-        session_source: thread_event.session_source,
+        session_source: session_source_name(&thread_event.session_source),
+        initial_history_type: thread_event.initial_history_type,
+        subagent_source: thread_event.subagent_source.map(subagent_source_name),
         parent_thread_id: thread_event.parent_thread_id,
-        create_source: thread_event.create_source,
         created_at: thread_event.created_at,
     }
 }
@@ -986,6 +990,28 @@ fn collaboration_mode_mode(mode: ModeKind) -> &'static str {
         ModeKind::Default => "default",
         ModeKind::PairProgramming => "pair_programming",
         ModeKind::Execute => "execute",
+    }
+}
+
+fn session_source_name(session_source: &SessionSource) -> String {
+    match session_source {
+        SessionSource::Cli => "cli".to_string(),
+        SessionSource::VSCode => "vscode".to_string(),
+        SessionSource::Exec => "exec".to_string(),
+        SessionSource::Mcp => "mcp".to_string(),
+        SessionSource::Custom(source) => source.clone(),
+        SessionSource::SubAgent(_) => "subagent".to_string(),
+        SessionSource::Unknown => "unknown".to_string(),
+    }
+}
+
+fn subagent_source_name(subagent_source: SubAgentSource) -> String {
+    match subagent_source {
+        SubAgentSource::Review => "review".to_string(),
+        SubAgentSource::Compact => "compact".to_string(),
+        SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
+        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
+        SubAgentSource::Other(other) => other,
     }
 }
 

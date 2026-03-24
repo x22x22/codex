@@ -78,11 +78,15 @@ async fn thread_start_tracks_thread_started_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["personality"], "friendly");
     assert_eq!(event["event_params"]["ephemeral"], true);
     assert_eq!(event["event_params"]["session_source"], "exec");
+    assert_eq!(event["event_params"]["initial_history_type"], "new");
+    assert_eq!(
+        event["event_params"]["subagent_source"],
+        serde_json::Value::Null
+    );
     assert_eq!(
         event["event_params"]["parent_thread_id"],
         serde_json::Value::Null
     );
-    assert_eq!(event["event_params"]["create_source"], "thread_start");
     assert!(
         event["event_params"]["created_at"]
             .as_u64()

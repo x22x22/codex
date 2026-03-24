@@ -18,8 +18,8 @@ use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::CodexThreadStartedEvent;
 use crate::analytics_client::CodexTurnEvent;
+use crate::analytics_client::InitialHistoryType;
 use crate::analytics_client::InvocationType;
-use crate::analytics_client::ThreadCreateSource;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
@@ -634,10 +634,9 @@ impl Codex {
             user_shell_override,
         };
 
-        let thread_create_source = classify_thread_create_source(
-            &conversation_history,
-            &session_configuration.session_source,
-        );
+        let should_emit_thread_started =
+            !matches!(conversation_history, InitialHistory::Resumed(_));
+        let initial_history_type = initial_history_type(&conversation_history);
         let thread_session_source = session_configuration.session_source.clone();
         let thread_started_configuration = session_configuration.clone();
 
@@ -668,7 +667,7 @@ impl Codex {
         })?;
         let thread_id = session.conversation_id;
 
-        if let Some(create_source) = thread_create_source {
+        if should_emit_thread_started {
             session
                 .services
                 .analytics_events_client
@@ -698,9 +697,10 @@ impl Codex {
                     ephemeral: thread_started_configuration
                         .original_config_do_not_use
                         .ephemeral,
+                    initial_history_type,
+                    subagent_source: session_source_subagent_source(&thread_session_source),
                     parent_thread_id: session_source_parent_thread_id(&thread_session_source),
                     session_source: thread_session_source,
-                    create_source,
                     created_at: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -822,21 +822,18 @@ impl Codex {
     }
 }
 
-fn classify_thread_create_source(
-    conversation_history: &InitialHistory,
-    session_source: &SessionSource,
-) -> Option<ThreadCreateSource> {
-    if matches!(
-        session_source,
-        SessionSource::SubAgent(SubAgentSource::Review)
-    ) {
-        return Some(ThreadCreateSource::DetachedReview);
-    }
-
+fn initial_history_type(conversation_history: &InitialHistory) -> InitialHistoryType {
     match conversation_history {
-        InitialHistory::New => Some(ThreadCreateSource::ThreadStart),
-        InitialHistory::Forked(_) => Some(ThreadCreateSource::ThreadFork),
-        InitialHistory::Resumed(_) => None,
+        InitialHistory::New => InitialHistoryType::New,
+        InitialHistory::Forked(_) => InitialHistoryType::Forked,
+        InitialHistory::Resumed(_) => InitialHistoryType::Resumed,
+    }
+}
+
+fn session_source_subagent_source(session_source: &SessionSource) -> Option<SubAgentSource> {
+    match session_source {
+        SessionSource::SubAgent(subagent_source) => Some(subagent_source.clone()),
+        _ => None,
     }
 }
 
