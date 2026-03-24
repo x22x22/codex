@@ -863,7 +863,14 @@ impl RmcpClient {
                 cwd,
             } => {
                 let program_name = program.to_string_lossy().into_owned();
-                let envs = create_env_for_mcp_server(env.clone(), env_vars);
+                let envs = create_env_for_mcp_server(
+                    env.clone().map(|env| {
+                        env.into_iter()
+                            .map(|(key, value)| (key.into(), value.into()))
+                            .collect::<HashMap<_, _>>()
+                    }),
+                    env_vars,
+                );
                 let resolved_program = program_resolver::resolve(program.clone(), &envs)?;
 
                 let mut command = Command::new(resolved_program);

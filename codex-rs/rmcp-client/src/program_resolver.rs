@@ -16,6 +16,8 @@ use std::ffi::OsString;
 #[cfg(windows)]
 use std::env;
 #[cfg(windows)]
+use std::ffi::OsStr;
+#[cfg(windows)]
 use tracing::debug;
 
 /// Resolves a program to its executable path on Unix systems.
@@ -24,7 +26,7 @@ use tracing::debug;
 /// the kernel's shebang (`#!`) mechanism, so this function simply returns
 /// the program name unchanged.
 #[cfg(unix)]
-pub fn resolve(program: OsString, _env: &HashMap<String, String>) -> std::io::Result<OsString> {
+pub fn resolve(program: OsString, _env: &HashMap<OsString, OsString>) -> std::io::Result<OsString> {
     Ok(program)
 }
 
@@ -38,13 +40,13 @@ pub fn resolve(program: OsString, _env: &HashMap<String, String>) -> std::io::Re
 /// This enables tools like `npx`, `pnpm`, and `yarn` to work correctly on Windows
 /// without requiring users to specify full paths or extensions in their configuration.
 #[cfg(windows)]
-pub fn resolve(program: OsString, env: &HashMap<String, String>) -> std::io::Result<OsString> {
+pub fn resolve(program: OsString, env: &HashMap<OsString, OsString>) -> std::io::Result<OsString> {
     // Get current directory for relative path resolution
     let cwd = env::current_dir()
         .map_err(|e| std::io::Error::other(format!("Failed to get current directory: {e}")))?;
 
     // Extract PATH from environment for search locations
-    let search_path = env.get("PATH");
+    let search_path = env.get(OsStr::new("PATH"));
 
     // Attempt resolution via which crate
     match which::which_in(&program, search_path, &cwd) {
@@ -146,7 +148,7 @@ mod tests {
         // Held to prevent the temporary directory from being deleted.
         _temp_dir: TempDir,
         program_name: String,
-        mcp_env: HashMap<String, String>,
+        mcp_env: HashMap<OsString, OsString>,
     }
 
     impl TestExecutableEnv {
@@ -160,10 +162,13 @@ mod tests {
 
             // Build a clean environment with the temp dir in the PATH.
             let mut extra_env = HashMap::new();
-            extra_env.insert("PATH".to_string(), Self::build_path(dir_path));
+            extra_env.insert(OsString::from("PATH"), Self::build_path_env_var(dir_path));
 
             #[cfg(windows)]
-            extra_env.insert("PATHEXT".to_string(), Self::ensure_cmd_extension());
+            extra_env.insert(
+                OsString::from("PATHEXT"),
+                Self::ensure_cmd_extension().into(),
+            );
 
             let mcp_env = create_env_for_mcp_server(Some(extra_env), &[]);
 
@@ -202,10 +207,14 @@ mod tests {
         }
 
         /// Prepends the given directory to the system's PATH variable.
-        fn build_path(dir: &Path) -> String {
-            let current = std::env::var("PATH").unwrap_or_default();
-            let sep = if cfg!(windows) { ";" } else { ":" };
-            format!("{}{sep}{current}", dir.to_string_lossy())
+        fn build_path_env_var(dir: &Path) -> OsString {
+            let mut path = OsString::from(dir.as_os_str());
+            if let Some(current) = std::env::var_os("PATH") {
+                let sep = if cfg!(windows) { ";" } else { ":" };
+                path.push(sep);
+                path.push(current);
+            }
+            path
         }
 
         /// Ensures `.CMD` is in the `PATHEXT` variable on Windows for script discovery.
