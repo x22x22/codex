@@ -1,12 +1,16 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::util::resolve_path;
 use codex_app_server_protocol::GitSha;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::GitInfo;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::join_all;
 use serde::Deserialize;
 use serde::Serialize;
@@ -603,20 +607,32 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
 /// `[get_git_repo_root]`, but resolves to the root of the main
 /// repository. Handles worktrees via filesystem inspection without invoking
 /// the `git` executable.
-pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
-    let base = if cwd.is_dir() { cwd } else { cwd.parent()? };
-    let (repo_root, dot_git) = find_ancestor_git_entry(base)?;
-    if dot_git.is_dir() {
-        return Some(canonicalize_or_raw(repo_root));
+pub async fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
+    resolve_root_git_project_for_trust_with_fs(&LOCAL_FS, cwd).await
+}
+
+pub async fn resolve_root_git_project_for_trust_with_fs(
+    file_system: &dyn ExecutorFileSystem,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    let base = trust_lookup_base_dir(file_system, cwd).await?;
+    let (repo_root, dot_git, dot_git_kind) =
+        find_ancestor_git_entry_with_fs(file_system, &base).await?;
+    if dot_git_kind == EntryKind::Directory {
+        return Some(normalize_absolute_or_raw(&repo_root));
     }
 
-    let git_dir_s = std::fs::read_to_string(&dot_git).ok()?;
+    let git_dir_s = file_system
+        .read_to_string(&AbsolutePathBuf::try_from(dot_git.as_path()).ok()?)
+        .await
+        .ok()?;
     let git_dir_rel = git_dir_s.trim().strip_prefix("gitdir:")?.trim();
     if git_dir_rel.is_empty() {
         return None;
     }
 
-    let git_dir_path = canonicalize_or_raw(resolve_path(&repo_root, &PathBuf::from(git_dir_rel)));
+    let git_dir_path =
+        normalize_absolute_or_raw(&resolve_path(&repo_root, &PathBuf::from(git_dir_rel)));
     let worktrees_dir = git_dir_path.parent()?;
     if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
         return None;
@@ -624,7 +640,66 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
 
     let common_dir = worktrees_dir.parent()?;
     let main_repo_root = common_dir.parent()?;
-    Some(canonicalize_or_raw(main_repo_root.to_path_buf()))
+    Some(normalize_absolute_or_raw(main_repo_root))
+}
+
+async fn trust_lookup_base_dir(
+    file_system: &dyn ExecutorFileSystem,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    if entry_kind(file_system, cwd).await.ok() == Some(EntryKind::Directory) {
+        Some(cwd.to_path_buf())
+    } else {
+        cwd.parent().map(Path::to_path_buf)
+    }
+}
+
+async fn find_ancestor_git_entry_with_fs(
+    file_system: &dyn ExecutorFileSystem,
+    base_dir: &Path,
+) -> Option<(PathBuf, PathBuf, EntryKind)> {
+    let mut dir = base_dir.to_path_buf();
+
+    loop {
+        let dot_git = dir.join(".git");
+        if let Ok(dot_git_kind) = entry_kind(file_system, &dot_git).await {
+            return Some((dir, dot_git, dot_git_kind));
+        }
+
+        if !dir.pop() {
+            break;
+        }
+    }
+
+    None
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EntryKind {
+    Directory,
+    File,
+}
+
+async fn entry_kind(file_system: &dyn ExecutorFileSystem, path: &Path) -> io::Result<EntryKind> {
+    let metadata = file_system
+        .get_metadata(&AbsolutePathBuf::try_from(path).map_err(io::Error::other)?)
+        .await?;
+    if metadata.is_directory {
+        Ok(EntryKind::Directory)
+    } else if metadata.is_file {
+        Ok(EntryKind::File)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unsupported filesystem entry type: {}", path.display()),
+        ))
+    }
+}
+
+fn normalize_absolute_or_raw(path: &Path) -> PathBuf {
+    AbsolutePathBuf::try_from(path)
+        .map(AbsolutePathBuf::into_path_buf)
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
@@ -644,10 +719,6 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     }
 
     None
-}
-
-fn canonicalize_or_raw(path: PathBuf) -> PathBuf {
-    std::fs::canonicalize(&path).unwrap_or(path)
 }
 
 /// Returns a list of local git branches.
