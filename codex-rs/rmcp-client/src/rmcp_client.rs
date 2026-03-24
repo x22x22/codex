@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_client::CodexHttpClient;
 use codex_client::build_reqwest_client_with_custom_ca;
 use futures::FutureExt;
 use futures::StreamExt;
@@ -74,7 +73,6 @@ use crate::oauth::OAuthCredentialsStoreMode;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
 use crate::program_resolver;
-use crate::trace::inject_current_trace_into_meta;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use crate::utils::create_env_for_mcp_server;
@@ -87,14 +85,12 @@ const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
 
 #[derive(Clone)]
 struct StreamableHttpResponseClient {
-    inner: CodexHttpClient,
+    inner: reqwest::Client,
 }
 
 impl StreamableHttpResponseClient {
     fn new(inner: reqwest::Client) -> Self {
-        Self {
-            inner: CodexHttpClient::new(inner),
-        }
+        Self { inner }
     }
 
     fn reqwest_error(
@@ -725,11 +721,6 @@ impl RmcpClient {
                 ));
             }
             None => None,
-        };
-        let meta = if matches!(&self.transport_recipe, TransportRecipe::Stdio { .. }) {
-            inject_current_trace_into_meta(meta)
-        } else {
-            meta
         };
         let rmcp_params = CallToolRequestParams {
             meta: None,

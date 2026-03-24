@@ -26,10 +26,6 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::task;
 
-const X_CODEX_TRACEPARENT_META_KEY: &str = "x-codex-traceparent";
-const X_CODEX_TRACESTATE_META_KEY: &str = "x-codex-tracestate";
-const X_CODEX_TURN_METADATA_META_KEY: &str = "x-codex-turn-metadata";
-
 #[derive(Clone)]
 struct TestToolServer {
     tools: Arc<Vec<Tool>>,
@@ -52,7 +48,6 @@ impl TestToolServer {
             Self::echo_dash_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
-            Self::trace_inspect_tool(),
         ];
         let resources = vec![Self::memo_resource()];
         let resource_templates = vec![Self::memo_template()];
@@ -164,22 +159,6 @@ impl TestToolServer {
             Cow::Borrowed(
                 "Return content blocks for manual testing of MCP image rendering scenarios.",
             ),
-            Arc::new(schema),
-        )
-    }
-
-    fn trace_inspect_tool() -> Tool {
-        #[expect(clippy::expect_used)]
-        let schema: JsonObject = serde_json::from_value(serde_json::json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        }))
-        .expect("trace inspect tool schema should deserialize");
-
-        Tool::new(
-            Cow::Borrowed("trace_inspect"),
-            Cow::Borrowed("Return tracing and turn metadata observed in the MCP request."),
             Arc::new(schema),
         )
     }
@@ -383,36 +362,6 @@ impl ServerHandler for TestToolServer {
             "image_scenario" => {
                 let args = Self::parse_call_args::<ImageScenarioArgs>(&request, "image_scenario")?;
                 Self::image_scenario_result(args)
-            }
-            "trace_inspect" => {
-                let traceparent = request
-                    .meta
-                    .as_ref()
-                    .and_then(|meta| meta.get(X_CODEX_TRACEPARENT_META_KEY))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string);
-                let tracestate = request
-                    .meta
-                    .as_ref()
-                    .and_then(|meta| meta.get(X_CODEX_TRACESTATE_META_KEY))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string);
-                let turn_metadata = request
-                    .meta
-                    .as_ref()
-                    .and_then(|meta| meta.get(X_CODEX_TURN_METADATA_META_KEY))
-                    .cloned();
-
-                Ok(CallToolResult {
-                    content: Vec::new(),
-                    structured_content: Some(json!({
-                        "traceparent": traceparent,
-                        "tracestate": tracestate,
-                        "turn_metadata": turn_metadata,
-                    })),
-                    is_error: Some(false),
-                    meta: None,
-                })
             }
             other => Err(McpError::invalid_params(
                 format!("unknown tool: {other}"),

@@ -96,62 +96,6 @@ pub(crate) fn responses_http_request_span(
     span
 }
 
-pub(crate) fn responses_websocket_connect_span(
-    conversation_id: &ThreadId,
-    turn_metadata_header: Option<&str>,
-    provider_name: &str,
-    model: Option<&str>,
-    base_url: &str,
-) -> Span {
-    let span = tracing::info_span!(
-        "responses_websocket.connect_attempt",
-        otel.kind = "client",
-        provider = provider_name,
-        model = model.unwrap_or(""),
-        transport = "responses_websocket",
-        api.path = "responses",
-        conversation.id = Empty,
-        session.id = Empty,
-        turn.id = Empty,
-        server.address = Empty,
-        server.port = Empty,
-    );
-    CorrelationFields::from_turn_metadata_header(conversation_id, turn_metadata_header)
-        .record_on(&span);
-    record_server_fields(&span, Some(base_url));
-    span
-}
-
-pub(crate) fn responses_websocket_request_span(
-    conversation_id: &ThreadId,
-    turn_metadata_header: Option<&str>,
-    provider_name: &str,
-    model: &str,
-    base_url: &str,
-    connection_reused: bool,
-    warmup: bool,
-) -> Span {
-    let span = tracing::info_span!(
-        "responses_websocket.request",
-        otel.kind = "client",
-        provider = provider_name,
-        model,
-        transport = "responses_websocket",
-        api.path = "responses",
-        connection.reused = connection_reused,
-        websocket.warmup = warmup,
-        conversation.id = Empty,
-        session.id = Empty,
-        turn.id = Empty,
-        server.address = Empty,
-        server.port = Empty,
-    );
-    CorrelationFields::from_turn_metadata_header(conversation_id, turn_metadata_header)
-        .record_on(&span);
-    record_server_fields(&span, Some(base_url));
-    span
-}
-
 pub(crate) fn mcp_tool_call_span(
     session: &Session,
     turn_context: &TurnContext,

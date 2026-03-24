@@ -56,17 +56,6 @@ const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
 
-fn trace_id(traceparent: Option<&str>) -> Option<&str> {
-    let traceparent = traceparent?;
-    let mut parts = traceparent.split('-');
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some(_version), Some(trace_id), Some(_span_id), Some(_flags)) if trace_id.len() == 32 => {
-            Some(trace_id)
-        }
-        _ => None,
-    }
-}
-
 fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTraceContext) {
     let client_metadata = body["client_metadata"]
         .as_object()
@@ -80,10 +69,7 @@ fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTr
         .as_deref()
         .expect("missing expected traceparent");
 
-    assert_eq!(
-        trace_id(Some(actual_traceparent)),
-        trace_id(Some(expected_traceparent))
-    );
+    assert_eq!(actual_traceparent, expected_traceparent);
     assert_eq!(
         client_metadata
             .get(WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY)
@@ -206,15 +192,6 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     };
 
     assert_eq!(server.handshakes().len(), 1);
-    let handshake = server.single_handshake();
-    assert_eq!(
-        trace_id(handshake.header("traceparent").as_deref()),
-        trace_id(first_trace.traceparent.as_deref())
-    );
-    assert_eq!(
-        handshake.header("tracestate").as_deref(),
-        first_trace.tracestate.as_deref()
-    );
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
 
