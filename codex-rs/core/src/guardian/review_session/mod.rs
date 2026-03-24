@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::InitialHistory;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -26,8 +25,9 @@ use crate::codex::Codex;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
+use crate::thread_manager::ForkSnapshot;
+use crate::thread_manager::snapshot_rollout_history;
 
-use self::execution::load_rollout_items_for_fork;
 use self::execution::run_before_review_deadline;
 use self::execution::run_review_on_session;
 use self::spawn::GuardianReviewSessionReuseKey;
@@ -134,7 +134,8 @@ struct GuardianReviewSessionState {
 /// Runtime state for one guardian sub-session.
 ///
 /// The trunk persists across approvals, while forked sessions are short-lived and always shut down
-/// after the review that spawned them.
+/// after the review that spawned them. Parallel forks snapshot the trunk through the generic
+/// `ForkSnapshot` path instead of maintaining a guardian-specific committed-history cache.
 struct GuardianReviewSession {
     /// Child Codex session running the guardian prompt.
     codex: Codex,
@@ -146,8 +147,6 @@ struct GuardianReviewSession {
     has_prior_review: AtomicBool,
     /// Prevents overlapping reviews on the same guardian session.
     review_lock: Mutex<()>,
-    /// Snapshot used when forking a parallel review from the cached trunk.
-    last_committed_rollout_items: Mutex<Option<Vec<RolloutItem>>>,
 }
 
 impl GuardianReviewSession {
@@ -163,7 +162,6 @@ impl GuardianReviewSession {
             reuse_key,
             has_prior_review: AtomicBool::new(has_prior_review),
             review_lock: Mutex::new(()),
-            last_committed_rollout_items: Mutex::new(None),
         }
     }
 
@@ -179,23 +177,27 @@ impl GuardianReviewSession {
         }));
     }
 
+    /// Snapshot the trunk as a forkable committed prefix.
+    ///
+    /// `usize::MAX` with `TruncateBeforeNthUserMessage` means "keep everything committed so far,
+    /// but if the session is currently mid-turn, drop that unfinished turn suffix." That matches
+    /// the guardian policy of ignoring the in-flight review and forking from the last stable trunk
+    /// state without synthesizing an interrupt marker.
     async fn fork_initial_history(&self) -> Option<InitialHistory> {
-        self.last_committed_rollout_items
-            .lock()
-            .await
-            .clone()
-            .filter(|items| !items.is_empty())
-            .map(InitialHistory::Forked)
-    }
-
-    async fn refresh_last_committed_rollout_items(&self) {
-        match load_rollout_items_for_fork(&self.codex.session).await {
-            Ok(Some(items)) => {
-                *self.last_committed_rollout_items.lock().await = Some(items);
-            }
-            Ok(None) => {}
+        self.codex.session.ensure_rollout_materialized().await;
+        self.codex.session.flush_rollout().await;
+        let rollout_path = self.codex.session.current_rollout_path().await?;
+        match snapshot_rollout_history(
+            rollout_path.as_path(),
+            ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
+        )
+        .await
+        {
+            Ok(InitialHistory::New) => None,
+            Ok(initial_history) => Some(initial_history),
             Err(err) => {
-                warn!("failed to refresh guardian trunk rollout snapshot: {err}");
+                warn!("failed to snapshot guardian trunk for fork: {err}");
+                None
             }
         }
     }
@@ -355,14 +357,6 @@ impl GuardianReviewSessionManager {
         };
 
         let execution_result = run_review_on_session(trunk.as_ref(), &params, deadline).await;
-        if execution_result.session_healthy
-            && matches!(
-                execution_result.outcome,
-                GuardianReviewSessionOutcome::Completed(_)
-            )
-        {
-            trunk.refresh_last_committed_rollout_items().await;
-        }
         drop(trunk_guard);
 
         if execution_result.session_healthy {

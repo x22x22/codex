@@ -16,7 +16,6 @@ use codex_protocol::protocol::Op;
 
 use crate::codex::Codex;
 use crate::protocol::SandboxPolicy;
-use crate::rollout::recorder::RolloutRecorder;
 
 use super::GUARDIAN_FOLLOWUP_REVIEW_REMINDER;
 use super::GUARDIAN_INTERRUPT_DRAIN_TIMEOUT;
@@ -24,21 +23,6 @@ use super::GuardianReviewExecutionResult;
 use super::GuardianReviewSession;
 use super::GuardianReviewSessionOutcome;
 use super::GuardianReviewSessionParams;
-
-/// Captures the trunk rollout items that a later parallel fork should inherit.
-///
-/// The manager stores only the latest committed snapshot; loading it from rollout storage lives
-/// here so the session/orchestration layer does not need to know about recorder details.
-pub(super) async fn load_rollout_items_for_fork(
-    session: &crate::codex::Session,
-) -> anyhow::Result<Option<Vec<codex_protocol::protocol::RolloutItem>>> {
-    session.flush_rollout().await;
-    let Some(rollout_path) = session.current_rollout_path().await else {
-        return Ok(None);
-    };
-    let history = RolloutRecorder::get_rollout_history(rollout_path.as_path()).await?;
-    Ok(Some(history.get_rollout_items()))
-}
 
 pub(super) async fn run_review_on_session(
     review_session: &GuardianReviewSession,
@@ -70,6 +54,7 @@ pub(super) async fn run_review_on_session(
                     items: params.prompt_items.clone(),
                     cwd: params.parent_turn.cwd.clone(),
                     approval_policy: AskForApproval::Never,
+                    approvals_reviewer: None,
                     sandbox_policy: SandboxPolicy::new_read_only_policy(),
                     model: params.model.clone(),
                     effort: params.reasoning_effort,
