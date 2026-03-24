@@ -197,7 +197,7 @@ async fn backfill_sessions_resumes_from_watermark_and_marks_complete() {
     ))
     .await;
 
-    let mut config = crate::config::test_config();
+    let mut config = crate::config::test_config().await;
     config.codex_home = codex_home.clone();
     config.model_provider_id = "test-provider".to_string();
     backfill_sessions(runtime.as_ref(), &config).await;
@@ -267,7 +267,7 @@ async fn backfill_sessions_preserves_existing_git_branch_and_fills_missing_git_f
         .await
         .expect("existing metadata upsert");
 
-    let mut config = crate::config::test_config();
+    let mut config = crate::config::test_config().await;
     config.codex_home = codex_home.clone();
     config.model_provider_id = "test-provider".to_string();
     backfill_sessions(runtime.as_ref(), &config).await;
@@ -304,7 +304,7 @@ async fn backfill_sessions_normalizes_cwd_before_upsert() {
         .await
         .expect("initialize runtime");
 
-    let mut config = crate::config::test_config();
+    let mut config = crate::config::test_config().await;
     config.codex_home = codex_home.clone();
     config.model_provider_id = "test-provider".to_string();
     backfill_sessions(runtime.as_ref(), &config).await;
