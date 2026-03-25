@@ -4,4 +4,4 @@
 import type { BrowserSessionArtifacts } from "./BrowserSessionArtifacts";
 import type { BrowserSessionState } from "./BrowserSessionState";
 
-export type BrowserSessionUpdatedNotification = { browserSessionId: string, browserState: BrowserSessionState, artifacts?: BrowserSessionArtifacts | null, };
+export type BrowserSessionUpdatedNotification = { threadId?: string | null, browserSessionId: string, browserState: BrowserSessionState, artifacts?: BrowserSessionArtifacts | null, };

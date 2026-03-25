@@ -1027,6 +1027,8 @@ If the session approval policy uses `Granular` with `request_permissions: false`
 
 Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `js_repl`, while excluding it from the model-facing tool list sent on ordinary turns.
 
+When the app-server is started with `--remote-browser-endpoint`, it auto-registers a hidden `atlas_command` dynamic tool with `deferLoading: true`. This bridge is intended for AgentLib/Atlas-style calls issued from `js_repl` via `codex.tool(...)`, so it remains callable at runtime without teaching the model a separate public remote-browsing tool surface on ordinary turns.
+
 When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
 
 ```json

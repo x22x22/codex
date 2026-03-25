@@ -92,6 +92,12 @@
     },
     "browserState": {
       "$ref": "#/definitions/BrowserSessionState"
+    },
+    "threadId": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

@@ -1,3 +1,4 @@
+use crate::atlas_command::is_atlas_command_dynamic_tool;
 use crate::remote_browser_tools::is_remote_browser_dynamic_tool;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -49,7 +50,7 @@ fn build_browser_replay_item(turn_id: &str, items: &[ThreadItem]) -> Option<Thre
             continue;
         };
 
-        if !is_remote_browser_dynamic_tool(tool) {
+        if !is_browser_replay_dynamic_tool(tool) {
             continue;
         }
 
@@ -105,6 +106,10 @@ fn build_browser_replay_item(turn_id: &str, items: &[ThreadItem]) -> Option<Thre
     })
 }
 
+fn is_browser_replay_dynamic_tool(name: &str) -> bool {
+    is_remote_browser_dynamic_tool(name) || is_atlas_command_dynamic_tool(name)
+}
+
 #[derive(Default)]
 struct FrameContent {
     image_url: Option<String>,
@@ -118,6 +123,14 @@ struct FrameContent {
 struct RemoteBrowserToolTextPayload {
     #[serde(default)]
     result: JsonValue,
+    #[serde(default)]
+    browser_state: Option<BrowserSessionState>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AtlasCommandTextPayload {
+    #[serde(default)]
+    command_output: JsonValue,
     #[serde(default)]
     browser_state: Option<BrowserSessionState>,
 }
@@ -163,6 +176,11 @@ fn build_text_snapshot(text: &str) -> TextSnapshot {
         .ok()
         .and_then(|payload| render_result_snapshot(&payload.result))
         .or_else(|| {
+            serde_json::from_str::<AtlasCommandTextPayload>(text)
+                .ok()
+                .and_then(|payload| render_result_snapshot(&payload.command_output))
+        })
+        .or_else(|| {
             truncate_snapshot(text).map(|value| TextSnapshot {
                 text: Some(value),
                 format: Some(BrowserReplayTextSnapshotFormat::Plain),
@@ -175,6 +193,11 @@ fn parse_browser_state(text: &str) -> Option<BrowserSessionState> {
     serde_json::from_str::<RemoteBrowserToolTextPayload>(text)
         .ok()
         .and_then(|payload| payload.browser_state)
+        .or_else(|| {
+            serde_json::from_str::<AtlasCommandTextPayload>(text)
+                .ok()
+                .and_then(|payload| payload.browser_state)
+        })
 }
 
 fn render_result_snapshot(result: &JsonValue) -> Option<TextSnapshot> {
@@ -494,5 +517,76 @@ mod tests {
         assert_eq!(render_mode, BrowserReplayRenderMode::TextOnly);
         assert_eq!(animation_image_url, None);
         assert_eq!(frame_duration_ms, Some(REPLAY_FRAME_DURATION_MS));
+    }
+
+    #[test]
+    fn builds_replay_from_atlas_command_tool_calls() {
+        let items = vec![ThreadItem::DynamicToolCall {
+            id: "tool-1".to_string(),
+            tool: "atlas_command".to_string(),
+            arguments: JsonValue::Null,
+            status: DynamicToolCallStatus::Completed,
+            content_items: Some(vec![
+                DynamicToolCallOutputContentItem::InputText {
+                    text: serde_json::json!({
+                        "type": "codex_repl",
+                        "command_output": {
+                            "results": [{
+                                "title": "Atlas search",
+                                "content": "result one\nresult two"
+                            }]
+                        },
+                        "browser_state": {
+                            "selectedTabId": "tab_1",
+                            "tabs": [{
+                                "id": "tab_1",
+                                "title": "Atlas search",
+                                "url": "https://example.com/search",
+                                "selected": true
+                            }]
+                        }
+                    })
+                    .to_string(),
+                },
+                DynamicToolCallOutputContentItem::InputImage {
+                    image_url: png_data_url([0, 255, 0, 255], 14, 9),
+                },
+            ]),
+            success: Some(true),
+            duration_ms: Some(10),
+        }];
+
+        let replay = build_browser_replay_item("turn-atlas", &items).expect("replay item");
+        let ThreadItem::BrowserReplay {
+            frames,
+            render_mode,
+            animation_image_url,
+            frame_duration_ms,
+            ..
+        } = replay
+        else {
+            panic!("expected browser replay item");
+        };
+
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].tool, "atlas_command");
+        assert_eq!(render_mode, BrowserReplayRenderMode::Frames);
+        assert_eq!(
+            frames[0].browser_state.as_ref().map(|state| state.selected_tab_id.as_str()),
+            Some("tab_1")
+        );
+        let snapshot = frames[0]
+            .text_snapshot
+            .as_deref()
+            .expect("atlas command snapshot");
+        assert!(snapshot.contains("\"title\": \"Atlas search\""));
+        assert!(snapshot.contains("\"content\": \"result one\\nresult two\""));
+        assert_eq!(
+            frames[0].text_snapshot_format,
+            Some(BrowserReplayTextSnapshotFormat::Json)
+        );
+        assert!(frames[0].image_url.is_some());
+        assert_eq!(animation_image_url, None);
+        assert_eq!(frame_duration_ms, None);
     }
 }

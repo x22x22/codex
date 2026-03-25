@@ -65,7 +65,7 @@ pub(crate) async fn execute_atlas_command(
             response: atlas_json_response(json!({
                 "type": "codex_repl",
                 "error": message,
-            })),
+            }), None),
         },
     }
 }
@@ -349,24 +349,43 @@ async fn execute_atlas_command_impl(
         }
     };
 
+    let response = atlas_json_response(
+        json!({
+            "type": "codex_repl",
+            "command_output": command_output,
+            "browser_state": last_browser_state.clone(),
+            "artifacts": last_artifacts.clone(),
+        }),
+        last_artifacts.as_ref(),
+    );
+
     Ok(AtlasCommandExecution {
         browser_session_id: session_id,
         browser_state: last_browser_state,
         artifacts: last_artifacts,
-        response: atlas_json_response(json!({
-            "type": "codex_repl",
-            "command_output": command_output,
-        })),
+        response,
     })
 }
 
-fn atlas_json_response(payload: JsonValue) -> DynamicToolCallResponse {
-    DynamicToolCallResponse {
-        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+fn atlas_json_response(
+    payload: JsonValue,
+    artifacts: Option<&BrowserSessionArtifacts>,
+) -> DynamicToolCallResponse {
+    let mut content_items = vec![DynamicToolCallOutputContentItem::InputText {
             text: serde_json::to_string(&payload).unwrap_or_else(|_| {
                 "{\"type\":\"codex_repl\",\"error\":\"serialization failure\"}".to_string()
             }),
-        }],
+        }];
+
+    if let Some(image_url) = artifacts.and_then(|value| value.screenshot_image_url.clone()) {
+        content_items.push(DynamicToolCallOutputContentItem::InputImage { image_url });
+    }
+    if let Some(image_url) = artifacts.and_then(|value| value.replay_gif_image_url.clone()) {
+        content_items.push(DynamicToolCallOutputContentItem::InputImage { image_url });
+    }
+
+    DynamicToolCallResponse {
+        content_items,
         success: true,
     }
 }

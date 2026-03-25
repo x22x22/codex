@@ -5656,6 +5656,12 @@
           },
           "browserState": {
             "$ref": "#/definitions/v2/BrowserSessionState"
+          },
+          "threadId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

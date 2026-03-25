@@ -18,7 +18,6 @@ use crate::outgoing_message::OutgoingNotification;
 use crate::outgoing_message::RequestContext;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::remote_browser_api::RemoteBrowserApi;
-use crate::remote_browser_tools::merge_remote_browser_dynamic_tools;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
 use chrono::DateTime;
@@ -1994,9 +1993,7 @@ impl CodexMessageProcessor {
         };
 
         let dynamic_tools = if listener_task_context.remote_browser_api.is_configured() {
-            let dynamic_tools =
-                merge_remote_browser_dynamic_tools(dynamic_tools.unwrap_or_default());
-            merge_atlas_command_dynamic_tool(dynamic_tools)
+            merge_atlas_command_dynamic_tool(dynamic_tools.unwrap_or_default())
         } else {
             dynamic_tools.unwrap_or_default()
         };

@@ -2162,6 +2162,9 @@ pub struct BrowserSessionCommandResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct BrowserSessionUpdatedNotification {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     pub browser_session_id: String,
     pub browser_state: BrowserSessionState,
     #[serde(default, skip_serializing_if = "Option::is_none")]

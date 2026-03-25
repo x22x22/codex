@@ -1651,6 +1651,7 @@ mod tests {
     fn serialize_browser_session_updated_notification() -> Result<()> {
         let notification =
             ServerNotification::BrowserSessionUpdated(v2::BrowserSessionUpdatedNotification {
+                thread_id: Some("thread-1".to_string()),
                 browser_session_id: "sess_123".to_string(),
                 browser_state: v2::BrowserSessionState {
                     selected_tab_id: "tab_123".to_string(),
@@ -1672,6 +1673,7 @@ mod tests {
             json!({
                 "method": "browserSession/updated",
                 "params": {
+                    "threadId": "thread-1",
                     "browserSessionId": "sess_123",
                     "browserState": {
                         "selectedTabId": "tab_123",
@@ -1725,6 +1727,7 @@ mod tests {
     fn browser_session_updated_is_marked_experimental() {
         let notification =
             ServerNotification::BrowserSessionUpdated(v2::BrowserSessionUpdatedNotification {
+                thread_id: Some("thread-1".to_string()),
                 browser_session_id: "sess_123".to_string(),
                 browser_state: v2::BrowserSessionState {
                     selected_tab_id: String::new(),

@@ -950,6 +950,7 @@ impl MessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::BrowserSessionUpdated(
                         BrowserSessionUpdatedNotification {
+                            thread_id: None,
                             browser_session_id: response.browser_session_id.clone(),
                             browser_state: response.browser_state.clone(),
                             artifacts: response.artifacts.clone(),

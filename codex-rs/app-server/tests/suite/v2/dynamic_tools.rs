@@ -204,7 +204,8 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
 }
 
 #[tokio::test]
-async fn thread_start_auto_injects_remote_browser_tools_when_endpoint_is_configured() -> Result<()>
+async fn thread_start_auto_injects_only_atlas_command_bridge_when_endpoint_is_configured(
+) -> Result<()>
 {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let remote_browser_server = MockServer::start().await;
@@ -257,9 +258,9 @@ async fn thread_start_auto_injects_remote_browser_tools_when_endpoint_is_configu
     let body = bodies
         .first()
         .context("expected at least one responses request")?;
-    assert!(find_tool(body, "create_tab").is_some());
-    assert!(find_tool(body, "tabs_content").is_some());
-    assert!(find_tool(body, "playwright_screenshot").is_some());
+    assert!(find_tool(body, "create_tab").is_none());
+    assert!(find_tool(body, "tabs_content").is_none());
+    assert!(find_tool(body, "playwright_screenshot").is_none());
     assert!(find_tool(body, "atlas_command").is_none());
 
     Ok(())
@@ -370,6 +371,7 @@ async fn atlas_command_dynamic_tool_calls_are_handled_internally() -> Result<()>
     );
 
     let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.thread_id.as_deref(), Some(thread_id.as_str()));
     assert_eq!(browser_update.browser_session_id, "sess_atlas_123");
     assert_eq!(browser_update.browser_state.selected_tab_id, "tab_123");
     assert_eq!(browser_update.browser_state.tabs.len(), 1);
@@ -566,6 +568,7 @@ async fn atlas_command_tabs_content_uses_background_tabs() -> Result<()> {
 
     let _started = wait_for_dynamic_tool_started(&mut mcp, call_id).await?;
     let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.thread_id.as_deref(), Some(thread.id.as_str()));
     assert_eq!(browser_update.browser_session_id, "sess_atlas_tabs_123");
     assert_eq!(browser_update.browser_state.selected_tab_id, "tab_main");
 
@@ -702,6 +705,7 @@ async fn atlas_command_locator_count_passes_through_to_remote_browser() -> Resul
     assert_eq!(started.turn_id, turn_id.clone());
 
     let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.thread_id.as_deref(), Some(thread_id.as_str()));
     assert_eq!(browser_update.browser_session_id, "sess_atlas_count_123");
     assert_eq!(browser_update.browser_state.selected_tab_id, "tab_123");
 
@@ -858,6 +862,7 @@ async fn atlas_command_locator_click_passes_through_to_remote_browser() -> Resul
     assert_eq!(started.turn_id, turn_id.clone());
 
     let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.thread_id.as_deref(), Some(thread_id.as_str()));
     assert_eq!(browser_update.browser_session_id, "sess_atlas_click_123");
     assert_eq!(browser_update.browser_state.selected_tab_id, "tab_123");
     assert_eq!(
@@ -1012,6 +1017,7 @@ async fn remote_browser_dynamic_tool_calls_are_handled_internally() -> Result<()
     );
 
     let browser_update = wait_for_browser_session_updated(&mut mcp).await?;
+    assert_eq!(browser_update.thread_id.as_deref(), Some(thread_id.as_str()));
     assert_eq!(browser_update.browser_session_id, "sess_123");
     assert_eq!(browser_update.browser_state.selected_tab_id, "tab_123");
     assert_eq!(browser_update.browser_state.tabs.len(), 1);

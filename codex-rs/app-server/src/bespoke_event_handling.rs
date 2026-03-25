@@ -272,6 +272,7 @@ async fn handle_remote_browser_dynamic_tool_request(
                 outgoing
                     .send_server_notification(ServerNotification::BrowserSessionUpdated(
                         BrowserSessionUpdatedNotification {
+                            thread_id: Some(outgoing.thread_id_string()),
                             browser_session_id: outcome.browser_session_id.clone(),
                             browser_state,
                             artifacts: outcome.to_public_artifacts(),
@@ -308,6 +309,7 @@ async fn handle_atlas_command_dynamic_tool_request(
         outgoing
             .send_server_notification(ServerNotification::BrowserSessionUpdated(
                 BrowserSessionUpdatedNotification {
+                    thread_id: Some(outgoing.thread_id_string()),
                     browser_session_id: outcome.browser_session_id.unwrap_or_default(),
                     browser_state,
                     artifacts: outcome.artifacts,
