@@ -221,6 +221,7 @@ fn turn_event_serializes_expected_shape() {
                 collaboration_mode: ModeKind::Plan,
                 personality: Some(Personality::Pragmatic),
                 num_input_images: 2,
+                is_first_turn: true,
             },
         ),
     });
@@ -247,7 +248,8 @@ fn turn_event_serializes_expected_shape() {
                 "sandbox_network_access": true,
                 "collaboration_mode": "plan",
                 "personality": "pragmatic",
-                "num_input_images": 2
+                "num_input_images": 2,
+                "is_first_turn": true
             }
         })
     );

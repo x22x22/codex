@@ -4,6 +4,7 @@ use anyhow::Ok;
 use codex_core::CodexAuth;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
@@ -145,6 +146,7 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config.chatgpt_base_url = chatgpt_base_url;
+            config.personality = Some(Personality::None);
         });
     let TestCodex {
         codex,
@@ -233,8 +235,110 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
     assert_eq!(event_params["collaboration_mode"], "plan");
     assert!(event_params["personality"].is_null());
     assert_eq!(event_params["num_input_images"], 0);
+    assert_eq!(event_params["is_first_turn"], true);
     assert!(event_params["thread_id"].as_str().is_some());
     assert!(event_params["turn_id"].as_str().is_some());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_thread_turn_tracks_is_not_first_turn_analytics() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let chatgpt_base_url = server.uri();
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
+        });
+    let initial = builder.build(&server).await?;
+
+    initial
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "first turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("persisted rollout path should be present");
+    let home = initial.home.clone();
+    let resumed_chatgpt_base_url = server.uri();
+
+    let mut resume_builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = resumed_chatgpt_base_url;
+        });
+    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+
+    resumed
+        .codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "resumed turn".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let resumed_turn_event = loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        let turn_events = requests
+            .iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
+            .flat_map(|payload| {
+                payload["events"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+            })
+            .filter(|event| event["event_type"] == "codex_turn_event")
+            .collect::<Vec<_>>();
+        if let Some(event) = turn_events.last().cloned() {
+            if turn_events.len() >= 2 {
+                break event;
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for resumed turn analytics event");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    assert_eq!(resumed_turn_event["event_params"]["is_first_turn"], false);
 
     Ok(())
 }

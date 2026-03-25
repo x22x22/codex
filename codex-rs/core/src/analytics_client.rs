@@ -46,6 +46,7 @@ pub(crate) struct CodexTurnEvent {
     pub(crate) collaboration_mode: ModeKind,
     pub(crate) personality: Option<Personality>,
     pub(crate) num_input_images: usize,
+    pub(crate) is_first_turn: bool,
 }
 
 pub(crate) fn build_track_events_context(
@@ -412,6 +413,7 @@ struct CodexTurnEventParams {
     collaboration_mode: Option<&'static str>,
     personality: Option<String>,
     num_input_images: usize,
+    is_first_turn: bool,
 }
 
 #[derive(Serialize)]
@@ -768,6 +770,7 @@ fn codex_turn_event_params(
         collaboration_mode: Some(collaboration_mode_mode(turn_event.collaboration_mode)),
         personality: personality_mode(turn_event.personality),
         num_input_images: turn_event.num_input_images,
+        is_first_turn: turn_event.is_first_turn,
     }
 }
 
