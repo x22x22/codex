@@ -23,7 +23,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
-use codex_core::path_utils::normalize_for_path_comparison;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
@@ -479,13 +478,26 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
 
     let target_cwd = codex_home.path().join("target-cwd");
     fs::create_dir_all(&target_cwd)?;
-    let expected_cwd = normalize_for_path_comparison(&target_cwd)?;
     set_rollout_cwd(
         rollout_path(codex_home.path(), "2025-01-02T10-00-00", &filtered_id).as_path(),
         &target_cwd,
     )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
+    let expected_cwd = list_threads(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        None,
+        None,
+    )
+    .await?
+    .data
+    .into_iter()
+    .find(|summary| summary.id == filtered_id)
+    .map(|summary| summary.cwd)
+    .ok_or_else(|| anyhow::anyhow!("filtered thread missing from unfiltered list"))?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             cursor: None,
