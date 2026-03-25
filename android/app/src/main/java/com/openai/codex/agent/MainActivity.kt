@@ -459,10 +459,7 @@ class MainActivity : Activity() {
         startActivity(
             CreateSessionActivity.newSessionIntent(
                 context = this,
-                initialSettings = SessionExecutionSettings(
-                    model = latestAgentRuntimeStatus?.effectiveModel,
-                    reasoningEffort = null,
-                ),
+                initialSettings = CreateSessionActivity.preferredInitialSettings(),
             ),
         )
         moveTaskToBack(true)

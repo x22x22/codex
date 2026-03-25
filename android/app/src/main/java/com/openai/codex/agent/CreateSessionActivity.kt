@@ -35,6 +35,21 @@ class CreateSessionActivity : Activity() {
         private const val DEFAULT_MODEL = "gpt-5.3-codex-spark"
         private const val DEFAULT_REASONING_EFFORT = "low"
 
+        fun preferredInitialSettings(): SessionExecutionSettings {
+            return SessionExecutionSettings(
+                model = DEFAULT_MODEL,
+                reasoningEffort = DEFAULT_REASONING_EFFORT,
+            )
+        }
+
+        private fun mergedWithPreferredDefaults(settings: SessionExecutionSettings): SessionExecutionSettings {
+            val defaults = preferredInitialSettings()
+            return SessionExecutionSettings(
+                model = settings.model ?: defaults.model,
+                reasoningEffort = settings.reasoningEffort ?: defaults.reasoningEffort,
+            )
+        }
+
         fun externalCreateSessionIntent(initialPrompt: String): Intent {
             return Intent(ACTION_CREATE_SESSION).apply {
                 addCategory(Intent.CATEGORY_DEFAULT)
@@ -91,11 +106,9 @@ class CreateSessionActivity : Activity() {
     private lateinit var startButton: Button
 
     private var selectedReasoningOptions = emptyList<AgentReasoningEffortOption>()
+    private var pendingEffortOverride: String? = null
     private lateinit var effortLabelAdapter: ArrayAdapter<String>
-    private var initialSettings = SessionExecutionSettings(
-        model = DEFAULT_MODEL,
-        reasoningEffort = DEFAULT_REASONING_EFFORT,
-    )
+    private var initialSettings = preferredInitialSettings()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -151,7 +164,10 @@ class CreateSessionActivity : Activity() {
             android.R.layout.simple_spinner_item,
             mutableListOf<String>(),
         ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-        modelSpinner.onItemSelectedListener = SimpleItemSelectedListener { updateEffortOptions(null) }
+        modelSpinner.onItemSelectedListener = SimpleItemSelectedListener {
+            updateEffortOptions(pendingEffortOverride)
+            pendingEffortOverride = null
+        }
 
         packageButton.setOnClickListener {
             showInstalledAppPicker { app ->
@@ -185,10 +201,12 @@ class CreateSessionActivity : Activity() {
         updatePackageSummary()
 
         existingSessionId = intent.getStringExtra(EXTRA_EXISTING_SESSION_ID)?.trim()?.ifEmpty { null }
-        initialSettings = SessionExecutionSettings(
+        initialSettings = mergedWithPreferredDefaults(
+            SessionExecutionSettings(
             model = intent.getStringExtra(EXTRA_INITIAL_MODEL)?.trim()?.ifEmpty { null } ?: DEFAULT_MODEL,
             reasoningEffort = intent.getStringExtra(EXTRA_INITIAL_REASONING_EFFORT)?.trim()?.ifEmpty { null }
                 ?: DEFAULT_REASONING_EFFORT,
+            ),
         )
         promptInput.setText(intent.getStringExtra(EXTRA_INITIAL_PROMPT).orEmpty())
         promptInput.setSelection(promptInput.text.length)
@@ -233,7 +251,9 @@ class CreateSessionActivity : Activity() {
                         sessionController,
                         checkNotNull(draftSession.targetPackage),
                     )
-                    initialSettings = sessionController.executionSettingsForSession(draftSession.sessionId)
+                    initialSettings = mergedWithPreferredDefaults(
+                        sessionController.executionSettingsForSession(draftSession.sessionId),
+                    )
                     targetLocked = true
                     titleView.text = "New Session"
                     updatePackageSummary()
@@ -389,6 +409,7 @@ class CreateSessionActivity : Activity() {
             labels,
         )
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        pendingEffortOverride = initialSettings.reasoningEffort
         modelSpinner.adapter = adapter
         val modelIndex = models.indexOfFirst { it.model == initialSettings.model }
             .takeIf { it >= 0 } ?: models.indexOfFirst(AgentModelOption::isDefault)
