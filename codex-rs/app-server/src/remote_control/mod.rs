@@ -185,19 +185,40 @@ fn normalize_http_remote_control_url(
 }
 
 fn normalize_chatgpt_remote_control_base(rest: &str) -> String {
-    if !(rest.starts_with("chatgpt.com") || rest.starts_with("chat.openai.com")) {
-        return rest.to_string();
+    let trimmed = rest.trim_end_matches('/');
+    let (host, path) = match trimmed.split_once('/') {
+        Some((host, path)) => (host, Some(path)),
+        None => (trimmed, None),
+    };
+    if host != "chatgpt.com" && host != "chat.openai.com" {
+        return trimmed.to_string();
     }
-    if rest.contains("/backend-api/wham/") || rest.ends_with("/backend-api/wham") {
-        return rest.to_string();
+
+    let Some(path) = path else {
+        return format!("{host}/backend-api/wham");
+    };
+
+    if path == "backend-api/wham" || path.starts_with("backend-api/wham/") {
+        return trimmed.to_string();
     }
-    if let Some((prefix, suffix)) = rest.split_once("/backend-api/") {
-        return format!("{prefix}/backend-api/wham/{suffix}");
+
+    for internal_prefix in ["api/codex", "backend-api"] {
+        if path == internal_prefix {
+            return format!("{host}/backend-api/wham");
+        }
+        if let Some(suffix) = path.strip_prefix(&format!("{internal_prefix}/")) {
+            if suffix == "remote/control/server" || suffix == "remote/control/server/enroll" {
+                return format!("{host}/backend-api/wham/{suffix}");
+            }
+            return format!("{host}/backend-api/wham");
+        }
     }
-    if let Some(prefix) = rest.strip_suffix("/backend-api") {
-        return format!("{prefix}/backend-api/wham");
+
+    if path == "remote/control/server" || path == "remote/control/server/enroll" {
+        return format!("{host}/backend-api/wham/{path}");
     }
-    format!("{}/backend-api/wham", rest.trim_end_matches('/'))
+
+    trimmed.to_string()
 }
 
 async fn load_remote_control_auth(

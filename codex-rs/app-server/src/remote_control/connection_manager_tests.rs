@@ -36,7 +36,7 @@ async fn connect_remote_control_websocket_captures_handshake_request_id() {
         .await
         .expect("listener should bind");
     let remote_control_url = format!(
-        "http://{}/backend-api/wham",
+        "http://{}/api/codex",
         listener
             .local_addr()
             .expect("listener should have a local addr")
@@ -47,7 +47,7 @@ async fn connect_remote_control_websocket_captures_handshake_request_id() {
         let enroll_request = accept_http_request(&listener).await;
         assert_eq!(
             enroll_request.request_line,
-            "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+            "POST /api/codex/remote/control/server/enroll HTTP/1.1"
         );
         assert_eq!(
             enroll_request.headers.get("authorization"),
@@ -97,7 +97,7 @@ async fn connect_remote_control_websocket_includes_http_error_details() {
         .await
         .expect("listener should bind");
     let remote_control_url = format!(
-        "http://{}/backend-api/wham",
+        "http://{}/api/codex",
         listener
             .local_addr()
             .expect("listener should have a local addr")
@@ -112,7 +112,7 @@ async fn connect_remote_control_websocket_includes_http_error_details() {
         let enroll_request = accept_http_request(&listener).await;
         assert_eq!(
             enroll_request.request_line,
-            "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+            "POST /api/codex/remote/control/server/enroll HTTP/1.1"
         );
         assert_eq!(
             enroll_request.headers.get("authorization"),
@@ -136,7 +136,7 @@ async fn connect_remote_control_websocket_includes_http_error_details() {
         let request = accept_http_request(&listener).await;
         assert_eq!(
             request.request_line,
-            "GET /backend-api/wham/remote/control/server HTTP/1.1"
+            "GET /api/codex/remote/control/server HTTP/1.1"
         );
         respond_with_status_and_headers(
             request.stream,
@@ -177,7 +177,7 @@ async fn remote_control_transport_reconnects_and_keeps_virtual_client_writer_ali
         .await
         .expect("listener should bind");
     let remote_control_url = format!(
-        "http://{}/backend-api/wham",
+        "http://{}/api/codex",
         listener
             .local_addr()
             .expect("listener should have a local addr")
@@ -200,7 +200,7 @@ async fn remote_control_transport_reconnects_and_keeps_virtual_client_writer_ali
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
         enroll_request.request_line,
-        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+        "POST /api/codex/remote/control/server/enroll HTTP/1.1"
     );
     respond_with_json(enroll_request.stream, json!({ "server_id": "srv_e_test" })).await;
 

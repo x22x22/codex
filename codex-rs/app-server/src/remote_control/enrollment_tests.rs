@@ -57,7 +57,7 @@ fn normalize_remote_control_url_handles_supported_and_unsupported_inputs() {
     );
     assert_eq!(
         normalize_remote_control_url("https://chatgpt.com/backend-api")
-            .expect("chatgpt backend-api base should gain wham"),
+            .expect("chatgpt backend-api base should target the public wham path"),
         RemoteControlTarget {
             websocket_url: "wss://chatgpt.com/backend-api/wham/remote/control/server".to_string(),
             enroll_url: "https://chatgpt.com/backend-api/wham/remote/control/server/enroll"
@@ -71,6 +71,24 @@ fn normalize_remote_control_url_handles_supported_and_unsupported_inputs() {
             websocket_url: "wss://chat.openai.com/backend-api/wham/remote/control/server"
                 .to_string(),
             enroll_url: "https://chat.openai.com/backend-api/wham/remote/control/server/enroll"
+                .to_string(),
+        }
+    );
+    assert_eq!(
+        normalize_remote_control_url("https://chatgpt.com/api/codex/remote/control/server")
+            .expect("internal chatgpt remote-control path should rewrite to the public wham path"),
+        RemoteControlTarget {
+            websocket_url: "wss://chatgpt.com/backend-api/wham/remote/control/server".to_string(),
+            enroll_url: "https://chatgpt.com/backend-api/wham/remote/control/server/enroll"
+                .to_string(),
+        }
+    );
+    assert_eq!(
+        normalize_remote_control_url("https://chatgpt.com/api/codex")
+            .expect("explicit chatgpt api/codex base should rewrite to the public wham path"),
+        RemoteControlTarget {
+            websocket_url: "wss://chatgpt.com/backend-api/wham/remote/control/server".to_string(),
+            enroll_url: "https://chatgpt.com/backend-api/wham/remote/control/server/enroll"
                 .to_string(),
         }
     );
@@ -256,7 +274,7 @@ async fn enroll_remote_control_server_parse_failure_includes_response_body() {
         .await
         .expect("listener should bind");
     let remote_control_url = format!(
-        "http://{}/backend-api/wham",
+        "http://{}/api/codex",
         listener
             .local_addr()
             .expect("listener should have a local addr")

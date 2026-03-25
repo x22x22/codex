@@ -92,7 +92,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         .await
         .expect("listener should bind");
     let remote_control_url = format!(
-        "http://{}/backend-api/wham",
+        "http://{}/api/codex",
         listener
             .local_addr()
             .expect("listener should have a local addr")
@@ -114,7 +114,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
         enroll_request.request_line,
-        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+        "POST /api/codex/remote/control/server/enroll HTTP/1.1"
     );
     respond_with_json(
         enroll_request.stream,
