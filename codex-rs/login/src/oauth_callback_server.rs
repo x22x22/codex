@@ -322,6 +322,8 @@ fn bind_server(port: u16) -> io::Result<Server> {
                     .map(|io_err| io_err.kind() == io::ErrorKind::AddrInUse)
                     .unwrap_or(false);
 
+                // If the address is in use, there is probably another instance of the callback
+                // server running. Attempt to cancel it and retry.
                 if is_addr_in_use {
                     if !cancel_attempted {
                         cancel_attempted = true;
