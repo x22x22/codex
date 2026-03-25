@@ -39,7 +39,6 @@ object AgentPlannerRuntimeManager {
         check(activePlannerSessions.putIfAbsent(plannerSessionId, true) == null) {
             "Planner runtime already active for parent session $plannerSessionId"
         }
-        AgentRuntimeForegroundService.acquire(applicationContext)
         try {
             AgentPlannerRuntime(
                 context = applicationContext,
@@ -56,7 +55,6 @@ object AgentPlannerRuntimeManager {
             }
         } finally {
             activePlannerSessions.remove(plannerSessionId)
-            AgentRuntimeForegroundService.release(applicationContext)
         }
     }
 
@@ -323,33 +321,17 @@ object AgentPlannerRuntimeManager {
 
         private fun forwardResponsesRequest(requestBody: String): AgentResponsesProxy.HttpResponse {
             val activeFrameworkSessionId = frameworkSessionId
-            if (activeFrameworkSessionId.isNullOrBlank()) {
-                return AgentResponsesProxy.sendResponsesRequest(context, requestBody)
+            check(!activeFrameworkSessionId.isNullOrBlank()) {
+                "Planner runtime requires a framework session id for /responses transport"
             }
             val agentManager = context.getSystemService(AgentManager::class.java)
                 ?: throw IOException("AgentManager unavailable for framework session transport")
-            return runCatching {
-                AgentResponsesProxy.sendResponsesRequestThroughFramework(
-                    agentManager = agentManager,
-                    sessionId = activeFrameworkSessionId,
-                    context = context,
-                    requestBody = requestBody,
-                )
-            }.getOrElse { err ->
-                if (!shouldFallbackToDirectResponsesProxy(err)) {
-                    throw err
-                }
-                Log.i(
-                    TAG,
-                    "Falling back to direct Agent /responses proxy for $activeFrameworkSessionId: ${err.message}",
-                )
-                AgentResponsesProxy.sendResponsesRequest(context, requestBody)
-            }
-        }
-
-        private fun shouldFallbackToDirectResponsesProxy(err: Throwable): Boolean {
-            return err is SecurityException &&
-                err.message?.contains("Only the active Genie runtime may open framework HTTP exchanges") == true
+            return AgentResponsesProxy.sendResponsesRequestThroughFramework(
+                agentManager = agentManager,
+                sessionId = activeFrameworkSessionId,
+                context = context,
+                requestBody = requestBody,
+            )
         }
 
         private fun request(

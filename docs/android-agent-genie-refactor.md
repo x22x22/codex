@@ -54,13 +54,11 @@ The current repo now contains these implementation slices:
   Agent sessions can plan concurrently.
 - Planner runtime ownership is 1:1 with the top-level parent session id. The
   app does not allow overlapping planner runtimes for the same parent session.
-- A single narrow foreground service now acts as a shared keepalive lease for
-  the app UID while any Agent-owned planner runtime is active in the
-  background.
-- The framework still only permits `openFrameworkHttpExchange(...)` for active
-  Genie runtimes. Each direct parent planner runtime therefore attempts
-  framework transport first and falls back to the Agent-owned proxy only for
-  that planner path.
+- The framework now permits both active Genie runtimes and active top-level
+  Agent runtimes to open framework HTTP exchanges. Direct parent planner
+  runtimes therefore use the same framework-owned `/responses` transport as
+  Genie child runtimes, and the old Agent-owned planner fallback has been
+  removed.
 - The Genie runtime now keeps host dynamic tools limited to framework-only
   detached-target controls and frame capture, while standard Android shell and
   device commands stay in the normal Codex tool path.
@@ -96,7 +94,8 @@ The current repo now contains these implementation slices:
   framework-owned recovery instead of guessed ordinary app launch.
 
 The Android app now owns auth origination, runtime status, and per-session
-transport configuration handoff. Active Genie model traffic is framework-owned.
+transport configuration handoff. Active Genie and top-level Agent planner model
+traffic are framework-owned.
 The older standalone
 service/client split has been removed from the repo and is no longer part of
 the Android Agent/Genie flow.
@@ -167,8 +166,8 @@ the Android Agent/Genie flow.
   - Android dynamic tool execution
   - Agent escalation via `request_user_input`
   - runtime bootstrap from the framework session bridge
-  - forwarding hosted `codex` `/v1/responses` traffic onto the framework-owned
-    HTTP bridge
+  - forwarding hosted `codex` `/v1/responses` traffic from both Agent and Genie
+    runtimes onto the framework-owned HTTP bridge
 
 ## First Milestone Scope
 
@@ -241,12 +240,8 @@ the Android Agent/Genie flow.
 - `android/app/src/main/java/com/openai/codex/agent/AgentSessionBridgeServer.kt`
   - Agent-side server for the framework-managed per-session bridge
 - `android/app/src/main/java/com/openai/codex/agent/AgentResponsesProxy.kt`
-  - Agent-owned Responses transport used by the hosted Agent runtime itself,
-    including the direct-parent planner fallback when the framework rejects
-    hidden Agent-side HTTP exchange opens outside an active Genie runtime
-- `android/app/src/main/java/com/openai/codex/agent/AgentRuntimeForegroundService.kt`
-  - shared foreground-service keepalive for Agent-owned planning while the UI
-    is backgrounded
+  - Agent/Genie bridge helper for framework-owned Responses transport setup and
+    execution
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
   - Genie-side client for the framework-managed control bridge plus the
     framework-owned streaming HTTP exchange bridge

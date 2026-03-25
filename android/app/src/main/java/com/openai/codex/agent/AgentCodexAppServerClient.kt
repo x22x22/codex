@@ -107,11 +107,7 @@ object AgentCodexAppServerClient {
         executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
         requestTimeoutMs: Long = REQUEST_TIMEOUT_MS,
         frameworkSessionId: String? = null,
-        keepForeground: Boolean = false,
     ): String = synchronized(lifecycleLock) {
-        if (keepForeground) {
-            AgentRuntimeForegroundService.start(context.applicationContext)
-        }
         ensureStarted(context.applicationContext)
         val previousFrameworkSessionId = activeFrameworkSessionId
         activeFrameworkSessionId = frameworkSessionId?.trim()?.ifEmpty { null }
@@ -142,9 +138,6 @@ object AgentCodexAppServerClient {
             activeRequests.decrementAndGet()
             updateClientCount()
             activeFrameworkSessionId = previousFrameworkSessionId
-            if (keepForeground) {
-                AgentRuntimeForegroundService.stop(context.applicationContext)
-            }
         }
     }
 
@@ -296,28 +289,12 @@ object AgentCodexAppServerClient {
         }
         val agentManager = context.getSystemService(AgentManager::class.java)
             ?: throw IOException("AgentManager unavailable for framework session transport")
-        return runCatching {
-            AgentResponsesProxy.sendResponsesRequestThroughFramework(
-                agentManager = agentManager,
-                sessionId = frameworkSessionId,
-                context = context,
-                requestBody = requestBody,
-            )
-        }.getOrElse { err ->
-            if (!shouldFallbackToDirectResponsesProxy(err)) {
-                throw err
-            }
-            Log.i(
-                TAG,
-                "Falling back to direct Agent /responses proxy for $frameworkSessionId: ${err.message}",
-            )
-            AgentResponsesProxy.sendResponsesRequest(context, requestBody)
-        }
-    }
-
-    private fun shouldFallbackToDirectResponsesProxy(err: Throwable): Boolean {
-        return err is SecurityException &&
-            err.message?.contains("Only the active Genie runtime may open framework HTTP exchanges") == true
+        return AgentResponsesProxy.sendResponsesRequestThroughFramework(
+            agentManager = agentManager,
+            sessionId = frameworkSessionId,
+            context = context,
+            requestBody = requestBody,
+        )
     }
 
     private fun initialize() {
