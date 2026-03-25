@@ -253,7 +253,6 @@ fn turn_event_serializes_expected_shape() {
     );
 }
 
-
 #[test]
 fn plugin_used_event_serializes_expected_shape() {
     let tracking = TrackEventsContext {
