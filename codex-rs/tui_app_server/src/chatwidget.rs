@@ -5211,7 +5211,7 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        self.submit_user_message_with_type(user_message, None);
+        self.submit_user_message_with_type(user_message, /*submission_type*/ None);
     }
 
     fn submit_user_message_with_type(
