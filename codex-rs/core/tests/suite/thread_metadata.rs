@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
+use codex_core::config::Constrained;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -24,6 +25,9 @@ async fn thread_start_tracks_thread_started_analytics() -> Result<()> {
             config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
             config.service_tier = Some(ServiceTier::Flex);
             config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+            config.permissions.sandbox_policy = Constrained::allow_any(
+                codex_protocol::protocol::SandboxPolicy::new_workspace_write_policy(),
+            );
             config.personality = Some(Personality::Friendly);
             config.ephemeral = true;
         })
