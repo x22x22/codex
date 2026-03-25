@@ -26,7 +26,6 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
-reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
