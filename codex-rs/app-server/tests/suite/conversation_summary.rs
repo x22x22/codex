@@ -92,7 +92,8 @@ async fn get_conversation_summary_by_relative_rollout_path_resolves_from_codex_h
     let thread_id = ThreadId::from_string(&conversation_id)?;
     let rollout_path = rollout_path(codex_home.path(), FILENAME_TS, &conversation_id);
     let relative_path = rollout_path.strip_prefix(codex_home.path())?.to_path_buf();
-    let expected = expected_summary(thread_id, std::fs::canonicalize(rollout_path)?);
+    let mut expected = expected_summary(thread_id, std::fs::canonicalize(rollout_path)?);
+    expected.cwd = PathBuf::from("/");
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
