@@ -324,6 +324,7 @@ use crate::filters::source_kind_matches;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use arc_swap::ArcSwapOption;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -384,7 +385,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     background_tasks: TaskTracker,
-    state_db: Mutex<Option<StateDbHandle>>,
+    state_db: ArcSwapOption<StateRuntime>,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
 }
@@ -436,17 +437,16 @@ pub(crate) struct CodexMessageProcessorArgs {
 
 impl CodexMessageProcessor {
     async fn shared_state_db(&self) -> Option<StateDbHandle> {
-        let mut state_db = self.state_db.lock().await;
-        match state_db.as_ref() {
-            Some(state_db) => Some(state_db.clone()),
-            None => {
-                let recovered = state_db::init(self.config.as_ref()).await;
-                if let Some(recovered) = recovered.as_ref() {
-                    *state_db = Some(recovered.clone());
-                }
-                recovered
-            }
+        if let Some(state_db) = self.state_db.load_full() {
+            return Some(state_db);
         }
+
+        let recovered = state_db::init(self.config.as_ref()).await;
+        if let Some(recovered) = recovered.as_ref() {
+            self.state_db.store(Some(recovered.clone()));
+        }
+
+        recovered
     }
 
     pub(crate) fn clear_plugin_related_caches(&self) {
@@ -530,7 +530,7 @@ impl CodexMessageProcessor {
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             background_tasks: TaskTracker::new(),
-            state_db: Mutex::new(state_db),
+            state_db: ArcSwapOption::new(state_db),
             feedback,
             log_db,
         }
@@ -9124,7 +9124,7 @@ mod tests {
             .expect("cached state db should be reused");
 
         assert!(Arc::ptr_eq(&first, &second));
-        assert!(processor.state_db.lock().await.is_some());
+        assert!(processor.state_db.load_full().is_some());
 
         Ok(())
     }
