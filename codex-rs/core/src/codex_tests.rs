@@ -1133,11 +1133,6 @@ fn normalize_fork_startup_request_snapshot(snapshot: &str) -> String {
             *line == "00:message/developer[2]:" || line.ends_with(":message/developer[2]:")
         })
         .expect("fork request should contain developer[2] instructions");
-    let developer_block = lines[developer_index + 1..]
-        .iter()
-        .copied()
-        .take_while(|line| line.starts_with("    "))
-        .collect::<Vec<_>>();
     let _env_line = lines
         .iter()
         .find(|line| line.contains("message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>"))
@@ -1149,24 +1144,24 @@ fn normalize_fork_startup_request_snapshot(snapshot: &str) -> String {
         .copied()
         .expect("fork request should contain the post-fork user input");
 
-    [
-        vec![
-            lines[0].to_string(),
-            lines[1].to_string(),
-            lines[2].to_string(),
-            "00:message/developer[2]:".to_string(),
-        ],
-        developer_block
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>(),
-        vec![
-            "01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>".to_string(),
-            "02:message/user:after fork".to_string(),
-        ],
-    ]
-    .concat()
-    .join("\n")
+    let mut normalized = vec![
+        lines[0].to_string(),
+        lines[1].to_string(),
+        lines[2].to_string(),
+        "00:message/developer[2]:".to_string(),
+    ];
+    normalized.extend(
+        lines[developer_index + 1..]
+            .iter()
+            .copied()
+            .take_while(|line| line.starts_with("    "))
+            .map(str::to_string),
+    );
+    normalized.extend([
+        "01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>".to_string(),
+        "02:message/user:after fork".to_string(),
+    ]);
+    normalized.join("\n")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
