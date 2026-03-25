@@ -1385,6 +1385,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
+name = "codex-analytics"
+version = "0.0.0"
+dependencies = [
+ "codex-git-utils",
+ "codex-login",
+ "codex-plugin",
+ "codex-protocol",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codex-ansi-escape"
 version = "0.0.0"
 dependencies = [
@@ -1870,6 +1887,7 @@ dependencies = [
  "chardetng",
  "chrono",
  "clap",
+ "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",
@@ -1885,6 +1903,7 @@ dependencies = [
  "codex-features",
  "codex-git-utils",
  "codex-hooks",
+ "codex-instructions",
  "codex-login",
  "codex-network-proxy",
  "codex-otel",
@@ -1979,10 +1998,13 @@ name = "codex-core-skills"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-analytics",
  "codex-app-server-protocol",
  "codex-config",
+ "codex-instructions",
  "codex-login",
  "codex-otel",
+ "codex-plugin",
  "codex-protocol",
  "codex-skills",
  "codex-utils-absolute-path",
@@ -2202,6 +2224,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-instructions"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+]
+
+[[package]]
 name = "codex-keyring-store"
 version = "0.0.0"
 dependencies = [
@@ -2414,6 +2445,9 @@ dependencies = [
 name = "codex-plugin"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

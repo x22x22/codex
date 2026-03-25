@@ -5,7 +5,6 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
 mod apps;
@@ -62,13 +61,20 @@ pub use text_encoding::bytes_to_string_smart;
 mod mcp_tool_call;
 mod memories;
 pub mod mention_syntax;
-mod mentions;
 pub mod message_history;
 mod model_provider_info;
 pub mod utils;
 pub use utils::path_utils;
 pub mod personality_migration;
 pub mod plugins;
+pub(crate) mod mentions {
+    pub use crate::plugins::CollectedToolMentions;
+    pub use crate::plugins::build_connector_slug_counts;
+    pub use crate::plugins::build_skill_name_counts;
+    pub use crate::plugins::collect_explicit_app_ids;
+    pub use crate::plugins::collect_explicit_plugin_mentions;
+    pub use crate::plugins::collect_tool_mentions_from_messages;
+}
 mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
@@ -108,9 +114,9 @@ pub type NewConversation = NewThread;
 #[deprecated(note = "use CodexThread")]
 pub type CodexConversation = CodexThread;
 // Re-export common auth types for workspace consumers
-pub use analytics_client::AnalyticsEventsClient;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
+pub use codex_analytics::AnalyticsEventsClient;
 mod default_client_forwarding;
 
 /// Default Codex HTTP client headers and reqwest construction.

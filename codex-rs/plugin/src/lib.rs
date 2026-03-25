@@ -1,10 +1,15 @@
 //! Shared plugin identifiers and telemetry-facing summaries.
 
+pub mod mention_syntax;
+
 mod plugin_id;
+mod plugin_namespace;
 
 pub use plugin_id::PluginId;
 pub use plugin_id::PluginIdError;
 pub use plugin_id::validate_plugin_segment;
+pub use plugin_namespace::PLUGIN_MANIFEST_PATH;
+pub use plugin_namespace::plugin_namespace_for_skill_path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AppConnectorId(pub String);

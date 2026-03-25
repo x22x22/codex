@@ -25,7 +25,6 @@ use super::store::PluginStore;
 use super::store::PluginStoreError;
 use super::sync_openai_plugins_repo;
 use crate::AuthManager;
-use crate::analytics_client::AnalyticsEventsClient;
 use crate::auth::CodexAuth;
 use crate::config::Config;
 use crate::config::ConfigService;
@@ -41,6 +40,7 @@ use crate::skills::config_rules::resolve_disabled_skill_paths;
 use crate::skills::config_rules::skill_config_rules_from_stack;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
+use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
 use codex_features::Feature;
@@ -1375,16 +1375,6 @@ pub(crate) fn load_plugins_from_layer_stack(
     }
 
     PluginLoadOutcome::from_plugins(plugins)
-}
-
-pub(crate) fn plugin_namespace_for_skill_path(path: &Path) -> Option<String> {
-    for ancestor in path.ancestors() {
-        if let Some(manifest) = load_plugin_manifest(ancestor) {
-            return Some(manifest.name);
-        }
-    }
-
-    None
 }
 
 fn refresh_curated_plugin_cache(

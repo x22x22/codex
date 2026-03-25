@@ -4,6 +4,7 @@ pub mod injection;
 pub(crate) mod invocation_utils;
 pub mod loader;
 pub mod manager;
+mod mention_counts;
 pub mod model;
 pub mod remote;
 pub mod render;
@@ -11,6 +12,7 @@ pub mod system;
 
 pub(crate) use invocation_utils::build_implicit_skill_path_indexes;
 pub use manager::SkillsManager;
+pub use mention_counts::build_skill_name_counts;
 pub use model::SkillError;
 pub use model::SkillLoadOutcome;
 pub use model::SkillMetadata;

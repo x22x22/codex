@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "analytics",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -26,6 +27,7 @@ members = [
     "core",
     "core-skills",
     "hooks",
+    "instructions",
     "secrets",
     "exec",
     "exec-server",
@@ -96,6 +98,7 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
+codex-analytics = { path = "analytics" }
 codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
 codex-code-mode = { path = "code-mode" }
@@ -125,6 +128,7 @@ codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
+codex-instructions = { path = "instructions" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }

@@ -1,5 +1,5 @@
 use super::load_plugin_manifest;
-use super::manifest::PLUGIN_MANIFEST_PATH;
+use codex_plugin::PLUGIN_MANIFEST_PATH;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::validate_plugin_segment;
