@@ -36,9 +36,9 @@ use tracing::info;
 use tracing::warn;
 
 use crate::oauth_callback_server::HandledRequest;
-use crate::oauth_callback_server::generate_state;
 use crate::oauth_callback_server::ShutdownHandle;
 use crate::oauth_callback_server::bind_server_with_request_channel;
+use crate::oauth_callback_server::generate_state;
 use crate::oauth_callback_server::spawn_callback_server_loop;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
