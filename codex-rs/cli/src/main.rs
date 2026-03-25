@@ -349,6 +349,10 @@ struct AppServerCommand {
     /// See https://developers.openai.com/codex/config-advanced/#metrics for more details.
     #[arg(long = "analytics-default-enabled")]
     analytics_default_enabled: bool,
+
+    /// Optional HTTP endpoint that receives remote browser commands.
+    #[arg(long = "remote-browser-endpoint", value_name = "URL")]
+    remote_browser_endpoint: Option<String>,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -643,6 +647,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             None => {
                 reject_remote_mode_for_subcommand(root_remote.as_deref(), "app-server")?;
                 let transport = app_server_cli.listen;
+                let remote_browser_endpoint = app_server_cli.remote_browser_endpoint;
                 codex_app_server::run_main_with_transport(
                     arg0_paths.clone(),
                     root_config_overrides,
@@ -650,6 +655,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     app_server_cli.analytics_default_enabled,
                     transport,
                     codex_protocol::protocol::SessionSource::VSCode,
+                    remote_browser_endpoint,
                 )
                 .await?;
             }
