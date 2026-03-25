@@ -1803,7 +1803,7 @@ impl App {
                     thread_id,
                     config_snapshot.session_source.get_nickname(),
                     config_snapshot.session_source.get_agent_role(),
-                    false,
+                    /*is_closed*/ false,
                 );
             }
         }

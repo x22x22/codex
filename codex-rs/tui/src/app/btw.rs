@@ -204,7 +204,7 @@ impl App {
         } else {
             self.server
                 .fork_thread(
-                    /*nth_user_message*/ usize::MAX,
+                    ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
                     self.config.clone(),
                     parent_rollout_path.clone(),
                     /*persist_extended_history*/ false,
