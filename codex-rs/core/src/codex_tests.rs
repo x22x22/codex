@@ -2675,7 +2675,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         config.js_repl_node_module_dirs.clone(),
     ));
 
-    let plugin_outcome = services.plugins_manager.plugins_for_config(&per_turn_config);
+    let plugin_outcome = services
+        .plugins_manager
+        .plugins_for_config(&per_turn_config);
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(
         per_turn_config.cwd.as_path(),
@@ -3514,7 +3516,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         config.js_repl_node_module_dirs.clone(),
     ));
 
-    let plugin_outcome = services.plugins_manager.plugins_for_config(&per_turn_config);
+    let plugin_outcome = services
+        .plugins_manager
+        .plugins_for_config(&per_turn_config);
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(
         per_turn_config.cwd.as_path(),

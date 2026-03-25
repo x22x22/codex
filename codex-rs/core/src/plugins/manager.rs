@@ -414,12 +414,8 @@ impl PluginsManager {
         if !plugins_feature_enabled {
             return Vec::new();
         }
-        load_plugins_from_layer_stack(
-            config_layer_stack,
-            &self.store,
-            self.restriction_product,
-        )
-        .effective_skill_roots()
+        load_plugins_from_layer_stack(config_layer_stack, &self.store, self.restriction_product)
+            .effective_skill_roots()
     }
 
     fn cached_enabled_outcome(&self) -> Option<PluginLoadOutcome> {

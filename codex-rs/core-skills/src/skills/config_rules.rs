@@ -28,9 +28,7 @@ pub struct SkillConfigRules {
     pub entries: Vec<SkillConfigRule>,
 }
 
-pub fn skill_config_rules_from_stack(
-    config_layer_stack: &ConfigLayerStack,
-) -> SkillConfigRules {
+pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> SkillConfigRules {
     let mut entries = Vec::new();
     for layer in config_layer_stack.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,

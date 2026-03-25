@@ -2452,16 +2452,12 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&per_turn_config);
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
-        let skills_outcome = Arc::new(
-            self.services
-                .skills_manager
-                .skills_for_config(
-                    per_turn_config.cwd.as_path(),
-                    &effective_skill_roots,
-                    &per_turn_config.config_layer_stack,
-                    per_turn_config.bundled_skills_enabled(),
-                ),
-        );
+        let skills_outcome = Arc::new(self.services.skills_manager.skills_for_config(
+            per_turn_config.cwd.as_path(),
+            &effective_skill_roots,
+            &per_turn_config.config_layer_stack,
+            per_turn_config.bundled_skills_enabled(),
+        ));
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.conversation_id,
             Some(Arc::clone(&self.services.auth_manager)),
