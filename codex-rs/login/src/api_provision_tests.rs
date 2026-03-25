@@ -4,7 +4,8 @@ use serde_json::json;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::body_json;
+use wiremock::matchers::body_string_contains;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
@@ -62,13 +63,14 @@ async fn provision_from_authorization_code_provisions_api_key() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
-        .and(body_json(json!({
-            "client_id": "client-123",
-            "code_verifier": "verifier-123",
-            "code": "auth-code-123",
-            "grant_type": "authorization_code",
-            "redirect_uri": "http://localhost:5000/auth/callback",
-        })))
+        .and(header("content-type", "application/x-www-form-urlencoded"))
+        .and(body_string_contains("client_id=client-123"))
+        .and(body_string_contains("code_verifier=verifier-123"))
+        .and(body_string_contains("code=auth-code-123"))
+        .and(body_string_contains("grant_type=authorization_code"))
+        .and(body_string_contains(
+            "redirect_uri=http%3A%2F%2Flocalhost%3A5000%2Fauth%2Fcallback",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id_token": "id-token-123",
             "access_token": "oauth-access-123",

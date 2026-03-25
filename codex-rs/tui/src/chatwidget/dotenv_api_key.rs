@@ -12,9 +12,16 @@ use codex_login::OPENAI_API_KEY_ENV_VAR;
 
 pub(super) fn validate_dotenv_target(path: &Path) -> io::Result<()> {
     ensure_parent_dir(path)?;
+    reject_symlink(path)?;
 
     if path.exists() {
-        OpenOptions::new().append(true).open(path)?;
+        let mut options = OpenOptions::new();
+        options.append(true);
+        #[cfg(unix)]
+        {
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        options.open(path)?;
         return Ok(());
     }
 
@@ -22,6 +29,7 @@ pub(super) fn validate_dotenv_target(path: &Path) -> io::Result<()> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
+        options.custom_flags(libc::O_NOFOLLOW);
         options.mode(0o600);
     }
     options.open(path)?;
@@ -37,6 +45,7 @@ pub(super) fn upsert_dotenv_api_key(path: &Path, api_key: &str) -> io::Result<()
     }
 
     ensure_parent_dir(path)?;
+    reject_symlink(path)?;
 
     let existing = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
@@ -70,10 +79,13 @@ pub(super) fn upsert_dotenv_api_key(path: &Path, api_key: &str) -> io::Result<()
 }
 
 fn write_dotenv_file(path: &Path, contents: &str) -> io::Result<()> {
+    reject_symlink(path)?;
+
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
+        options.custom_flags(libc::O_NOFOLLOW);
         options.mode(0o600);
     }
 
@@ -84,6 +96,23 @@ fn write_dotenv_file(path: &Path, contents: &str) -> io::Result<()> {
     #[cfg(unix)]
     {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
+    Ok(())
+}
+
+fn reject_symlink(path: &Path) -> io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            ".env.local must not be a symlink",
+        ));
     }
 
     Ok(())
@@ -152,6 +181,22 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upsert_rejects_symlink_target() {
+        let temp_dir = tempdir().expect("tempdir");
+        let dotenv_path = temp_dir.path().join(".env");
+        let target_path = temp_dir.path().join("target.env");
+        std::fs::write(&target_path, "OTHER=value\n").expect("seed target");
+        std::os::unix::fs::symlink(&target_path, &dotenv_path).expect("symlink");
+
+        let err = upsert_dotenv_api_key(&dotenv_path, "sk-test-key").expect_err("reject symlink");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+        let target = std::fs::read_to_string(&target_path).expect("read target");
+        assert_eq!(target, "OTHER=value\n");
     }
 
     #[test]

@@ -217,14 +217,19 @@ async fn exchange_authorization_code_for_tokens(
         client
             .request(Method::POST, &url)
             .header(reqwest::header::ACCEPT, "application/json")
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
             .header(reqwest::header::USER_AGENT, USER_AGENT)
-            .json(&serde_json::json!({
-                "client_id": client_id,
-                "code_verifier": code_verifier,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": redirect_uri,
-            })),
+            .body(format!(
+                "client_id={}&code_verifier={}&code={}&grant_type={}&redirect_uri={}",
+                urlencoding::encode(client_id),
+                urlencoding::encode(code_verifier),
+                urlencoding::encode(code),
+                urlencoding::encode("authorization_code"),
+                urlencoding::encode(redirect_uri)
+            )),
         "POST",
         &url,
     )
