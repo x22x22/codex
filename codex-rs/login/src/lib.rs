@@ -1,7 +1,7 @@
 pub mod auth;
 pub mod token_data;
 
-mod api_provision;
+mod create_api_key;
 mod device_code_auth;
 mod oauth_callback_server;
 mod pkce;
@@ -17,10 +17,10 @@ pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::run_login_server;
 
-pub use api_provision::ApiProvisionError;
-pub use api_provision::PendingApiProvisioning;
-pub use api_provision::ProvisionedApiKey;
-pub use api_provision::start_api_provisioning;
+pub use create_api_key::CreateApiKeyError;
+pub use create_api_key::CreatedApiKey;
+pub use create_api_key::PendingCreateApiKey;
+pub use create_api_key::start_create_api_key;
 pub use auth::AuthConfig;
 pub use auth::AuthCredentialsStoreMode;
 pub use auth::AuthDotJson;

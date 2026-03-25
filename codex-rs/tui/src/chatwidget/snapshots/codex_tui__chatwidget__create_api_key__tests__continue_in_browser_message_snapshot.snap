@@ -1,10 +1,10 @@
 ---
-source: tui/src/chatwidget/api_provision.rs
+source: tui/src/chatwidget/create_api_key.rs
 expression: render_cell(&cell)
 ---
-• Finish API provisioning via your browser.
+• Finish API key creation via your browser.
 
-  Codex couldn't auto-open your browser, but the provisioning flow is still waiting.
+  Codex couldn't auto-open your browser, but the API key creation flow is still waiting.
 
   Open the following link to authenticate:
 

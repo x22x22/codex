@@ -1,4 +1,4 @@
-//! Browser-based OAuth flow for provisioning OpenAI project API keys.
+//! Browser-based OAuth flow for creating OpenAI project API keys.
 
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ const CALLBACK_PORT: u16 = 0;
 const CALLBACK_PATH: &str = "/auth/callback";
 const SCOPE: &str = "openid email profile offline_access";
 const APP: &str = "api";
-const USER_AGENT: &str = "Codex-API-Provision/1.0";
+const USER_AGENT: &str = "Codex-Create-API-Key/1.0";
 const PROJECT_API_KEY_NAME: &str = "Codex CLI";
 const PROJECT_POLL_INTERVAL_SECONDS: u64 = 10;
 const PROJECT_POLL_TIMEOUT_SECONDS: u64 = 60;
@@ -28,7 +28,7 @@ const OAUTH_TIMEOUT_SECONDS: u64 = 15 * 60;
 const HTTP_TIMEOUT_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ApiProvisionOptions {
+struct CreateApiKeyOptions {
     issuer: String,
     client_id: String,
     audience: String,
@@ -41,15 +41,15 @@ struct ApiProvisionOptions {
     project_poll_timeout_seconds: u64,
 }
 
-pub struct PendingApiProvisioning {
+pub struct PendingCreateApiKey {
     client: Client,
-    options: ApiProvisionOptions,
+    options: CreateApiKeyOptions,
     redirect_uri: String,
     code_verifier: String,
     callback_server: AuthorizationCodeServer,
 }
 
-impl PendingApiProvisioning {
+impl PendingCreateApiKey {
     pub fn auth_url(&self) -> &str {
         &self.callback_server.auth_url
     }
@@ -62,13 +62,13 @@ impl PendingApiProvisioning {
         self.callback_server.open_browser()
     }
 
-    pub async fn finish(self) -> Result<ProvisionedApiKey, ApiProvisionError> {
+    pub async fn finish(self) -> Result<CreatedApiKey, CreateApiKeyError> {
         let code = self
             .callback_server
             .wait_for_code(Duration::from_secs(OAUTH_TIMEOUT_SECONDS))
             .await
-            .map_err(|err| ApiProvisionError::message(err.to_string()))?;
-        provision_from_authorization_code(
+            .map_err(|err| CreateApiKeyError::message(err.to_string()))?;
+        create_api_key_from_authorization_code(
             &self.client,
             &self.options,
             &self.redirect_uri,
@@ -80,7 +80,7 @@ impl PendingApiProvisioning {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProvisionedApiKey {
+pub struct CreatedApiKey {
     pub organization_id: String,
     pub organization_title: Option<String>,
     pub default_project_id: String,
@@ -88,8 +88,8 @@ pub struct ProvisionedApiKey {
     pub project_api_key: String,
 }
 
-pub fn start_api_provisioning() -> Result<PendingApiProvisioning, ApiProvisionError> {
-    let options = ApiProvisionOptions {
+pub fn start_create_api_key() -> Result<PendingCreateApiKey, CreateApiKeyError> {
+    let options = CreateApiKeyOptions {
         issuer: AUTH_ISSUER.to_string(),
         client_id: PLATFORM_HYDRA_CLIENT_ID.to_string(),
         audience: PLATFORM_AUDIENCE.to_string(),
@@ -111,10 +111,10 @@ pub fn start_api_provisioning() -> Result<PendingApiProvisioning, ApiProvisionEr
                 .map_err(|err| std::io::Error::other(err.to_string()))
         },
     )
-    .map_err(|err| ApiProvisionError::message(err.to_string()))?;
+    .map_err(|err| CreateApiKeyError::message(err.to_string()))?;
     let redirect_uri = callback_server.redirect_uri.clone();
 
-    Ok(PendingApiProvisioning {
+    Ok(PendingCreateApiKey {
         client,
         options,
         redirect_uri,
@@ -124,16 +124,16 @@ pub fn start_api_provisioning() -> Result<PendingApiProvisioning, ApiProvisionEr
 }
 
 fn build_authorize_url(
-    options: &ApiProvisionOptions,
+    options: &CreateApiKeyOptions,
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
-) -> Result<String, ApiProvisionError> {
+) -> Result<String, CreateApiKeyError> {
     let mut url = Url::parse(&format!(
         "{}/oauth/authorize",
         options.issuer.trim_end_matches('/')
     ))
-    .map_err(|err| ApiProvisionError::message(format!("invalid issuer URL: {err}")))?;
+    .map_err(|err| CreateApiKeyError::message(format!("invalid issuer URL: {err}")))?;
     url.query_pairs_mut()
         .append_pair("audience", &options.audience)
         .append_pair("client_id", &options.client_id)
@@ -146,20 +146,20 @@ fn build_authorize_url(
     Ok(url.to_string())
 }
 
-fn build_http_client() -> Result<Client, ApiProvisionError> {
+fn build_http_client() -> Result<Client, CreateApiKeyError> {
     build_reqwest_client_with_custom_ca(
         reqwest::Client::builder().timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS)),
     )
-    .map_err(|err| ApiProvisionError::message(format!("failed to build HTTP client: {err}")))
+    .map_err(|err| CreateApiKeyError::message(format!("failed to build HTTP client: {err}")))
 }
 
-async fn provision_from_authorization_code(
+async fn create_api_key_from_authorization_code(
     client: &Client,
-    options: &ApiProvisionOptions,
+    options: &CreateApiKeyOptions,
     redirect_uri: &str,
     code_verifier: &str,
     code: &str,
-) -> Result<ProvisionedApiKey, ApiProvisionError> {
+) -> Result<CreatedApiKey, CreateApiKeyError> {
     let tokens = exchange_authorization_code_for_tokens(
         client,
         &options.issuer,
@@ -195,7 +195,7 @@ async fn provision_from_authorization_code(
     .key
     .sensitive_id;
 
-    Ok(ProvisionedApiKey {
+    Ok(CreatedApiKey {
         organization_id: target.organization_id,
         organization_title: target.organization_title,
         default_project_id: target.project_id,
@@ -211,7 +211,7 @@ async fn exchange_authorization_code_for_tokens(
     redirect_uri: &str,
     code_verifier: &str,
     code: &str,
-) -> Result<OAuthTokens, ApiProvisionError> {
+) -> Result<OAuthTokens, CreateApiKeyError> {
     let url = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     execute_json(
         client
@@ -241,7 +241,7 @@ async fn onboarding_login(
     api_base: &str,
     app: &str,
     access_token: &str,
-) -> Result<OnboardingLoginResponse, ApiProvisionError> {
+) -> Result<OnboardingLoginResponse, CreateApiKeyError> {
     let url = format!(
         "{}/dashboard/onboarding/login",
         api_base.trim_end_matches('/')
@@ -263,7 +263,7 @@ async fn list_organizations(
     client: &Client,
     api_base: &str,
     session_key: &str,
-) -> Result<Vec<Organization>, ApiProvisionError> {
+) -> Result<Vec<Organization>, CreateApiKeyError> {
     let url = format!("{}/v1/organizations", api_base.trim_end_matches('/'));
     let response: DataList<Organization> = execute_json(
         client
@@ -283,7 +283,7 @@ async fn list_projects(
     api_base: &str,
     session_key: &str,
     organization_id: &str,
-) -> Result<Vec<Project>, ApiProvisionError> {
+) -> Result<Vec<Project>, CreateApiKeyError> {
     let url = format!(
         "{}/dashboard/organizations/{}/projects?detail=basic&limit=100",
         api_base.trim_end_matches('/'),
@@ -309,7 +309,7 @@ async fn wait_for_default_project(
     session_key: &str,
     poll_interval_seconds: u64,
     timeout_seconds: u64,
-) -> Result<ProvisioningTarget, ApiProvisionError> {
+) -> Result<ProvisioningTarget, CreateApiKeyError> {
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_seconds);
     loop {
         let organizations = list_organizations(client, api_base, session_key).await?;
@@ -333,7 +333,7 @@ async fn wait_for_default_project(
         };
 
         if std::time::Instant::now() >= deadline {
-            return Err(ApiProvisionError::message(format!(
+            return Err(CreateApiKeyError::message(format!(
                 "Timed out waiting for an organization and default project. Last observed state: {last_state}"
             )));
         }
@@ -367,7 +367,7 @@ async fn create_project_api_key(
     session_key: &str,
     target: &ProvisioningTarget,
     key_name: &str,
-) -> Result<CreateApiKeyResponse, ApiProvisionError> {
+) -> Result<CreateProjectApiKeyResponse, CreateApiKeyError> {
     let url = format!(
         "{}/dashboard/organizations/{}/projects/{}/api_keys",
         api_base.trim_end_matches('/'),
@@ -394,26 +394,26 @@ async fn execute_json<T>(
     request: reqwest::RequestBuilder,
     method: &str,
     url: &str,
-) -> Result<T, ApiProvisionError>
+) -> Result<T, CreateApiKeyError>
 where
     T: for<'de> Deserialize<'de>,
 {
     let response = request
         .send()
         .await
-        .map_err(|err| ApiProvisionError::message(format!("Network error calling {url}: {err}")))?;
+        .map_err(|err| CreateApiKeyError::message(format!("Network error calling {url}: {err}")))?;
     let status = response.status();
     let body = response.bytes().await.map_err(|err| {
-        ApiProvisionError::message(format!("Failed reading response from {url}: {err}"))
+        CreateApiKeyError::message(format!("Failed reading response from {url}: {err}"))
     })?;
     if !status.is_success() {
-        return Err(ApiProvisionError::api(
+        return Err(CreateApiKeyError::api(
             format!("{method} {url} failed with HTTP {status}"),
             String::from_utf8_lossy(&body).into_owned(),
         ));
     }
     serde_json::from_slice(&body)
-        .map_err(|err| ApiProvisionError::message(format!("{url} returned invalid JSON: {err}")))
+        .map_err(|err| CreateApiKeyError::message(format!("{url} returned invalid JSON: {err}")))
 }
 
 #[derive(Debug, Deserialize)]
@@ -472,21 +472,21 @@ struct ProvisioningTarget {
 }
 
 #[derive(Debug, Deserialize)]
-struct CreateApiKeyResponse {
-    key: CreatedApiKey,
+struct CreateProjectApiKeyResponse {
+    key: CreatedProjectApiKey,
 }
 
 #[derive(Debug, Deserialize)]
-struct CreatedApiKey {
+struct CreatedProjectApiKey {
     sensitive_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApiProvisionError {
+pub struct CreateApiKeyError {
     message: String,
 }
 
-impl ApiProvisionError {
+impl CreateApiKeyError {
     fn message(message: String) -> Self {
         Self { message }
     }
@@ -498,14 +498,14 @@ impl ApiProvisionError {
     }
 }
 
-impl std::fmt::Display for ApiProvisionError {
+impl std::fmt::Display for CreateApiKeyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for ApiProvisionError {}
+impl std::error::Error for CreateApiKeyError {}
 
 #[cfg(test)]
-#[path = "api_provision_tests.rs"]
+#[path = "create_api_key_tests.rs"]
 mod tests;

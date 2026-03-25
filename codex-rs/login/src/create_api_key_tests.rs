@@ -59,7 +59,7 @@ fn find_default_project_returns_initial_project() {
 }
 
 #[tokio::test]
-async fn provision_from_authorization_code_provisions_api_key() {
+async fn create_api_key_from_authorization_code_creates_api_key() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -129,7 +129,7 @@ async fn provision_from_authorization_code_provisions_api_key() {
         .mount(&server)
         .await;
 
-    let options = ApiProvisionOptions {
+    let options = CreateApiKeyOptions {
         issuer: server.uri(),
         client_id: "client-123".to_string(),
         audience: PLATFORM_AUDIENCE.to_string(),
@@ -143,7 +143,7 @@ async fn provision_from_authorization_code_provisions_api_key() {
     };
     let client = build_http_client().expect("client");
 
-    let output = provision_from_authorization_code(
+    let output = create_api_key_from_authorization_code(
         &client,
         &options,
         "http://localhost:5000/auth/callback",
@@ -155,7 +155,7 @@ async fn provision_from_authorization_code_provisions_api_key() {
 
     assert_eq!(
         output,
-        ProvisionedApiKey {
+        CreatedApiKey {
             organization_id: "org-default".to_string(),
             organization_title: Some("Default Org".to_string()),
             default_project_id: "proj-default".to_string(),

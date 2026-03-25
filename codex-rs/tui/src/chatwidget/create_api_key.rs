@@ -6,10 +6,10 @@ use codex_core::AuthManager;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
+use codex_login::CreatedApiKey;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
-use codex_login::PendingApiProvisioning;
-use codex_login::ProvisionedApiKey;
-use codex_login::start_api_provisioning;
+use codex_login::PendingCreateApiKey;
+use codex_login::start_create_api_key as start_create_api_key_flow;
 use codex_protocol::config_types::ForcedLoginMethod;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -23,8 +23,8 @@ use crate::history_cell;
 use crate::history_cell::PlainHistoryCell;
 
 impl ChatWidget {
-    pub(crate) fn start_api_provision(&mut self) {
-        match start_api_provision(
+    pub(crate) fn start_create_api_key(&mut self) {
+        match start_create_api_key_command(
             self.app_event_tx.clone(),
             self.auth_manager.clone(),
             self.config.codex_home.clone(),
@@ -42,7 +42,7 @@ impl ChatWidget {
     }
 }
 
-fn start_api_provision(
+fn start_create_api_key_command(
     app_event_tx: AppEventSender,
     auth_manager: Arc<AuthManager>,
     codex_home: PathBuf,
@@ -61,8 +61,8 @@ fn start_api_provision(
         )
     })?;
 
-    let session = start_api_provisioning()
-        .map_err(|err| format!("Failed to start API provisioning: {err}"))?;
+    let session = start_create_api_key_flow()
+        .map_err(|err| format!("Failed to start API key creation: {err}"))?;
     let browser_opened = session.open_browser();
     let start_message = continue_in_browser_message(
         session.auth_url(),
@@ -91,10 +91,10 @@ fn start_api_provision(
 fn existing_shell_api_key_message() -> PlainHistoryCell {
     history_cell::new_info_event(
         format!(
-            "{OPENAI_API_KEY_ENV_VAR} is already set in this Codex session; skipping API provisioning."
+            "{OPENAI_API_KEY_ENV_VAR} is already set in this Codex session; skipping API key creation."
         ),
         Some(format!(
-            "This Codex session already inherited {OPENAI_API_KEY_ENV_VAR} from its shell environment. Unset it and run /api-provision again if you want Codex to provision and save a different key."
+            "This Codex session already inherited {OPENAI_API_KEY_ENV_VAR} from its shell environment. Unset it and run /create-api-key again if you want Codex to create and save a different key."
         )),
     )
 }
@@ -108,7 +108,7 @@ fn continue_in_browser_message(
     let mut lines = vec![
         vec![
             "• ".dim(),
-            "Finish API provisioning via your browser.".into(),
+            "Finish API key creation via your browser.".into(),
         ]
         .into(),
         "".into(),
@@ -122,7 +122,7 @@ fn continue_in_browser_message(
         );
     } else {
         lines.push(
-            "  Codex couldn't auto-open your browser, but the provisioning flow is still waiting."
+            "  Codex couldn't auto-open your browser, but the API key creation flow is still waiting."
                 .dark_gray()
                 .into(),
         );
@@ -156,7 +156,7 @@ fn continue_in_browser_message(
 }
 
 async fn complete_command(
-    session: PendingApiProvisioning,
+    session: PendingCreateApiKey,
     dotenv_path: PathBuf,
     codex_home: PathBuf,
     forced_login_method: Option<ForcedLoginMethod>,
@@ -165,13 +165,13 @@ async fn complete_command(
     let provisioned = match session.finish().await {
         Ok(provisioned) => provisioned,
         Err(err) => {
-            return history_cell::new_error_event(format!("API provisioning failed: {err}"));
+            return history_cell::new_error_event(format!("API key creation failed: {err}"));
         }
     };
 
     if let Err(err) = upsert_dotenv_api_key(&dotenv_path, &provisioned.project_api_key) {
         return history_cell::new_error_event(format!(
-            "Provisioning completed, but Codex could not update {}: {err}",
+            "API key creation completed, but Codex could not update {}: {err}",
             dotenv_path.display()
         ));
     }
@@ -210,7 +210,7 @@ fn live_apply_api_key(
 }
 
 fn success_cell(
-    provisioned: &ProvisionedApiKey,
+    provisioned: &CreatedApiKey,
     dotenv_path: &Path,
     live_apply_outcome: LiveApplyOutcome,
 ) -> PlainHistoryCell {
@@ -224,7 +224,7 @@ fn success_cell(
         .unwrap_or_else(|| provisioned.default_project_id.clone());
     let hint = match live_apply_outcome {
         LiveApplyOutcome::Applied => Some(
-            "Updated this session to use the newly provisioned API key without touching auth.json."
+            "Updated this session to use the newly created API key without touching auth.json."
                 .to_string(),
         ),
         LiveApplyOutcome::Skipped(reason) => Some(reason),
@@ -236,7 +236,7 @@ fn success_cell(
 
     history_cell::new_info_event(
         format!(
-            "Provisioned an API key for {organization} / {project} and saved {OPENAI_API_KEY_ENV_VAR} to {}.",
+            "Created an API key for {organization} / {project} and saved {OPENAI_API_KEY_ENV_VAR} to {}.",
             dotenv_path.display()
         ),
         hint,
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn success_cell_snapshot() {
         let cell = success_cell(
-            &ProvisionedApiKey {
+            &CreatedApiKey {
                 organization_id: "org-default".to_string(),
                 organization_title: Some("Default Org".to_string()),
                 default_project_id: "proj-default".to_string(),
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn success_cell_snapshot_when_live_apply_is_skipped() {
         let cell = success_cell(
-            &ProvisionedApiKey {
+            &CreatedApiKey {
                 organization_id: "org-default".to_string(),
                 organization_title: None,
                 default_project_id: "proj-default".to_string(),
@@ -310,7 +310,7 @@ mod tests {
 
         assert_eq!(
             render_cell(&cell),
-            "• OPENAI_API_KEY is already set in this Codex session; skipping API provisioning. This Codex session already inherited OPENAI_API_KEY from its shell environment. Unset it and run /api-provision again if you want Codex to provision and save a different key."
+            "• OPENAI_API_KEY is already set in this Codex session; skipping API key creation. This Codex session already inherited OPENAI_API_KEY from its shell environment. Unset it and run /create-api-key again if you want Codex to create and save a different key."
         );
     }
 
