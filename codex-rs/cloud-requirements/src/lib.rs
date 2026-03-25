@@ -1148,6 +1148,7 @@ mod tests {
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1193,6 +1194,7 @@ mod tests {
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             })
         );
@@ -1274,6 +1276,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1345,6 +1348,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1414,6 +1418,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1577,6 +1582,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1607,6 +1613,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1657,6 +1664,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1706,6 +1714,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1759,6 +1768,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1813,6 +1823,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1867,6 +1878,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             })
         );
@@ -1954,6 +1966,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             }))
         );
@@ -1980,6 +1993,7 @@ enabled = false
                 apps: None,
                 rules: None,
                 enforce_residency: None,
+                require_full_access_justification: None,
                 network: None,
             })
         );
