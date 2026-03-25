@@ -2,6 +2,10 @@ use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
+use super::format_permanent_refresh_recovery_reason;
+use super::format_transient_refresh_recovery_reason;
+use codex_login::auth::RefreshTokenFailedError;
+use codex_login::auth::RefreshTokenFailedReason;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelInfo;
@@ -114,4 +118,46 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[test]
+fn refresh_token_failed_reason_label_uses_stable_values() {
+    assert_eq!(
+        RefreshTokenFailedReason::Expired.as_str(),
+        "expired"
+    );
+    assert_eq!(
+        RefreshTokenFailedReason::Exhausted.as_str(),
+        "exhausted"
+    );
+    assert_eq!(
+        RefreshTokenFailedReason::Revoked.as_str(),
+        "revoked"
+    );
+    assert_eq!(
+        RefreshTokenFailedReason::Other.as_str(),
+        "other"
+    );
+}
+
+#[test]
+fn refresh_token_error_formats_permanent_recovery_reason() {
+    let error = RefreshTokenFailedError::new(
+        RefreshTokenFailedReason::Expired,
+        "refresh token expired",
+    );
+    let reason = format_permanent_refresh_recovery_reason(&error);
+
+    assert_eq!(
+        reason,
+        "failed_reason=expired; message=refresh token expired"
+    );
+}
+
+#[test]
+fn refresh_token_error_formats_transient_recovery_reason() {
+    let error = std::io::Error::other("temporary refresh failure");
+    let reason = format_transient_refresh_recovery_reason(&error);
+
+    assert_eq!(reason, "message=temporary refresh failure");
 }

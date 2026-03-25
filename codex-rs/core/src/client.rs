@@ -106,6 +106,7 @@ use crate::model_provider_info::WireApi;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::extract_response_debug_context_from_api_error;
 use crate::response_debug_context::telemetry_api_error_message;
+use codex_login::auth::RefreshTokenFailedError;
 use crate::response_debug_context::telemetry_transport_error_message;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::FeedbackRequestTags;
@@ -1587,6 +1588,7 @@ async fn handle_unauthorized(
                 Ok(UnauthorizedRecoveryExecution { mode, phase })
             }
             Err(RefreshTokenError::Permanent(failed)) => {
+                let recovery_reason = format_permanent_refresh_recovery_reason(&failed);
                 session_telemetry.record_auth_recovery(
                     mode,
                     phase,
@@ -1595,7 +1597,7 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    /*recovery_reason*/ None,
+                    Some(recovery_reason.as_str()),
                     /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
@@ -1610,6 +1612,7 @@ async fn handle_unauthorized(
                 Err(CodexErr::RefreshTokenFailed(failed))
             }
             Err(RefreshTokenError::Transient(other)) => {
+                let recovery_reason = format_transient_refresh_recovery_reason(&other);
                 session_telemetry.record_auth_recovery(
                     mode,
                     phase,
@@ -1618,7 +1621,7 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    /*recovery_reason*/ None,
+                    Some(recovery_reason.as_str()),
                     /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
@@ -1665,6 +1668,18 @@ async fn handle_unauthorized(
     );
 
     Err(map_api_error(ApiError::Transport(transport)))
+}
+
+fn format_permanent_refresh_recovery_reason(failed: &RefreshTokenFailedError) -> String {
+    format!(
+        "failed_reason={}; message={}",
+        failed.reason.as_str(),
+        failed.message
+    )
+}
+
+fn format_transient_refresh_recovery_reason(error: &std::io::Error) -> String {
+    format!("message={error}")
 }
 
 fn api_error_http_status(error: &ApiError) -> Option<u16> {

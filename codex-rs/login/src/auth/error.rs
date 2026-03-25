@@ -23,3 +23,14 @@ pub enum RefreshTokenFailedReason {
     Revoked,
     Other,
 }
+
+impl RefreshTokenFailedReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Expired => "expired",
+            Self::Exhausted => "exhausted",
+            Self::Revoked => "revoked",
+            Self::Other => "other",
+        }
+    }
+}
