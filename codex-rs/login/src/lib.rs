@@ -45,5 +45,4 @@ pub use auth::save_auth;
 pub use codex_app_server_protocol::AuthMode;
 pub use dotenv_api_key::upsert_dotenv_api_key;
 pub use dotenv_api_key::validate_dotenv_target;
-pub use run_api_provision_helper_from_env as run_onboard_oauth_helper_from_env;
 pub use token_data::TokenData;
