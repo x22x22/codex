@@ -6,7 +6,6 @@ use codex_core::AuthManager;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
-use codex_login::ApiProvisionOptions;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::PendingApiProvisioning;
 use codex_login::ProvisionedApiKey;
@@ -62,8 +61,7 @@ fn start_api_provision(
         )
     })?;
 
-    let options = ApiProvisionOptions::default();
-    let session = start_api_provisioning(options)
+    let session = start_api_provisioning()
         .map_err(|err| format!("Failed to start API provisioning: {err}"))?;
     let browser_opened = session.open_browser();
     let start_message = continue_in_browser_message(

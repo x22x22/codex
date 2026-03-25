@@ -15,47 +15,30 @@ use crate::pkce::PkceCodes;
 const AUTH_ISSUER: &str = "https://auth.openai.com";
 const PLATFORM_HYDRA_CLIENT_ID: &str = "app_2SKx67EdpoN0G6j64rFvigXD";
 const PLATFORM_AUDIENCE: &str = "https://api.openai.com/v1";
-const DEFAULT_API_BASE: &str = "https://api.openai.com";
-const DEFAULT_CALLBACK_PORT: u16 = 5000;
+const API_BASE: &str = "https://api.openai.com";
+const CALLBACK_PORT: u16 = 0;
 const CALLBACK_PATH: &str = "/auth/callback";
-const DEFAULT_SCOPE: &str = "openid email profile offline_access";
-const DEFAULT_APP: &str = "api";
+const SCOPE: &str = "openid email profile offline_access";
+const APP: &str = "api";
 const USER_AGENT: &str = "Codex-API-Provision/1.0";
-const DEFAULT_PROJECT_API_KEY_NAME: &str = "Codex CLI";
-const DEFAULT_PROJECT_POLL_INTERVAL_SECONDS: u64 = 10;
-const DEFAULT_PROJECT_POLL_TIMEOUT_SECONDS: u64 = 60;
+const PROJECT_API_KEY_NAME: &str = "Codex CLI";
+const PROJECT_POLL_INTERVAL_SECONDS: u64 = 10;
+const PROJECT_POLL_TIMEOUT_SECONDS: u64 = 60;
 const OAUTH_TIMEOUT_SECONDS: u64 = 15 * 60;
 const HTTP_TIMEOUT_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApiProvisionOptions {
-    pub issuer: String,
-    pub client_id: String,
-    pub audience: String,
-    pub api_base: String,
-    pub app: String,
-    pub callback_port: u16,
-    pub scope: String,
-    pub api_key_name: String,
-    pub project_poll_interval_seconds: u64,
-    pub project_poll_timeout_seconds: u64,
-}
-
-impl Default for ApiProvisionOptions {
-    fn default() -> Self {
-        Self {
-            issuer: AUTH_ISSUER.to_string(),
-            client_id: PLATFORM_HYDRA_CLIENT_ID.to_string(),
-            audience: PLATFORM_AUDIENCE.to_string(),
-            api_base: DEFAULT_API_BASE.to_string(),
-            app: DEFAULT_APP.to_string(),
-            callback_port: DEFAULT_CALLBACK_PORT,
-            scope: DEFAULT_SCOPE.to_string(),
-            api_key_name: DEFAULT_PROJECT_API_KEY_NAME.to_string(),
-            project_poll_interval_seconds: DEFAULT_PROJECT_POLL_INTERVAL_SECONDS,
-            project_poll_timeout_seconds: DEFAULT_PROJECT_POLL_TIMEOUT_SECONDS,
-        }
-    }
+struct ApiProvisionOptions {
+    issuer: String,
+    client_id: String,
+    audience: String,
+    api_base: String,
+    app: String,
+    callback_port: u16,
+    scope: String,
+    api_key_name: String,
+    project_poll_interval_seconds: u64,
+    project_poll_timeout_seconds: u64,
 }
 
 pub struct PendingApiProvisioning {
@@ -105,10 +88,19 @@ pub struct ProvisionedApiKey {
     pub project_api_key: String,
 }
 
-pub fn start_api_provisioning(
-    options: ApiProvisionOptions,
-) -> Result<PendingApiProvisioning, ApiProvisionError> {
-    validate_api_provision_options(&options)?;
+pub fn start_api_provisioning() -> Result<PendingApiProvisioning, ApiProvisionError> {
+    let options = ApiProvisionOptions {
+        issuer: AUTH_ISSUER.to_string(),
+        client_id: PLATFORM_HYDRA_CLIENT_ID.to_string(),
+        audience: PLATFORM_AUDIENCE.to_string(),
+        api_base: API_BASE.to_string(),
+        app: APP.to_string(),
+        callback_port: CALLBACK_PORT,
+        scope: SCOPE.to_string(),
+        api_key_name: PROJECT_API_KEY_NAME.to_string(),
+        project_poll_interval_seconds: PROJECT_POLL_INTERVAL_SECONDS,
+        project_poll_timeout_seconds: PROJECT_POLL_TIMEOUT_SECONDS,
+    };
     let client = build_http_client()?;
     let callback_server = start_authorization_code_server(
         options.callback_port,
@@ -129,25 +121,6 @@ pub fn start_api_provisioning(
         code_verifier: callback_server.code_verifier().to_string(),
         callback_server,
     })
-}
-
-fn validate_api_provision_options(options: &ApiProvisionOptions) -> Result<(), ApiProvisionError> {
-    if options.project_poll_interval_seconds == 0 {
-        return Err(ApiProvisionError::message(
-            "project_poll_interval_seconds must be greater than 0.".to_string(),
-        ));
-    }
-    if options.project_poll_timeout_seconds == 0 {
-        return Err(ApiProvisionError::message(
-            "project_poll_timeout_seconds must be greater than 0.".to_string(),
-        ));
-    }
-    if options.api_key_name.trim().is_empty() {
-        return Err(ApiProvisionError::message(
-            "api_key_name must not be empty.".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 fn build_authorize_url(
