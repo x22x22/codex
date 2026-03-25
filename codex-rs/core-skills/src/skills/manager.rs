@@ -5,13 +5,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
-use codex_config::LoaderOverrides;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
-use codex_utils_absolute_path::AbsolutePathBuf;
-use toml::Value as TomlValue;
 use tracing::info;
 use tracing::warn;
 
@@ -26,7 +22,6 @@ use crate::skills::loader::skill_roots;
 use crate::skills::system::install_system_skills;
 use crate::skills::system::uninstall_system_skills;
 use codex_config::SkillsConfig;
-use codex_plugin::EffectiveSkillRoots;
 
 pub struct SkillsManager {
     codex_home: PathBuf,
@@ -142,21 +137,6 @@ impl SkillsManager {
             return outcome;
         }
         let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
-
-        let cwd_abs = match AbsolutePathBuf::try_from(cwd) {
-            Ok(cwd_abs) => cwd_abs,
-            Err(err) => {
-                return SkillLoadOutcome {
-                    errors: vec![crate::skills::model::SkillError {
-                        path: cwd.to_path_buf(),
-                        message: err.to_string(),
-                    }],
-                    ..Default::default()
-                };
-            }
-        };
-
-        let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
 
         let mut roots = skill_roots(&config_layer_stack, cwd, effective_skill_roots.to_vec());
         if !bundled_skills_enabled_from_stack(&config_layer_stack) {

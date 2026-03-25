@@ -1,14 +1,15 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
 use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
+use tokio::sync::Mutex;
 
 pub(crate) fn build_implicit_skill_path_indexes(
     skills: Vec<SkillMetadata>,
@@ -33,12 +34,10 @@ pub(crate) fn build_implicit_skill_path_indexes(
 
 fn detect_implicit_skill_invocation_for_command(
     outcome: &SkillLoadOutcome,
-    turn_context: &TurnContext,
     command: &str,
-    workdir: Option<&str>,
+    workdir: &Path
 ) -> Option<SkillMetadata> {
-    let workdir = turn_context.resolve_path(workdir.map(str::to_owned));
-    let workdir = normalize_path(workdir.as_path());
+    let workdir = normalize_path(workdir);
     let tokens = tokenize_command(command);
 
     if let Some(candidate) = detect_skill_script_run(outcome, tokens.as_slice(), workdir.as_path())
@@ -55,15 +54,15 @@ fn detect_implicit_skill_invocation_for_command(
 
 pub(crate) async fn maybe_emit_implicit_skill_invocation(
     sess: &Session,
-    turn_context: &TurnContext,
+    outcome: &SkillLoadOutcome,
     command: &str,
-    workdir: Option<&str>,
+    seen_skills: &Mutex<HashSet<String>>,
+    workdir: &Path,
 ) {
     let Some(candidate) = detect_implicit_skill_invocation_for_command(
-        &turn_context.turn_skills.outcome,
-        turn_context,
+        &outcome,
         command,
-        workdir,
+        &workdir,
     ) else {
         return;
     };
@@ -83,11 +82,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     let skill_name = invocation.skill_name.clone();
     let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
     let inserted = {
-        let mut seen_skills = turn_context
-            .turn_skills
-            .implicit_invocation_seen_skills
-            .lock()
-            .await;
+        let mut seen_skills = seen_skills.lock().await;
         seen_skills.insert(seen_key)
     };
     if !inserted {

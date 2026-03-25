@@ -35,9 +35,6 @@ use std::path::PathBuf;
 use toml::Value as TomlValue;
 use tracing::error;
 
-#[cfg(test)]
-use crate::config::Config;
-
 #[derive(Debug, Deserialize)]
 struct SkillFrontmatter {
     #[serde(default)]

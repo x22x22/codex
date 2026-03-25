@@ -9,7 +9,6 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use tracing::warn;
 
 use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::skills::SkillMetadata;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
