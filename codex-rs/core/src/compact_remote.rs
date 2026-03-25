@@ -178,11 +178,8 @@ pub(crate) async fn process_compacted_history(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        sess.build_initial_context(
-            turn_context,
-            /*additional_developer_sections*/ Vec::new(),
-        )
-        .await
+        sess.build_initial_context(turn_context, /*maybe_user_input*/ None)
+            .await
     } else {
         Vec::new()
     };

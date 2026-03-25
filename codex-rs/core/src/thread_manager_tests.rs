@@ -196,10 +196,7 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
 async fn ignores_session_prefix_messages_when_truncating() {
     let (session, turn_context) = make_session_and_context().await;
     let mut items = session
-        .build_initial_context(
-            &turn_context,
-            /*additional_developer_sections*/ Vec::new(),
-        )
+        .build_initial_context(&turn_context, /*maybe_user_input*/ None)
         .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
