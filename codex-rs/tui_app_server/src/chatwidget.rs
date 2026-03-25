@@ -5866,6 +5866,7 @@ impl ChatWidget {
                 reasoning_effort,
                 agents_states,
             }),
+            ThreadItem::BrowserReplay { .. } => {}
             ThreadItem::DynamicToolCall { .. } => {}
         }
 
@@ -6162,6 +6163,7 @@ impl ChatWidget {
             | ServerNotification::ContextCompacted(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
+            | ServerNotification::BrowserSessionUpdated(_)
             | ServerNotification::ThreadRealtimeTranscriptUpdated(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
