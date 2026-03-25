@@ -3,9 +3,9 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use crate::auth::OPENAI_API_KEY_ENV_VAR;
+use codex_login::OPENAI_API_KEY_ENV_VAR;
 
-pub fn validate_dotenv_target(path: &Path) -> io::Result<()> {
+pub(super) fn validate_dotenv_target(path: &Path) -> io::Result<()> {
     ensure_parent_dir(path)?;
 
     if path.exists() {
@@ -17,7 +17,7 @@ pub fn validate_dotenv_target(path: &Path) -> io::Result<()> {
     std::fs::remove_file(path)
 }
 
-pub fn upsert_dotenv_api_key(path: &Path, api_key: &str) -> io::Result<()> {
+pub(super) fn upsert_dotenv_api_key(path: &Path, api_key: &str) -> io::Result<()> {
     if api_key.contains(['\n', '\r']) {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,

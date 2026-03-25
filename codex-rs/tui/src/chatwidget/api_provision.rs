@@ -11,13 +11,13 @@ use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::PendingApiProvisioning;
 use codex_login::ProvisionedApiKey;
 use codex_login::start_api_provisioning;
-use codex_login::upsert_dotenv_api_key;
-use codex_login::validate_dotenv_target;
 use codex_protocol::config_types::ForcedLoginMethod;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
 use super::ChatWidget;
+use super::dotenv_api_key::upsert_dotenv_api_key;
+use super::dotenv_api_key::validate_dotenv_target;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;

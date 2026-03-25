@@ -3,7 +3,6 @@ pub mod token_data;
 
 mod api_provision;
 mod device_code_auth;
-mod dotenv_api_key;
 mod pkce;
 mod server;
 
@@ -41,6 +40,4 @@ pub use auth::logout;
 pub use auth::read_openai_api_key_from_env;
 pub use auth::save_auth;
 pub use codex_app_server_protocol::AuthMode;
-pub use dotenv_api_key::upsert_dotenv_api_key;
-pub use dotenv_api_key::validate_dotenv_target;
 pub use token_data::TokenData;
