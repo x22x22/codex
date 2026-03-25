@@ -16,9 +16,9 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
-use crate::analytics_client::CodexThreadStartedEvent;
+use crate::analytics_client::CodexThreadInitializedEvent;
 use crate::analytics_client::CodexTurnEvent;
-use crate::analytics_client::InitialHistoryType;
+use crate::analytics_client::InitializationMode;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
@@ -634,11 +634,9 @@ impl Codex {
             user_shell_override,
         };
 
-        let should_emit_thread_started =
-            !matches!(conversation_history, InitialHistory::Resumed(_));
-        let initial_history_type = initial_history_type(&conversation_history);
+        let initialization_mode = initialization_mode(&conversation_history);
         let thread_session_source = session_configuration.session_source.clone();
-        let thread_started_configuration = session_configuration.clone();
+        let thread_initialized_configuration = session_configuration.clone();
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
@@ -667,46 +665,47 @@ impl Codex {
         })?;
         let thread_id = session.conversation_id;
 
-        if should_emit_thread_started {
-            session
-                .services
-                .analytics_events_client
-                .track_thread_started(CodexThreadStartedEvent {
-                    thread_id: thread_id.to_string(),
-                    model: thread_started_configuration
-                        .collaboration_mode
-                        .model()
-                        .to_string(),
-                    model_provider: thread_started_configuration
-                        .original_config_do_not_use
-                        .model_provider_id
-                        .clone(),
-                    reasoning_effort: thread_started_configuration
-                        .collaboration_mode
-                        .reasoning_effort(),
-                    reasoning_summary: thread_started_configuration.model_reasoning_summary,
-                    service_tier: thread_started_configuration.service_tier,
-                    approval_policy: thread_started_configuration.approval_policy.value(),
-                    approvals_reviewer: thread_started_configuration.approvals_reviewer,
-                    sandbox_policy: thread_started_configuration.sandbox_policy.get().clone(),
-                    sandbox_network_access: thread_started_configuration
-                        .network_sandbox_policy
-                        .is_enabled(),
-                    collaboration_mode: thread_started_configuration.collaboration_mode.mode,
-                    personality: thread_started_configuration.personality,
-                    ephemeral: thread_started_configuration
-                        .original_config_do_not_use
-                        .ephemeral,
-                    initial_history_type,
-                    subagent_source: session_source_subagent_source(&thread_session_source),
-                    parent_thread_id: session_source_parent_thread_id(&thread_session_source),
-                    session_source: thread_session_source,
-                    created_at: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                });
-        }
+        session
+            .services
+            .analytics_events_client
+            .track_thread_initialized(CodexThreadInitializedEvent {
+                thread_id: thread_id.to_string(),
+                model: thread_initialized_configuration
+                    .collaboration_mode
+                    .model()
+                    .to_string(),
+                model_provider: thread_initialized_configuration
+                    .original_config_do_not_use
+                    .model_provider_id
+                    .clone(),
+                reasoning_effort: thread_initialized_configuration
+                    .collaboration_mode
+                    .reasoning_effort(),
+                reasoning_summary: thread_initialized_configuration.model_reasoning_summary,
+                service_tier: thread_initialized_configuration.service_tier,
+                approval_policy: thread_initialized_configuration.approval_policy.value(),
+                approvals_reviewer: thread_initialized_configuration.approvals_reviewer,
+                sandbox_policy: thread_initialized_configuration
+                    .sandbox_policy
+                    .get()
+                    .clone(),
+                sandbox_network_access: thread_initialized_configuration
+                    .network_sandbox_policy
+                    .is_enabled(),
+                collaboration_mode: thread_initialized_configuration.collaboration_mode.mode,
+                personality: thread_initialized_configuration.personality,
+                ephemeral: thread_initialized_configuration
+                    .original_config_do_not_use
+                    .ephemeral,
+                initialization_mode,
+                subagent_source: session_source_subagent_source(&thread_session_source),
+                parent_thread_id: session_source_parent_thread_id(&thread_session_source),
+                session_source: thread_session_source,
+                created_at: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            });
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
@@ -822,11 +821,11 @@ impl Codex {
     }
 }
 
-fn initial_history_type(conversation_history: &InitialHistory) -> InitialHistoryType {
+fn initialization_mode(conversation_history: &InitialHistory) -> InitializationMode {
     match conversation_history {
-        InitialHistory::New => InitialHistoryType::New,
-        InitialHistory::Forked(_) => InitialHistoryType::Forked,
-        InitialHistory::Resumed(_) => InitialHistoryType::Resumed,
+        InitialHistory::New => InitializationMode::New,
+        InitialHistory::Forked(_) => InitializationMode::Forked,
+        InitialHistory::Resumed(_) => InitializationMode::Resumed,
     }
 }
 

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::config::Constrained;
+use codex_core::find_thread_path_by_id_str;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -12,7 +13,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn thread_start_tracks_thread_started_analytics() -> Result<()> {
+async fn thread_initialization_tracks_thread_initialized_analytics() -> Result<()> {
     let server = start_mock_server().await;
     let chatgpt_base_url = server.uri();
 
@@ -55,8 +56,8 @@ async fn thread_start_tracks_thread_started_analytics() -> Result<()> {
         .as_array()
         .expect("events array")
         .iter()
-        .find(|event| event["event_type"] == "codex_thread_started")
-        .expect("codex_thread_started event should be present");
+        .find(|event| event["event_type"] == "codex_thread_initialized")
+        .expect("codex_thread_initialized event should be present");
 
     assert_eq!(
         event["event_params"]["thread_id"],
@@ -96,6 +97,102 @@ async fn thread_start_tracks_thread_started_analytics() -> Result<()> {
             .as_u64()
             .is_some_and(|timestamp| timestamp > 0)
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_thread_emits_thread_initialized_analytics() -> Result<()> {
+    let server = start_mock_server().await;
+    let chatgpt_base_url = server.uri();
+
+    let initial = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config({
+            let chatgpt_base_url = chatgpt_base_url.clone();
+            move |config| {
+                config.chatgpt_base_url = chatgpt_base_url;
+                config.model = Some("gpt-5".to_string());
+                config.model_reasoning_effort = Some(ReasoningEffort::High);
+                config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
+                config.service_tier = Some(ServiceTier::Flex);
+                config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+                config.permissions.sandbox_policy = Constrained::allow_any(
+                    codex_protocol::protocol::SandboxPolicy::new_workspace_write_policy(),
+                );
+                config.personality = Some(Personality::Friendly);
+                config.ephemeral = true;
+            }
+        })
+        .build(&server)
+        .await?;
+
+    let rollout_path = find_thread_path_by_id_str(
+        initial.codex_home_path(),
+        &initial.session_configured.session_id.to_string(),
+    )
+    .await?
+    .expect("rollout path for initial thread");
+
+    let _resumed = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
+            config.model = Some("gpt-5".to_string());
+            config.model_reasoning_effort = Some(ReasoningEffort::High);
+            config.model_reasoning_summary = Some(ReasoningSummary::Detailed);
+            config.service_tier = Some(ServiceTier::Flex);
+            config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+            config.permissions.sandbox_policy = Constrained::allow_any(
+                codex_protocol::protocol::SandboxPolicy::new_workspace_write_policy(),
+            );
+            config.personality = Some(Personality::Friendly);
+            config.ephemeral = true;
+        })
+        .resume(&server, initial.home.clone(), rollout_path)
+        .await?;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let analytics_request = loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(request) = requests.into_iter().find(|request| {
+            if request.url.path() != "/codex/analytics-events/events" {
+                return false;
+            }
+            let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&request.body) else {
+                return false;
+            };
+            payload["events"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|event| {
+                    event["event_type"] == "codex_thread_initialized"
+                        && event["event_params"]["initialization_mode"] == "resumed"
+                })
+        }) {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for resumed thread analytics request");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    let payload: serde_json::Value =
+        serde_json::from_slice(&analytics_request.body).expect("analytics payload");
+    let event = payload["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .find(|event| {
+            event["event_type"] == "codex_thread_initialized"
+                && event["event_params"]["initialization_mode"] == "resumed"
+        })
+        .expect("codex_thread_initialized resumed event should be present");
+
+    assert_eq!(event["event_params"]["session_source"], "user");
+    assert_eq!(event["event_params"]["initialization_mode"], "resumed");
 
     Ok(())
 }

@@ -35,7 +35,7 @@ pub(crate) struct TrackEventsContext {
 }
 
 #[derive(Clone)]
-pub(crate) struct CodexThreadStartedEvent {
+pub(crate) struct CodexThreadInitializedEvent {
     pub(crate) thread_id: String,
     pub(crate) model: String,
     pub(crate) model_provider: String,
@@ -136,8 +136,8 @@ impl AnalyticsEventsQueue {
                     TrackEventsJob::SkillInvocations(job) => {
                         send_track_skill_invocations(&auth_manager, job).await;
                     }
-                    TrackEventsJob::ThreadStarted(job) => {
-                        send_track_thread_started(&auth_manager, job).await;
+                    TrackEventsJob::ThreadInitialized(job) => {
+                        send_track_thread_initialized(&auth_manager, job).await;
                     }
                     TrackEventsJob::AppMentioned(job) => {
                         send_track_app_mentioned(&auth_manager, job).await;
@@ -231,8 +231,8 @@ impl AnalyticsEventsClient {
         );
     }
 
-    pub(crate) fn track_thread_started(&self, thread_event: CodexThreadStartedEvent) {
-        track_thread_started(&self.queue, Arc::clone(&self.config), thread_event);
+    pub(crate) fn track_thread_initialized(&self, thread_event: CodexThreadInitializedEvent) {
+        track_thread_initialized(&self.queue, Arc::clone(&self.config), thread_event);
     }
 
     pub(crate) fn track_app_mentioned(
@@ -317,7 +317,7 @@ impl AnalyticsEventsClient {
 
 enum TrackEventsJob {
     SkillInvocations(TrackSkillInvocationsJob),
-    ThreadStarted(TrackThreadStartedJob),
+    ThreadInitialized(TrackThreadInitializedJob),
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
     TurnEvent(TrackTurnEventJob),
@@ -334,9 +334,9 @@ struct TrackSkillInvocationsJob {
     invocations: Vec<SkillInvocation>,
 }
 
-struct TrackThreadStartedJob {
+struct TrackThreadInitializedJob {
     config: Arc<Config>,
-    thread_event: CodexThreadStartedEvent,
+    thread_event: CodexThreadInitializedEvent,
 }
 
 struct TrackAppMentionedJob {
@@ -389,7 +389,7 @@ struct TrackEventsRequest {
 #[serde(untagged)]
 enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
-    ThreadStarted(CodexThreadStartedEventRequest),
+    ThreadInitialized(CodexThreadInitializedEventRequest),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     TurnEvent(CodexTurnEventRequest),
@@ -419,7 +419,7 @@ struct SkillInvocationEventParams {
 }
 
 #[derive(Serialize)]
-struct CodexThreadStartedEventParams {
+struct CodexThreadInitializedEventParams {
     thread_id: String,
     product_client_id: String,
     model: String,
@@ -442,9 +442,9 @@ struct CodexThreadStartedEventParams {
 }
 
 #[derive(Serialize)]
-struct CodexThreadStartedEventRequest {
+struct CodexThreadInitializedEventRequest {
     event_type: &'static str,
-    event_params: CodexThreadStartedEventParams,
+    event_params: CodexThreadInitializedEventParams,
 }
 
 #[derive(Serialize)]
@@ -552,15 +552,15 @@ pub(crate) fn track_skill_invocations(
     queue.try_send(job);
 }
 
-pub(crate) fn track_thread_started(
+pub(crate) fn track_thread_initialized(
     queue: &AnalyticsEventsQueue,
     config: Arc<Config>,
-    thread_event: CodexThreadStartedEvent,
+    thread_event: CodexThreadInitializedEvent,
 ) {
     if config.analytics_enabled == Some(false) {
         return;
     }
-    let job = TrackEventsJob::ThreadStarted(TrackThreadStartedJob {
+    let job = TrackEventsJob::ThreadInitialized(TrackThreadInitializedJob {
         config,
         thread_event,
     });
@@ -723,15 +723,15 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkil
     send_track_events(auth_manager, config, events).await;
 }
 
-async fn send_track_thread_started(auth_manager: &AuthManager, job: TrackThreadStartedJob) {
-    let TrackThreadStartedJob {
+async fn send_track_thread_initialized(auth_manager: &AuthManager, job: TrackThreadInitializedJob) {
+    let TrackThreadInitializedJob {
         config,
         thread_event,
     } = job;
-    let events = vec![TrackEventRequest::ThreadStarted(
-        CodexThreadStartedEventRequest {
-            event_type: "codex_thread_started",
-            event_params: codex_thread_started_event_params(thread_event),
+    let events = vec![TrackEventRequest::ThreadInitialized(
+        CodexThreadInitializedEventRequest {
+            event_type: "codex_thread_initialized",
+            event_params: codex_thread_initialized_event_params(thread_event),
         },
     )];
 
@@ -909,10 +909,10 @@ fn personality_mode(personality: Option<Personality>) -> Option<String> {
     }
 }
 
-fn codex_thread_started_event_params(
-    thread_event: CodexThreadStartedEvent,
-) -> CodexThreadStartedEventParams {
-    CodexThreadStartedEventParams {
+fn codex_thread_initialized_event_params(
+    thread_event: CodexThreadInitializedEvent,
+) -> CodexThreadInitializedEventParams {
+    CodexThreadInitializedEventParams {
         thread_id: thread_event.thread_id,
         product_client_id: crate::default_client::originator().value,
         model: thread_event.model,

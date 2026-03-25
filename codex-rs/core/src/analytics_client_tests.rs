@@ -4,15 +4,11 @@ use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
-use super::CodexThreadStartedEvent;
-use super::CodexThreadStartedEventRequest;
-<<<<<<< HEAD
+use super::CodexThreadInitializedEvent;
+use super::CodexThreadInitializedEventRequest;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
-use super::InitialHistoryType;
-=======
 use super::InitializationMode;
->>>>>>> 74b8b800c (session source update)
 use super::InvocationType;
 use super::SubmissionType;
 use super::TrackEventRequest;
@@ -20,7 +16,7 @@ use super::TrackEventsContext;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
-use super::codex_thread_started_event_params;
+use super::codex_thread_initialized_event_params;
 use super::codex_turn_event_params;
 use super::normalize_path_for_skill_id;
 use crate::plugins::AppConnectorId;
@@ -266,10 +262,10 @@ fn turn_event_serializes_expected_shape() {
 }
 
 #[test]
-fn thread_started_event_serializes_expected_shape() {
-    let event = TrackEventRequest::ThreadStarted(CodexThreadStartedEventRequest {
-        event_type: "codex_thread_started",
-        event_params: codex_thread_started_event_params(CodexThreadStartedEvent {
+fn thread_initialized_event_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadInitialized(CodexThreadInitializedEventRequest {
+        event_type: "codex_thread_initialized",
+        event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
             model_provider: "openai".to_string(),
@@ -291,12 +287,12 @@ fn thread_started_event_serializes_expected_shape() {
         }),
     });
 
-    let payload = serde_json::to_value(&event).expect("serialize thread started event");
+    let payload = serde_json::to_value(&event).expect("serialize thread initialized event");
 
     assert_eq!(
         payload,
         json!({
-            "event_type": "codex_thread_started",
+            "event_type": "codex_thread_initialized",
             "event_params": {
                 "thread_id": "thread-0",
                 "product_client_id": crate::default_client::originator().value,
@@ -323,10 +319,10 @@ fn thread_started_event_serializes_expected_shape() {
 }
 
 #[test]
-fn thread_started_event_serializes_subagent_source() {
-    let event = TrackEventRequest::ThreadStarted(CodexThreadStartedEventRequest {
-        event_type: "codex_thread_started",
-        event_params: codex_thread_started_event_params(CodexThreadStartedEvent {
+fn thread_initialized_event_serializes_subagent_source() {
+    let event = TrackEventRequest::ThreadInitialized(CodexThreadInitializedEventRequest {
+        event_type: "codex_thread_initialized",
+        event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
             thread_id: "thread-1".to_string(),
             model: "gpt-5".to_string(),
             model_provider: "openai".to_string(),
@@ -348,16 +344,17 @@ fn thread_started_event_serializes_subagent_source() {
         }),
     });
 
-    let payload = serde_json::to_value(&event).expect("serialize subagent thread started event");
+    let payload =
+        serde_json::to_value(&event).expect("serialize subagent thread initialized event");
     assert_eq!(payload["event_params"]["session_source"], "subagent");
     assert_eq!(payload["event_params"]["subagent_source"], "review");
 }
 
 #[test]
-fn thread_started_event_omits_non_user_non_subagent_session_source() {
-    let event = TrackEventRequest::ThreadStarted(CodexThreadStartedEventRequest {
-        event_type: "codex_thread_started",
-        event_params: codex_thread_started_event_params(CodexThreadStartedEvent {
+fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
+    let event = TrackEventRequest::ThreadInitialized(CodexThreadInitializedEventRequest {
+        event_type: "codex_thread_initialized",
+        event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
             thread_id: "thread-2".to_string(),
             model: "gpt-5".to_string(),
             model_provider: "openai".to_string(),
@@ -379,7 +376,7 @@ fn thread_started_event_omits_non_user_non_subagent_session_source() {
         }),
     });
 
-    let payload = serde_json::to_value(&event).expect("serialize mcp thread started event");
+    let payload = serde_json::to_value(&event).expect("serialize mcp thread initialized event");
     assert_eq!(
         payload["event_params"]["session_source"],
         serde_json::Value::Null
