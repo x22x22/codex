@@ -244,8 +244,7 @@ impl ContextManager {
             user_positions[user_positions.len() - n_from_end]
         };
 
-        cut_idx =
-            self.trim_pre_turn_context_updates(&snapshot, first_instruction_turn_idx, cut_idx);
+        cut_idx = self.trim_pre_turn_context_updates(&snapshot, cut_idx);
 
         self.replace(snapshot[..cut_idx].to_vec());
     }
@@ -401,13 +400,10 @@ impl ContextManager {
     /// Returns the adjusted cut index after removing contextual developer/user items immediately
     /// above the rolled-back turn boundary.
     ///
-    /// `first_instruction_turn_idx` is the earliest rollback-eligible instruction-turn boundary
-    /// in `snapshot`; the trim walk never crosses it so any session-prefix items that predate the
-    /// first real turn survive rollback.
-    ///
     /// `cut_idx` is the tentative slice boundary after dropping the requested number of
     /// instruction turns, before stripping contextual pre-turn items that sit immediately above
-    /// that boundary.
+    /// that boundary. The trim walk may continue all the way to index `0`, but it stops as soon
+    /// as it encounters a non-contextual item, so only actual per-turn scaffolding is removed.
     ///
     /// If any trimmed developer message was a mixed `build_initial_context` bundle containing both
     /// rollback-trimmable contextual fragments and persistent developer text, this also clears the
@@ -416,10 +412,9 @@ impl ContextManager {
     fn trim_pre_turn_context_updates(
         &mut self,
         snapshot: &[ResponseItem],
-        first_instruction_turn_idx: usize,
         mut cut_idx: usize,
     ) -> usize {
-        while cut_idx > first_instruction_turn_idx {
+        while cut_idx > 0 {
             match &snapshot[cut_idx - 1] {
                 ResponseItem::Message { role, content, .. }
                     if role == "developer" && is_contextual_dev_message_content(content) =>
