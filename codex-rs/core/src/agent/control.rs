@@ -298,10 +298,16 @@ impl AgentControl {
         config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
+        state_db_ctx: Option<state_db::StateDbHandle>,
     ) -> CodexResult<ThreadId> {
         let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
         let resumed_thread_id = self
-            .resume_single_agent_from_rollout(config.clone(), thread_id, session_source)
+            .resume_single_agent_from_rollout(
+                config.clone(),
+                thread_id,
+                session_source,
+                state_db_ctx.clone(),
+            )
             .await?;
         let state = self.upgrade()?;
         let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
@@ -347,6 +353,7 @@ impl AgentControl {
                             config.clone(),
                             child_thread_id,
                             child_session_source,
+                            Some(state_db_ctx.clone()),
                         )
                         .await
                     {
@@ -371,6 +378,7 @@ impl AgentControl {
         mut config: crate::config::Config,
         thread_id: ThreadId,
         session_source: SessionSource,
+        state_db_ctx: Option<state_db::StateDbHandle>,
     ) -> CodexResult<ThreadId> {
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
             && *depth >= config.agent_max_depth
@@ -380,7 +388,10 @@ impl AgentControl {
         }
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
-        let state_db_ctx = state_db::get_state_db(&config).await;
+        let state_db_ctx = match state_db_ctx {
+            Some(state_db_ctx) => Some(state_db_ctx),
+            None => state_db::get_state_db(&config).await,
+        };
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
