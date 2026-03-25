@@ -27,6 +27,7 @@ use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
+use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
@@ -67,6 +68,7 @@ mod error_code;
 mod external_agent_config_api;
 mod filters;
 mod fs_api;
+mod fs_watch;
 mod fuzzy_file_search;
 pub mod in_process;
 mod message_processor;
@@ -80,6 +82,9 @@ mod transport;
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
+pub use crate::transport::auth::AppServerWebsocketAuthArgs;
+pub use crate::transport::auth::AppServerWebsocketAuthSettings;
+pub use crate::transport::auth::WebsocketAuthCliMode;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
 
@@ -336,6 +341,7 @@ pub async fn run_main(
         default_analytics_enabled,
         AppServerTransport::Stdio,
         SessionSource::VSCode,
+        AppServerWebsocketAuthSettings::default(),
     )
     .await
 }
@@ -347,6 +353,7 @@ pub async fn run_main_with_transport(
     default_analytics_enabled: bool,
     transport: AppServerTransport,
     session_source: SessionSource,
+    auth: AppServerWebsocketAuthSettings,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
@@ -374,6 +381,7 @@ pub async fn run_main_with_transport(
                 bind_address,
                 transport_event_tx.clone(),
                 shutdown_token.clone(),
+                policy_from_settings(&auth)?,
             )
             .await?;
             TransportRuntime::WebSocket {

@@ -1,4 +1,5 @@
 use super::ShellRequest;
+use crate::SkillMetadata;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
@@ -12,7 +13,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
-use crate::skills::SkillMetadata;
+use crate::skills_load_input_from_config;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -120,8 +121,6 @@ pub(super) async fn try_run_zsh_fork(
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
-        sandbox_permissions: req.sandbox_permissions,
-        justification: req.justification.clone(),
     };
     let sandbox_exec_request = attempt
         .env_for(command, options, req.network.as_ref())
@@ -136,11 +135,10 @@ pub(super) async fn try_run_zsh_fork(
         sandbox,
         windows_sandbox_level,
         windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
-        sandbox_permissions,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
-        justification,
+        windows_restricted_token_filesystem_overlay: _windows_restricted_token_filesystem_overlay,
         arg0,
     } = sandbox_exec_request;
     let ParsedShellCommand { script, login, .. } = extract_shell_script(&command)?;
@@ -161,10 +159,8 @@ pub(super) async fn try_run_zsh_fork(
         env: sandbox_env,
         network: sandbox_network,
         windows_sandbox_level,
-        sandbox_permissions,
-        justification,
         arg0,
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
+        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: ctx
             .turn
             .config
@@ -267,10 +263,8 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         env: exec_request.env.clone(),
         network: exec_request.network.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
-        sandbox_permissions: exec_request.sandbox_permissions,
-        justification: exec_request.justification.clone(),
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
+        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: ctx
             .turn
             .config
@@ -494,11 +488,19 @@ impl CoreShellActionProvider {
     /// any skills.
     async fn find_skill(&self, program: &AbsolutePathBuf) -> Option<SkillMetadata> {
         let force_reload = false;
+        let turn_config = self.turn.config.as_ref();
+        let plugin_outcome = self
+            .session
+            .services
+            .plugins_manager
+            .plugins_for_config(turn_config);
+        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let skills_input = skills_load_input_from_config(turn_config, effective_skill_roots);
         let skills_outcome = self
             .session
             .services
             .skills_manager
-            .skills_for_cwd(&self.turn.cwd, self.turn.config.as_ref(), force_reload)
+            .skills_for_cwd(&skills_input, force_reload)
             .await;
 
         let program_path = program.as_path();
@@ -864,8 +866,6 @@ struct CoreShellCommandExecutor {
     env: HashMap<String, String>,
     network: Option<codex_network_proxy::NetworkProxy>,
     windows_sandbox_level: WindowsSandboxLevel,
-    sandbox_permissions: SandboxPermissions,
-    justification: Option<String>,
     arg0: Option<String>,
     sandbox_policy_cwd: PathBuf,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -916,11 +916,10 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 sandbox: self.sandbox,
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
-                sandbox_permissions: self.sandbox_permissions,
                 sandbox_policy: self.sandbox_policy.clone(),
                 file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
                 network_sandbox_policy: self.network_sandbox_policy,
-                justification: self.justification.clone(),
+                windows_restricted_token_filesystem_overlay: None,
                 arg0: self.arg0.clone(),
             },
             /*stdout_stream*/ None,
@@ -1044,11 +1043,6 @@ impl CoreShellCommandExecutor {
             self.windows_sandbox_level,
             self.network.is_some(),
         );
-        let sandbox_permissions = if additional_permissions.is_some() {
-            SandboxPermissions::WithAdditionalPermissions
-        } else {
-            SandboxPermissions::UseDefault
-        };
         let command = SandboxCommand {
             program: program.clone(),
             args: args.to_vec(),
@@ -1059,8 +1053,6 @@ impl CoreShellCommandExecutor {
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
-            sandbox_permissions,
-            justification: self.justification.clone(),
         };
         let exec_request = sandbox_manager.transform(SandboxTransformRequest {
             command,
