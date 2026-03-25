@@ -1,8 +1,11 @@
 use anyhow::{anyhow, Result};
 use dirs_next::home_dir;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -26,6 +29,29 @@ pub fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
         .entry("PAGER".into())
         .or_insert_with(|| "more.com".into());
     env_map.entry("LESS".into()).or_insert_with(|| "".into());
+}
+
+fn workspace_temp_dir(codex_home: &Path, cwd: &Path) -> PathBuf {
+    let canonical_cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical_cwd.hash(&mut hasher);
+    codex_home
+        .join(".sandbox-temp")
+        .join(format!("ws-{:016x}", hasher.finish()))
+}
+
+pub fn configure_private_temp_env(
+    env_map: &mut HashMap<String, String>,
+    codex_home: &Path,
+    cwd: &Path,
+) -> Result<PathBuf> {
+    let sandbox_temp = workspace_temp_dir(codex_home, cwd);
+    fs::create_dir_all(&sandbox_temp)?;
+    let sandbox_temp = sandbox_temp.to_string_lossy().to_string();
+    env_map.insert("TEMP".into(), sandbox_temp.clone());
+    env_map.insert("TMP".into(), sandbox_temp.clone());
+    env_map.insert("TMPDIR".into(), sandbox_temp.clone());
+    Ok(PathBuf::from(sandbox_temp))
 }
 
 // Keep PATH and PATHEXT stable for callers that rely on inheriting the parent process env.
@@ -171,4 +197,37 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     prepend_path(env_map, &base.to_string_lossy());
     reorder_pathext_for_stubs(env_map);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::configure_private_temp_env;
+    use std::collections::HashMap;
+
+    #[test]
+    fn configure_private_temp_env_redirects_all_temp_vars_to_private_workspace_dir() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let codex_home = tmp.path().join("codex-home");
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+        let mut env_map = HashMap::new();
+
+        let sandbox_temp =
+            configure_private_temp_env(&mut env_map, &codex_home, &workspace).expect("temp env");
+
+        assert!(sandbox_temp.starts_with(codex_home.join(".sandbox-temp")));
+        assert!(sandbox_temp.is_dir());
+        assert_eq!(
+            env_map.get("TEMP"),
+            Some(&sandbox_temp.to_string_lossy().to_string())
+        );
+        assert_eq!(
+            env_map.get("TMP"),
+            Some(&sandbox_temp.to_string_lossy().to_string())
+        );
+        assert_eq!(
+            env_map.get("TMPDIR"),
+            Some(&sandbox_temp.to_string_lossy().to_string())
+        );
+    }
 }

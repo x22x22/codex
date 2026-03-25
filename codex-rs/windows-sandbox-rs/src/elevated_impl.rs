@@ -3,6 +3,7 @@ mod windows_impl {
     use crate::allow::compute_allow_paths;
     use crate::allow::AllowDenyPaths;
     use crate::cap::load_or_create_cap_sids;
+    use crate::env::configure_private_temp_env;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
@@ -215,6 +216,7 @@ mod windows_impl {
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
+        configure_private_temp_env(&mut env_map, codex_home, cwd)?;
         inherit_path_env(&mut env_map);
         inject_git_safe_directory(&mut env_map, cwd, None);
         let current_dir = cwd.to_path_buf();

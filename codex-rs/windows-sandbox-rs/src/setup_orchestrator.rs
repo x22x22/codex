@@ -134,11 +134,14 @@ fn run_setup_refresh_inner(
     ) {
         return Ok(());
     }
+    let mut env_map = env_map.clone();
+    crate::env::configure_private_temp_env(&mut env_map, codex_home, command_cwd)
+        .context("configure private sandbox temp env")?;
     let (read_roots, write_roots) = build_payload_roots(
         policy,
         policy_cwd,
         command_cwd,
-        env_map,
+        &env_map,
         codex_home,
         read_roots_override,
         write_roots_override,
@@ -591,11 +594,14 @@ pub fn run_elevated_setup(
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
+    let mut env_map = env_map.clone();
+    crate::env::configure_private_temp_env(&mut env_map, codex_home, command_cwd)
+        .context("configure private sandbox temp env")?;
     let (read_roots, write_roots) = build_payload_roots(
         policy,
         policy_cwd,
         command_cwd,
-        env_map,
+        &env_map,
         codex_home,
         read_roots_override,
         write_roots_override,
