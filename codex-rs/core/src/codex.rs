@@ -102,6 +102,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubmissionType;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
@@ -939,6 +940,7 @@ pub(crate) struct TurnContext {
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
+    pub(crate) submission_type: Option<SubmissionType>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
@@ -1035,6 +1037,7 @@ impl TurnContext {
             provider: self.provider.clone(),
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
+            submission_type: None,
             session_source: self.session_source.clone(),
             environment: Arc::clone(&self.environment),
             cwd: self.cwd.clone(),
@@ -1285,6 +1288,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) submission_type: Option<SubmissionType>,
 }
 
 impl Session {
@@ -1503,6 +1507,7 @@ impl Session {
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
+            submission_type: None,
             approval_policy: session_configuration.approval_policy.clone(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
@@ -2484,6 +2489,7 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
+                updates.submission_type,
                 sandbox_policy_changed,
             )
             .await)
@@ -2494,6 +2500,7 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        submission_type: Option<SubmissionType>,
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
@@ -2567,6 +2574,7 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
+        turn_context.submission_type = submission_type;
         let turn_context = Arc::new(turn_context);
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
@@ -2671,6 +2679,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            /*submission_type*/ None,
             /*sandbox_policy_changed*/ false,
         )
         .await
@@ -4425,7 +4434,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     .await;
                     false
                 }
-                Op::UserInput { .. } | Op::UserTurn { .. } => {
+                Op::UserInput { .. } | Op::UserInputWithMetadata { .. } | Op::UserTurn { .. } => {
                     handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
@@ -4689,6 +4698,7 @@ mod handlers {
                 items,
                 collaboration_mode,
                 personality,
+                submission_type,
             } => {
                 let collaboration_mode = collaboration_mode.or_else(|| {
                     Some(CollaborationMode {
@@ -4714,6 +4724,7 @@ mod handlers {
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                         app_server_client_name: None,
+                        submission_type,
                     },
                 )
             }
@@ -4724,6 +4735,19 @@ mod handlers {
                 items,
                 SessionSettingsUpdate {
                     final_output_json_schema: Some(final_output_json_schema),
+                    submission_type: None,
+                    ..Default::default()
+                },
+            ),
+            Op::UserInputWithMetadata {
+                items,
+                final_output_json_schema,
+                submission_type,
+            } => (
+                items,
+                SessionSettingsUpdate {
+                    final_output_json_schema: Some(final_output_json_schema),
+                    submission_type,
                     ..Default::default()
                 },
             ),
@@ -5557,6 +5581,7 @@ async fn spawn_review_thread(
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
+        submission_type: None,
         approval_policy: parent_turn_context.approval_policy.clone(),
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
@@ -6156,6 +6181,9 @@ pub(crate) async fn run_turn(
     }
 
     if !input.is_empty() {
+        let submission_type = turn_context
+            .submission_type
+            .unwrap_or(SubmissionType::Prompt);
         let is_first_turn = {
             let mut state = sess.state.lock().await;
             state.take_next_turn_is_first()
@@ -6163,6 +6191,7 @@ pub(crate) async fn run_turn(
         sess.services.analytics_events_client.track_turn_event(
             tracking,
             CodexTurnEvent {
+                submission_type: Some(submission_type),
                 model_provider: turn_context.config.model_provider_id.clone(),
                 sandbox_policy: turn_context.sandbox_policy.get().clone(),
                 reasoning_effort: turn_context.reasoning_effort,

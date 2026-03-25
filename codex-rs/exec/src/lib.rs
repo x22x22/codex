@@ -674,6 +674,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         summary: None,
                         personality: None,
                         output_schema,
+                        submission_type: None,
                         collaboration_mode: None,
                     },
                 },

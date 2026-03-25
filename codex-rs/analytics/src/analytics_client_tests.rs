@@ -10,6 +10,7 @@ use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
 use super::InitializationMode;
 use super::InvocationType;
+use super::SubmissionType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::codex_app_metadata;
@@ -215,6 +216,7 @@ fn turn_event_serializes_expected_shape() {
         event_params: codex_turn_event_params(
             &tracking,
             CodexTurnEvent {
+                submission_type: Some(SubmissionType::Prompt),
                 model_provider: "openai".to_string(),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 reasoning_effort: Some(ReasoningEffort::High),
@@ -242,6 +244,7 @@ fn turn_event_serializes_expected_shape() {
                 "turn_id": "turn-2",
                 "product_client_id": originator().value,
                 "model": "gpt-5",
+                "submission_type": "prompt",
                 "model_provider": "openai",
                 "sandbox_policy": "read_only",
                 "reasoning_effort": "high",

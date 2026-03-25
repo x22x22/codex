@@ -15,6 +15,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubmissionType;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -35,6 +36,7 @@ pub struct TrackEventsContext {
 
 #[derive(Clone)]
 pub struct CodexTurnEvent {
+    pub submission_type: Option<SubmissionType>,
     pub model_provider: String,
     pub sandbox_policy: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -459,6 +461,7 @@ struct CodexTurnEventParams {
     turn_id: String,
     product_client_id: Option<String>,
     model: Option<String>,
+    submission_type: Option<SubmissionType>,
     model_provider: String,
     sandbox_policy: Option<&'static str>,
     reasoning_effort: Option<String>,
@@ -882,6 +885,7 @@ fn codex_turn_event_params(
         turn_id: tracking.turn_id.clone(),
         product_client_id: Some(originator().value),
         model: Some(tracking.model_slug.clone()),
+        submission_type: turn_event.submission_type,
         model_provider: turn_event.model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&turn_event.sandbox_policy)),
         reasoning_effort: turn_event.reasoning_effort.map(|value| value.to_string()),
