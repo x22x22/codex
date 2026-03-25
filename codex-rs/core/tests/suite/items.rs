@@ -4,6 +4,7 @@ use anyhow::Ok;
 use codex_core::CodexAuth;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
@@ -145,6 +146,7 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config.chatgpt_base_url = chatgpt_base_url;
+            config.personality = Some(Personality::None);
         });
     let TestCodex {
         codex,
