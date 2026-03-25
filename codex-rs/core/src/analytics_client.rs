@@ -186,7 +186,7 @@ impl AnalyticsEventsClient {
     }
 
     pub(crate) fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
-        track_app_used(&self.queue, Arc::clone(&self.config), Some(tracking), app);
+        track_app_used(&self.queue, self.analytics_enabled, Some(tracking), app);
     }
 
     pub(crate) fn track_plugin_used(
@@ -196,7 +196,7 @@ impl AnalyticsEventsClient {
     ) {
         track_plugin_used(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             Some(tracking),
             plugin,
         );
@@ -205,7 +205,7 @@ impl AnalyticsEventsClient {
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             PluginManagementEventType::Installed,
             plugin,
         );
@@ -214,7 +214,7 @@ impl AnalyticsEventsClient {
     pub fn track_plugin_uninstalled(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             PluginManagementEventType::Uninstalled,
             plugin,
         );
@@ -223,7 +223,7 @@ impl AnalyticsEventsClient {
     pub fn track_plugin_enabled(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             PluginManagementEventType::Enabled,
             plugin,
         );
@@ -232,7 +232,7 @@ impl AnalyticsEventsClient {
     pub fn track_plugin_disabled(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             PluginManagementEventType::Disabled,
             plugin,
         );
@@ -430,11 +430,11 @@ pub(crate) fn track_app_mentioned(
 
 pub(crate) fn track_app_used(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: Option<TrackEventsContext>,
     app: AppInvocation,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -453,11 +453,11 @@ pub(crate) fn track_app_used(
 
 pub(crate) fn track_plugin_used(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: Option<TrackEventsContext>,
     plugin: PluginTelemetryMetadata,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -476,7 +476,7 @@ pub(crate) fn track_plugin_used(
 
 fn track_plugin_management(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     event_type: PluginManagementEventType,
     plugin: PluginTelemetryMetadata,
 ) {
@@ -683,7 +683,7 @@ fn codex_plugin_used_metadata(
 
 async fn send_track_events(
     auth_manager: &AuthManager,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     events: Vec<TrackEventRequest>,
 ) {
     if events.is_empty() {

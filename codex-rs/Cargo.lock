@@ -1981,6 +1981,7 @@ dependencies = [
  "anyhow",
  "codex-app-server-protocol",
  "codex-config",
+ "codex-login",
  "codex-otel",
  "codex-protocol",
  "codex-skills",

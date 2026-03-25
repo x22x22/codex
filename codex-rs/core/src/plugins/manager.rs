@@ -206,9 +206,7 @@ impl LoadedPlugin {
     }
 }
 
-fn plugin_capability_summary_from_loaded(
-    plugin: &LoadedPlugin,
-) -> Option<PluginCapabilitySummary> {
+fn plugin_capability_summary_from_loaded(plugin: &LoadedPlugin) -> Option<PluginCapabilitySummary> {
     if !plugin.is_active() {
         return None;
     }
@@ -285,7 +283,7 @@ impl PluginLoadOutcome {
     fn from_plugins(plugins: Vec<LoadedPlugin>) -> Self {
         let capability_summaries = plugins
             .iter()
-            .filter_map(PluginCapabilitySummary::from_plugin)
+            .filter_map(plugin_capability_summary_from_loaded)
             .collect::<Vec<_>>();
         Self {
             plugins,
