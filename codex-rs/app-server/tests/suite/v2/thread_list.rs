@@ -23,6 +23,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
+use codex_core::path_utils::normalize_for_path_comparison;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
@@ -478,6 +479,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
 
     let target_cwd = codex_home.path().join("target-cwd");
     fs::create_dir_all(&target_cwd)?;
+    let expected_cwd = normalize_for_path_comparison(&target_cwd)?;
     set_rollout_cwd(
         rollout_path(codex_home.path(), "2025-01-02T10-00-00", &filtered_id).as_path(),
         &target_cwd,
@@ -492,7 +494,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
-            cwd: Some(target_cwd.to_string_lossy().into_owned()),
+            cwd: Some(expected_cwd.to_string_lossy().into_owned()),
             search_term: None,
         })
         .await?;
@@ -509,7 +511,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, filtered_id);
     assert_ne!(data[0].id, unfiltered_id);
-    assert_eq!(data[0].cwd, target_cwd);
+    assert_eq!(data[0].cwd, expected_cwd);
 
     Ok(())
 }

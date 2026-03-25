@@ -220,7 +220,6 @@ use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
-use codex_core::path_utils::normalize_for_path_comparison;
 use codex_core::plugins::MarketplaceError;
 use codex_core::plugins::MarketplacePluginSource;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
@@ -4411,10 +4410,6 @@ impl CodexMessageProcessor {
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
         let state_db_ctx = self.shared_state_db().await;
-        let normalized_cwd = cwd
-            .as_ref()
-            .and_then(|cwd| normalize_for_path_comparison(cwd).ok());
-        let cwd_filter = normalized_cwd.as_ref().or(cwd.as_ref());
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -4456,7 +4451,7 @@ impl CodexMessageProcessor {
 
             let mut filtered = Vec::with_capacity(page.items.len());
             for it in page.items {
-                let Some(mut summary) = summary_from_thread_list_item(
+                let Some(summary) = summary_from_thread_list_item(
                     it,
                     fallback_provider.as_str(),
                     state_db_ctx.as_ref(),
@@ -4468,11 +4463,10 @@ impl CodexMessageProcessor {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
-                    && cwd_filter.is_none_or(|expected_cwd| &summary.cwd == expected_cwd)
+                    && cwd
+                        .as_ref()
+                        .is_none_or(|expected_cwd| &summary.cwd == expected_cwd)
                 {
-                    if let Some(cwd) = cwd.as_ref() {
-                        summary.cwd = cwd.clone();
-                    }
                     filtered.push(summary);
                     if filtered.len() >= remaining {
                         break;
