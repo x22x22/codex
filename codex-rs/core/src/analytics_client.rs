@@ -1,5 +1,4 @@
 use crate::AuthManager;
-use crate::config::Config;
 use crate::default_client::create_client;
 use crate::plugins::PluginTelemetryMetadata;
 use codex_git_utils::collect_git_info;
@@ -66,7 +65,8 @@ pub(crate) struct AnalyticsEventsQueue {
 #[derive(Clone)]
 pub struct AnalyticsEventsClient {
     queue: AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
+    base_url: String,
 }
 
 impl AnalyticsEventsQueue {
@@ -147,10 +147,15 @@ impl AnalyticsEventsQueue {
 }
 
 impl AnalyticsEventsClient {
-    pub fn new(config: Arc<Config>, auth_manager: Arc<AuthManager>) -> Self {
+    pub fn new(
+        auth_manager: Arc<AuthManager>,
+        base_url: String,
+        analytics_enabled: Option<bool>,
+    ) -> Self {
         Self {
             queue: AnalyticsEventsQueue::new(Arc::clone(&auth_manager)),
-            config,
+            analytics_enabled,
+            base_url,
         }
     }
 
@@ -161,7 +166,7 @@ impl AnalyticsEventsClient {
     ) {
         track_skill_invocations(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             Some(tracking),
             invocations,
         );
@@ -174,7 +179,7 @@ impl AnalyticsEventsClient {
     ) {
         track_app_mentioned(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             Some(tracking),
             mentions,
         );
@@ -246,31 +251,31 @@ enum TrackEventsJob {
 }
 
 struct TrackSkillInvocationsJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: TrackEventsContext,
     invocations: Vec<SkillInvocation>,
 }
 
 struct TrackAppMentionedJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: TrackEventsContext,
     mentions: Vec<AppInvocation>,
 }
 
 struct TrackAppUsedJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: TrackEventsContext,
     app: AppInvocation,
 }
 
 struct TrackPluginUsedJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: TrackEventsContext,
     plugin: PluginTelemetryMetadata,
 }
 
 struct TrackPluginManagementJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     plugin: PluginTelemetryMetadata,
 }
 
@@ -379,11 +384,11 @@ struct CodexPluginUsedEventRequest {
 
 pub(crate) fn track_skill_invocations(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: Option<TrackEventsContext>,
     invocations: Vec<SkillInvocation>,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -393,7 +398,7 @@ pub(crate) fn track_skill_invocations(
         return;
     }
     let job = TrackEventsJob::SkillInvocations(TrackSkillInvocationsJob {
-        config,
+        analytics_enabled,
         tracking,
         invocations,
     });
@@ -402,11 +407,11 @@ pub(crate) fn track_skill_invocations(
 
 pub(crate) fn track_app_mentioned(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: Option<TrackEventsContext>,
     mentions: Vec<AppInvocation>,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -416,7 +421,7 @@ pub(crate) fn track_app_mentioned(
         return;
     }
     let job = TrackEventsJob::AppMentioned(TrackAppMentionedJob {
-        config,
+        analytics_enabled,
         tracking,
         mentions,
     });
@@ -439,7 +444,7 @@ pub(crate) fn track_app_used(
         return;
     }
     let job = TrackEventsJob::AppUsed(TrackAppUsedJob {
-        config,
+        analytics_enabled,
         tracking,
         app,
     });
@@ -462,7 +467,7 @@ pub(crate) fn track_plugin_used(
         return;
     }
     let job = TrackEventsJob::PluginUsed(TrackPluginUsedJob {
-        config,
+        analytics_enabled,
         tracking,
         plugin,
     });
@@ -478,7 +483,10 @@ fn track_plugin_management(
     if config.analytics_enabled == Some(false) {
         return;
     }
-    let job = TrackPluginManagementJob { config, plugin };
+    let job = TrackPluginManagementJob {
+        analytics_enabled,
+        plugin,
+    };
     let job = match event_type {
         PluginManagementEventType::Installed => TrackEventsJob::PluginInstalled(job),
         PluginManagementEventType::Uninstalled => TrackEventsJob::PluginUninstalled(job),
@@ -490,7 +498,7 @@ fn track_plugin_management(
 
 async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkillInvocationsJob) {
     let TrackSkillInvocationsJob {
-        config,
+        analytics_enabled,
         tracking,
         invocations,
     } = job;
@@ -538,7 +546,7 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkil
 
 async fn send_track_app_mentioned(auth_manager: &AuthManager, job: TrackAppMentionedJob) {
     let TrackAppMentionedJob {
-        config,
+        analytics_enabled,
         tracking,
         mentions,
     } = job;
@@ -558,7 +566,7 @@ async fn send_track_app_mentioned(auth_manager: &AuthManager, job: TrackAppMenti
 
 async fn send_track_app_used(auth_manager: &AuthManager, job: TrackAppUsedJob) {
     let TrackAppUsedJob {
-        config,
+        analytics_enabled,
         tracking,
         app,
     } = job;
@@ -573,7 +581,7 @@ async fn send_track_app_used(auth_manager: &AuthManager, job: TrackAppUsedJob) {
 
 async fn send_track_plugin_used(auth_manager: &AuthManager, job: TrackPluginUsedJob) {
     let TrackPluginUsedJob {
-        config,
+        analytics_enabled,
         tracking,
         plugin,
     } = job;
@@ -606,7 +614,10 @@ async fn send_track_plugin_management_event(
     job: TrackPluginManagementJob,
     event_type: &'static str,
 ) {
-    let TrackPluginManagementJob { config, plugin } = job;
+    let TrackPluginManagementJob {
+        analytics_enabled,
+        plugin,
+    } = job;
     let event_params = codex_plugin_metadata(plugin);
     let event = CodexPluginEventRequest {
         event_type,

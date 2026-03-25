@@ -20,8 +20,6 @@ use super::remote::fetch_remote_featured_plugin_ids;
 use super::remote::fetch_remote_plugin_status;
 use super::remote::uninstall_remote_plugin;
 use super::startup_sync::start_startup_remote_plugin_sync_once;
-use super::store::PluginId;
-use super::store::PluginIdError;
 use super::store::PluginInstallResult as StorePluginInstallResult;
 use super::store::PluginStore;
 use super::store::PluginStoreError;
@@ -46,6 +44,11 @@ use crate::skills::loader::load_skills_from_roots;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
 use codex_features::Feature;
+use codex_plugin::AppConnectorId;
+use codex_plugin::PluginCapabilitySummary;
+use codex_plugin::PluginId;
+use codex_plugin::PluginIdError;
+use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -113,9 +116,6 @@ fn featured_plugin_ids_cache_key(
         is_workspace_account,
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AppConnectorId(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallRequest {
@@ -206,31 +206,6 @@ impl LoadedPlugin {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PluginCapabilitySummary {
-    pub config_name: String,
-    pub display_name: String,
-    pub description: Option<String>,
-    pub has_skills: bool,
-    pub mcp_server_names: Vec<String>,
-    pub app_connector_ids: Vec<AppConnectorId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginTelemetryMetadata {
-    pub plugin_id: PluginId,
-    pub capability_summary: Option<PluginCapabilitySummary>,
-}
-
-impl PluginTelemetryMetadata {
-    pub fn from_plugin_id(plugin_id: &PluginId) -> Self {
-        Self {
-            plugin_id: plugin_id.clone(),
-            capability_summary: None,
-        }
-    }
-}
-
 impl PluginCapabilitySummary {
     fn from_plugin(plugin: &LoadedPlugin) -> Option<Self> {
         if !plugin.is_active() {
@@ -256,15 +231,6 @@ impl PluginCapabilitySummary {
             || !summary.mcp_server_names.is_empty()
             || !summary.app_connector_ids.is_empty())
         .then_some(summary)
-    }
-
-    pub fn telemetry_metadata(&self) -> Option<PluginTelemetryMetadata> {
-        PluginId::parse(&self.config_name)
-            .ok()
-            .map(|plugin_id| PluginTelemetryMetadata {
-                plugin_id,
-                capability_summary: Some(self.clone()),
-            })
     }
 }
 
@@ -1174,7 +1140,7 @@ impl PluginsManager {
                         }
                     })
                     .collect::<Vec<_>>();
-            configured_curated_plugin_ids.sort_unstable_by_key(super::store::PluginId::as_key);
+            configured_curated_plugin_ids.sort_unstable_by_key(PluginId::as_key);
             self.start_curated_repo_sync(configured_curated_plugin_ids);
             start_startup_remote_plugin_sync_once(
                 Arc::clone(self),

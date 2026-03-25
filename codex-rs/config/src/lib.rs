@@ -6,6 +6,7 @@ mod fingerprint;
 mod merge;
 mod overrides;
 mod requirements_exec_policy;
+mod skills_config;
 mod state;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
@@ -52,6 +53,9 @@ pub use requirements_exec_policy::RequirementsExecPolicyParseError;
 pub use requirements_exec_policy::RequirementsExecPolicyPatternTokenToml;
 pub use requirements_exec_policy::RequirementsExecPolicyPrefixRuleToml;
 pub use requirements_exec_policy::RequirementsExecPolicyToml;
+pub use skills_config::BundledSkillsConfig;
+pub use skills_config::SkillConfig;
+pub use skills_config::SkillsConfig;
 pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
 pub use state::ConfigLayerStackOrdering;

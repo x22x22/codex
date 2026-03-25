@@ -127,7 +127,7 @@ pub mod seatbelt;
 mod session_rollout_init_error;
 pub mod shell;
 pub mod shell_snapshot;
-pub mod skills;
+pub use codex_core_skills::skills;
 pub mod spawn;
 pub mod state_db_bridge;
 pub use codex_rollout::state_db;

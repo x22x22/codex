@@ -2637,7 +2637,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         shell_zsh_path: None,
         main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
         analytics_events_client: AnalyticsEventsClient::new(
-            Arc::clone(&config),
+            Arc::new(
+                crate::analytics_client::AnalyticsEventsSettings::from_config(config.as_ref()),
+            ),
             Arc::clone(&auth_manager),
         ),
         hooks: Hooks::new(HooksConfig {
@@ -3472,7 +3474,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         shell_zsh_path: None,
         main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
         analytics_events_client: AnalyticsEventsClient::new(
-            Arc::clone(&config),
+            Arc::new(
+                crate::analytics_client::AnalyticsEventsSettings::from_config(config.as_ref()),
+            ),
             Arc::clone(&auth_manager),
         ),
         hooks: Hooks::new(HooksConfig {

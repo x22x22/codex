@@ -411,10 +411,12 @@ mod tests {
             Arc::new(RwLock::new(CloudRequirementsLoader::default())),
             reloader.clone(),
             AnalyticsEventsClient::new(
-                analytics_config,
-                codex_core::test_support::auth_manager_from_auth(
-                    codex_core::CodexAuth::from_api_key("test"),
-                ),
+                Arc::clone(&analytics_config.auth_manager),
+                analytics_config
+                    .chatgpt_base_url
+                    .trim_end_matches('/')
+                    .to_string(),
+                analytics_config.analytics_enabled,
             ),
         );
 
