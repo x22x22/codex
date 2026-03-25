@@ -19,6 +19,7 @@ import org.json.JSONObject
 
 object AgentPlannerRuntimeManager {
     private const val TAG = "AgentPlannerRuntime"
+    private val activePlannerSessions = ConcurrentHashMap<String, Boolean>()
 
     fun requestText(
         context: Context,
@@ -31,11 +32,16 @@ object AgentPlannerRuntimeManager {
         frameworkSessionId: String? = null,
     ): String {
         val applicationContext = context.applicationContext
+        val plannerSessionId = frameworkSessionId?.trim()?.ifEmpty { null }
+            ?: throw IOException("Planner runtime requires a parent session id")
+        check(activePlannerSessions.putIfAbsent(plannerSessionId, true) == null) {
+            "Planner runtime already active for parent session $plannerSessionId"
+        }
         AgentRuntimeForegroundService.acquire(applicationContext)
         try {
             AgentPlannerRuntime(
                 context = applicationContext,
-                frameworkSessionId = frameworkSessionId?.trim()?.ifEmpty { null },
+                frameworkSessionId = plannerSessionId,
             ).use { runtime ->
                 return runtime.requestText(
                     instructions = instructions,
@@ -47,6 +53,7 @@ object AgentPlannerRuntimeManager {
                 )
             }
         } finally {
+            activePlannerSessions.remove(plannerSessionId)
             AgentRuntimeForegroundService.release(applicationContext)
         }
     }
@@ -110,7 +117,7 @@ object AgentPlannerRuntimeManager {
         }
 
         private fun startProcess() {
-            codexHome = File(context.cacheDir, "planner-codex-home/${requestIdSequence.incrementAndGet()}").apply {
+            codexHome = File(context.cacheDir, "planner-codex-home/$frameworkSessionId").apply {
                 deleteRecursively()
                 mkdirs()
             }
@@ -414,7 +421,7 @@ object AgentPlannerRuntimeManager {
         }
 
         private fun startStdoutPump() {
-            stdoutThread = thread(name = "AgentPlannerStdout-${requestIdSequence.get()}") {
+            stdoutThread = thread(name = "AgentPlannerStdout-$frameworkSessionId") {
                 process.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         if (line.isBlank()) {
@@ -436,7 +443,7 @@ object AgentPlannerRuntimeManager {
         }
 
         private fun startStderrPump() {
-            stderrThread = thread(name = "AgentPlannerStderr-${requestIdSequence.get()}") {
+            stderrThread = thread(name = "AgentPlannerStderr-$frameworkSessionId") {
                 process.errorStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
                         if (line.contains(" ERROR ") || line.startsWith("ERROR")) {

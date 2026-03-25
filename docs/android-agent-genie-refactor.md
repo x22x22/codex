@@ -52,6 +52,8 @@ The current repo now contains these implementation slices:
 - Agent-anchored planning now uses one hosted Agent runtime per planning
   session instead of a single shared planner runtime, so multiple top-level
   Agent sessions can plan concurrently.
+- Planner runtime ownership is 1:1 with the top-level parent session id. The
+  app does not allow overlapping planner runtimes for the same parent session.
 - A single narrow foreground service now acts as a shared keepalive lease for
   the app UID while any Agent-owned planner runtime is active in the
   background.
