@@ -323,6 +323,10 @@ fn log_format_from_env() -> LogFormat {
     LogFormat::from_env_value(value.as_deref())
 }
 
+fn should_log_config_warnings_to_stderr(transport: AppServerTransport) -> bool {
+    !matches!(transport, AppServerTransport::Stdio)
+}
+
 pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
@@ -541,10 +545,12 @@ pub async fn run_main_with_transport(
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
-    for warning in &config_warnings {
-        match &warning.details {
-            Some(details) => error!("{} {}", warning.summary, details),
-            None => error!("{}", warning.summary),
+    if should_log_config_warnings_to_stderr(transport) {
+        for warning in &config_warnings {
+            match &warning.details {
+                Some(details) => error!("{} {}", warning.summary, details),
+                None => error!("{}", warning.summary),
+            }
         }
     }
 
@@ -858,8 +864,11 @@ pub async fn run_main_with_transport(
 
 #[cfg(test)]
 mod tests {
+    use super::AppServerTransport;
     use super::LogFormat;
+    use super::should_log_config_warnings_to_stderr;
     use pretty_assertions::assert_eq;
+    use std::net::SocketAddr;
 
     #[test]
     fn log_format_from_env_value_matches_json_values_case_insensitively() {
@@ -874,5 +883,23 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
+    }
+
+    #[test]
+    fn config_warnings_are_not_logged_to_stderr_for_stdio_transport() {
+        assert!(!should_log_config_warnings_to_stderr(
+            AppServerTransport::Stdio
+        ));
+    }
+
+    #[test]
+    fn config_warnings_are_still_logged_to_stderr_for_websocket_transport() {
+        assert!(should_log_config_warnings_to_stderr(
+            AppServerTransport::WebSocket {
+                bind_address: "127.0.0.1:0"
+                    .parse::<SocketAddr>()
+                    .expect("parse websocket bind address"),
+            }
+        ));
     }
 }
