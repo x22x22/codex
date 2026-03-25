@@ -1,4 +1,5 @@
 use crate::codex_message_processor::ApiVersion;
+use crate::codex_message_processor::merge_thread_metadata_from_state_db_context;
 use crate::codex_message_processor::read_rollout_items_from_rollout;
 use crate::codex_message_processor::read_summary_from_rollout;
 use crate::codex_message_processor::summary_to_thread;
@@ -1810,6 +1811,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                 {
                     Ok(summary) => {
                         let mut thread = summary_to_thread(summary);
+                        merge_thread_metadata_from_state_db_context(
+                            &mut thread,
+                            conversation.state_db().as_ref(),
+                            conversation_id,
+                        )
+                        .await;
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);

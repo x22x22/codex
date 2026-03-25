@@ -2965,20 +2965,27 @@ impl CodexMessageProcessor {
                 message: format!("failed to update unarchived thread timestamp: {err}"),
                 data: None,
             })?;
-            if let Some(ctx) = state_db_ctx {
+            if let Some(ref ctx) = state_db_ctx {
                 let _ = ctx
                     .mark_unarchived(thread_id, restored_path.as_path())
                     .await;
             }
-            let summary =
+            let mut thread =
                 read_summary_from_rollout(restored_path.as_path(), fallback_provider.as_str())
                     .await
+                    .map(summary_to_thread)
                     .map_err(|err| JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
                         message: format!("failed to read unarchived thread: {err}"),
                         data: None,
                     })?;
-            Ok(summary_to_thread(summary))
+            merge_thread_metadata_from_state_db_context(
+                &mut thread,
+                state_db_ctx.as_ref(),
+                thread_id,
+            )
+            .await;
+            Ok(thread)
         }
         .await;
 
@@ -8141,6 +8148,18 @@ async fn read_thread_metadata_from_state_db_context_by_thread_id(
     match state_db_ctx.get_thread(thread_id).await {
         Ok(Some(metadata)) => Some(metadata),
         Ok(None) | Err(_) => None,
+    }
+}
+
+pub(crate) async fn merge_thread_metadata_from_state_db_context(
+    thread: &mut Thread,
+    state_db_ctx: Option<&StateDbHandle>,
+    thread_id: ThreadId,
+) {
+    if let Some(persisted_metadata) =
+        read_thread_metadata_from_state_db_context_by_thread_id(state_db_ctx, thread_id).await
+    {
+        merge_persisted_thread_metadata(thread, &persisted_metadata);
     }
 }
 
