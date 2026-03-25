@@ -1,6 +1,11 @@
 use std::fs::OpenOptions;
 use std::io;
 use std::io::ErrorKind;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use codex_login::OPENAI_API_KEY_ENV_VAR;
@@ -13,7 +18,13 @@ pub(super) fn validate_dotenv_target(path: &Path) -> io::Result<()> {
         return Ok(());
     }
 
-    OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    options.open(path)?;
     std::fs::remove_file(path)
 }
 
@@ -55,7 +66,27 @@ pub(super) fn upsert_dotenv_api_key(path: &Path, api_key: &str) -> io::Result<()
         next.push_str(&format!("{OPENAI_API_KEY_ENV_VAR}={api_key}\n"));
     }
 
-    std::fs::write(path, next)
+    write_dotenv_file(path, &next)
+}
+
+fn write_dotenv_file(path: &Path, contents: &str) -> io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+
+    let mut file = options.open(path)?;
+    file.write_all(contents.as_bytes())?;
+    file.flush()?;
+
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
+    Ok(())
 }
 
 fn ensure_parent_dir(path: &Path) -> io::Result<()> {
@@ -105,6 +136,22 @@ mod tests {
 
         let written = std::fs::read_to_string(&dotenv_path).expect("read dotenv");
         assert_eq!(written, "OPENAI_API_KEY=sk-test-key\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upsert_creates_dotenv_file_with_owner_only_permissions() {
+        let temp_dir = tempdir().expect("tempdir");
+        let dotenv_path = temp_dir.path().join(".env");
+
+        upsert_dotenv_api_key(&dotenv_path, "sk-test-key").expect("write dotenv");
+
+        let mode = std::fs::metadata(&dotenv_path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
