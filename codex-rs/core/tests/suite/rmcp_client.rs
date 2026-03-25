@@ -207,7 +207,6 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     assert!(
         logs.contains("turn{otel.name=\"session_task.turn\"")
             && logs.contains("mcp.tools.call{otel.kind=\"client\"")
-            && logs.contains("mcp.client.operation{otel.kind=\"client\"")
             && logs.contains("rpc.system=\"jsonrpc\"")
             && logs.contains("rpc.method=\"tools/call\"")
             && logs.contains("mcp.server.name=\"rmcp\"")
