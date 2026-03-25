@@ -434,6 +434,9 @@ impl CoreShellActionProvider {
         let approval_id = Some(Uuid::new_v4().to_string());
         Ok(stopwatch
             .pause_for(async move {
+                // Guardian-routed execve reviews short-circuit in
+                // `process_decision()` before calling this helper. `prompt()`
+                // is only the human approval path.
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),
                     // Currently, ApprovedForSession is only honored for skills,
