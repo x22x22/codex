@@ -1,3 +1,5 @@
+use crate::config::types::McpServerConfig;
+
 mod discoverable;
 mod injection;
 mod manager;
@@ -13,22 +15,25 @@ pub(crate) mod test_support;
 mod toggles;
 
 pub use codex_plugin::AppConnectorId;
+pub use codex_plugin::EffectiveSkillRoots;
 pub use codex_plugin::PluginCapabilitySummary;
 pub use codex_plugin::PluginId;
 pub use codex_plugin::PluginIdError;
 pub use codex_plugin::PluginTelemetryMetadata;
+
+pub type LoadedPlugin = codex_plugin::LoadedPlugin<McpServerConfig>;
+pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<McpServerConfig>;
+
 pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
 pub(crate) use injection::build_plugin_injections;
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;
 pub use manager::ConfiguredMarketplacePlugin;
-pub use manager::LoadedPlugin;
 pub use manager::OPENAI_CURATED_MARKETPLACE_NAME;
 pub use manager::PluginDetail;
 pub use manager::PluginInstallError;
 pub use manager::PluginInstallOutcome;
 pub use manager::PluginInstallRequest;
-pub use manager::PluginLoadOutcome;
 pub use manager::PluginReadOutcome;
 pub use manager::PluginReadRequest;
 pub use manager::PluginRemoteSyncError;

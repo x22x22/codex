@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -12,11 +13,9 @@ use toml::Value as TomlValue;
 use tracing::info;
 use tracing::warn;
 
-use crate::config::Config;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
-use crate::plugins::PluginsManager;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::build_implicit_skill_path_indexes;
 use crate::skills::config_rules::SkillConfigRules;
@@ -28,38 +27,27 @@ use crate::skills::loader::skill_roots;
 use crate::skills::system::install_system_skills;
 use crate::skills::system::uninstall_system_skills;
 use codex_config::SkillsConfig;
+use codex_plugin::EffectiveSkillRoots;
 
 pub struct SkillsManager {
     codex_home: PathBuf,
-    plugins_manager: Arc<PluginsManager>,
     restriction_product: Option<Product>,
     cache_by_cwd: RwLock<HashMap<PathBuf, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
 
 impl SkillsManager {
-    pub fn new(
-        codex_home: PathBuf,
-        plugins_manager: Arc<PluginsManager>,
-        bundled_skills_enabled: bool,
-    ) -> Self {
-        Self::new_with_restriction_product(
-            codex_home,
-            plugins_manager,
-            bundled_skills_enabled,
-            Some(Product::Codex),
-        )
+    pub fn new(codex_home: PathBuf, bundled_skills_enabled: bool) -> Self {
+        Self::new_with_restriction_product(codex_home, bundled_skills_enabled, Some(Product::Codex))
     }
 
     pub fn new_with_restriction_product(
         codex_home: PathBuf,
-        plugins_manager: Arc<PluginsManager>,
         bundled_skills_enabled: bool,
         restriction_product: Option<Product>,
     ) -> Self {
         let manager = Self {
             codex_home,
-            plugins_manager,
             restriction_product,
             cache_by_cwd: RwLock::new(HashMap::new()),
             cache_by_config: RwLock::new(HashMap::new()),
@@ -80,9 +68,20 @@ impl SkillsManager {
     /// This path uses a cache keyed by the effective skill-relevant config state rather than just
     /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
     /// to share a directory.
-    pub fn skills_for_config(&self, config: &Config) -> SkillLoadOutcome {
-        let roots = self.skill_roots_for_config(config);
-        let skill_config_rules = skill_config_rules_from_stack(&config.config_layer_stack);
+    pub fn skills_for_config(
+        &self,
+        cwd: &Path,
+        effective_skill_roots: &[PathBuf],
+        config_layer_stack: &ConfigLayerStack,
+        bundled_skills_enabled: bool,
+    ) -> SkillLoadOutcome {
+        let roots = self.skill_roots_for_config(
+            cwd,
+            effective_skill_roots,
+            config_layer_stack,
+            bundled_skills_enabled,
+        );
+        let skill_config_rules = skill_config_rules_from_stack(&config_layer_stack);
         let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
         if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
             return outcome;
@@ -97,14 +96,19 @@ impl SkillsManager {
         outcome
     }
 
-    pub(crate) fn skill_roots_for_config(&self, config: &Config) -> Vec<SkillRoot> {
-        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
+    pub(crate) fn skill_roots_for_config(
+        &self,
+        cwd: &Path,
+        effective_skill_roots: &[PathBuf],
+        config_layer_stack: &ConfigLayerStack,
+        bundled_skills_enabled: bool,
+    ) -> Vec<SkillRoot> {
         let mut roots = skill_roots(
-            &config.config_layer_stack,
-            &config.cwd,
-            loaded_plugins.effective_skill_roots(),
+            &config_layer_stack,
+            &cwd,
+            effective_skill_roots.to_vec(),
         );
-        if !config.bundled_skills_enabled() {
+        if !bundled_skills_enabled {
             roots.retain(|root| root.scope != SkillScope::System);
         }
         roots
@@ -127,7 +131,7 @@ impl SkillsManager {
     pub async fn skills_for_cwd_with_extra_user_roots(
         &self,
         cwd: &Path,
-        config: &Config,
+        effective_skill_roots: &[PathBuf],
         force_reload: bool,
         extra_user_roots: &[PathBuf],
     ) -> SkillLoadOutcome {
@@ -171,13 +175,10 @@ impl SkillsManager {
             }
         };
 
-        let loaded_plugins = self
-            .plugins_manager
-            .plugins_for_config_with_force_reload(config, force_reload);
         let mut roots = skill_roots(
             &config_layer_stack,
             cwd,
-            loaded_plugins.effective_skill_roots(),
+            effective_skill_roots.to_vec(),
         );
         if !bundled_skills_enabled_from_stack(&config_layer_stack) {
             roots.retain(|root| root.scope != SkillScope::System);

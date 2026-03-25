@@ -2,9 +2,14 @@
 
 pub mod mention_syntax;
 
+mod load_outcome;
 mod plugin_id;
 mod plugin_namespace;
 
+pub use load_outcome::EffectiveSkillRoots;
+pub use load_outcome::LoadedPlugin;
+pub use load_outcome::PluginLoadOutcome;
+pub use load_outcome::prompt_safe_plugin_description;
 pub use plugin_id::PluginId;
 pub use plugin_id::PluginIdError;
 pub use plugin_id::validate_plugin_segment;
