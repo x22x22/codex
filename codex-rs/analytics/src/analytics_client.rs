@@ -4,14 +4,6 @@ use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
-use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::ServiceTier;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
@@ -37,16 +29,6 @@ pub struct TrackEventsContext {
 pub struct CodexThreadInitializedEvent {
     pub thread_id: String,
     pub model: String,
-    pub model_provider: String,
-    pub reasoning_effort: Option<ReasoningEffort>,
-    pub reasoning_summary: Option<ReasoningSummary>,
-    pub service_tier: Option<ServiceTier>,
-    pub approval_policy: AskForApproval,
-    pub approvals_reviewer: ApprovalsReviewer,
-    pub sandbox_policy: SandboxPolicy,
-    pub sandbox_network_access: bool,
-    pub collaboration_mode: ModeKind,
-    pub personality: Option<Personality>,
     pub ephemeral: bool,
     pub session_source: SessionSource,
     pub initialization_mode: InitializationMode,
@@ -372,16 +354,6 @@ struct CodexThreadInitializedEventParams {
     thread_id: String,
     product_client_id: String,
     model: String,
-    model_provider: String,
-    reasoning_effort: Option<String>,
-    reasoning_summary: Option<String>,
-    service_tier: String,
-    approval_policy: String,
-    approvals_reviewer: String,
-    sandbox_policy: &'static str,
-    sandbox_network_access: bool,
-    collaboration_mode: &'static str,
-    personality: Option<String>,
     ephemeral: bool,
     session_source: Option<&'static str>,
     initialization_mode: InitializationMode,
@@ -786,21 +758,6 @@ fn codex_thread_initialized_event_params(
         thread_id: thread_event.thread_id,
         product_client_id: originator().value,
         model: thread_event.model,
-        model_provider: thread_event.model_provider,
-        reasoning_effort: thread_event.reasoning_effort.map(|value| value.to_string()),
-        reasoning_summary: thread_event
-            .reasoning_summary
-            .map(|value| value.to_string()),
-        service_tier: thread_event
-            .service_tier
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "default".to_string()),
-        approval_policy: thread_event.approval_policy.to_string(),
-        approvals_reviewer: thread_event.approvals_reviewer.to_string(),
-        sandbox_policy: sandbox_policy_mode(&thread_event.sandbox_policy),
-        sandbox_network_access: thread_event.sandbox_network_access,
-        collaboration_mode: collaboration_mode_mode(thread_event.collaboration_mode),
-        personality: thread_event.personality.map(|value| value.to_string()),
         ephemeral: thread_event.ephemeral,
         session_source: session_source_name(&thread_event.session_source),
         initialization_mode: thread_event.initialization_mode,
@@ -842,24 +799,6 @@ fn codex_plugin_used_metadata(
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
-    }
-}
-
-fn sandbox_policy_mode(sandbox_policy: &SandboxPolicy) -> &'static str {
-    match sandbox_policy {
-        SandboxPolicy::DangerFullAccess => "full_access",
-        SandboxPolicy::ReadOnly { .. } => "read_only",
-        SandboxPolicy::WorkspaceWrite { .. } => "workspace_write",
-        SandboxPolicy::ExternalSandbox { .. } => "external_sandbox",
-    }
-}
-
-fn collaboration_mode_mode(mode: ModeKind) -> &'static str {
-    match mode {
-        ModeKind::Plan => "plan",
-        ModeKind::Default => "default",
-        ModeKind::PairProgramming => "pair_programming",
-        ModeKind::Execute => "execute",
     }
 }
 

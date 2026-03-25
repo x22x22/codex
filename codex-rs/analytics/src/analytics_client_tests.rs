@@ -20,14 +20,6 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
-use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::config_types::ServiceTier;
-use codex_protocol::openai_models::ReasoningEffort;
-use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
@@ -207,16 +199,6 @@ fn thread_initialized_event_serializes_expected_shape() {
         event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
-            model_provider: "openai".to_string(),
-            reasoning_effort: Some(ReasoningEffort::High),
-            reasoning_summary: Some(ReasoningSummary::Detailed),
-            service_tier: Some(ServiceTier::Flex),
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            sandbox_network_access: false,
-            collaboration_mode: ModeKind::Plan,
-            personality: Some(Personality::Friendly),
             ephemeral: true,
             session_source: SessionSource::Exec,
             initialization_mode: InitializationMode::New,
@@ -236,16 +218,6 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "thread_id": "thread-0",
                 "product_client_id": originator().value,
                 "model": "gpt-5",
-                "model_provider": "openai",
-                "reasoning_effort": "high",
-                "reasoning_summary": "detailed",
-                "service_tier": "flex",
-                "approval_policy": "on-request",
-                "approvals_reviewer": "guardian_subagent",
-                "sandbox_policy": "read_only",
-                "sandbox_network_access": false,
-                "collaboration_mode": "plan",
-                "personality": "friendly",
                 "ephemeral": true,
                 "session_source": "user",
                 "initialization_mode": "new",
@@ -264,16 +236,6 @@ fn thread_initialized_event_serializes_subagent_source() {
         event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
             thread_id: "thread-1".to_string(),
             model: "gpt-5".to_string(),
-            model_provider: "openai".to_string(),
-            reasoning_effort: None,
-            reasoning_summary: None,
-            service_tier: None,
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            sandbox_network_access: false,
-            collaboration_mode: ModeKind::Default,
-            personality: None,
             ephemeral: false,
             session_source: SessionSource::SubAgent(SubAgentSource::Review),
             initialization_mode: InitializationMode::New,
@@ -296,16 +258,6 @@ fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
         event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
             thread_id: "thread-2".to_string(),
             model: "gpt-5".to_string(),
-            model_provider: "openai".to_string(),
-            reasoning_effort: None,
-            reasoning_summary: None,
-            service_tier: None,
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            sandbox_network_access: false,
-            collaboration_mode: ModeKind::Default,
-            personality: None,
             ephemeral: false,
             session_source: SessionSource::Mcp,
             initialization_mode: InitializationMode::New,
