@@ -6,6 +6,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::is_likely_sandbox_denied;
+use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
 use crate::guardian::GuardianApprovalDecision;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
@@ -552,7 +553,7 @@ impl CoreShellActionProvider {
                             APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string(),
                         )),
                         GuardianApprovalDecision::Denied => {
-                            EscalationDecision::deny(Some("User denied execution".to_string()))
+                            EscalationDecision::deny(Some(GUARDIAN_REJECTION_MESSAGE.to_string()))
                         }
                         GuardianApprovalDecision::Aborted => {
                             EscalationDecision::deny(Some("User cancelled execution".to_string()))
