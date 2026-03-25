@@ -15,7 +15,6 @@ use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::Product;
 use pretty_assertions::assert_eq;
 use std::fs;

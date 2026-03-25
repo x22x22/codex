@@ -406,9 +406,7 @@ mod tests {
                 .await
                 .expect("load analytics config"),
         );
-        let auth_manager = Arc::new(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
-            "test",
-        )));
+        let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
         let config_api = ConfigApi::new(
             codex_home.path().to_path_buf(),
             Vec::new(),

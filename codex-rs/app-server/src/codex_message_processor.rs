@@ -5492,11 +5492,12 @@ impl CodexMessageProcessor {
             let cwd_abs = match AbsolutePathBuf::try_from(cwd.as_path()) {
                 Ok(path) => path,
                 Err(err) => {
+                    let error_path = cwd.clone();
                     data.push(codex_app_server_protocol::SkillsListEntry {
                         cwd,
                         skills: Vec::new(),
                         errors: errors_to_info(&[codex_core::skills::SkillError {
-                            path: cwd.clone(),
+                            path: error_path,
                             message: err.to_string(),
                         }]),
                     });
@@ -5514,11 +5515,12 @@ impl CodexMessageProcessor {
             {
                 Ok(config_layer_stack) => config_layer_stack,
                 Err(err) => {
+                    let error_path = cwd.clone();
                     data.push(codex_app_server_protocol::SkillsListEntry {
                         cwd,
                         skills: Vec::new(),
                         errors: errors_to_info(&[codex_core::skills::SkillError {
-                            path: cwd.clone(),
+                            path: error_path,
                             message: err.to_string(),
                         }]),
                     });
