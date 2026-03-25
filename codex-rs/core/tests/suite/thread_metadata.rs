@@ -122,16 +122,14 @@ async fn resumed_thread_emits_thread_initialized_analytics() -> Result<()> {
                     codex_protocol::protocol::SandboxPolicy::new_workspace_write_policy(),
                 );
                 config.personality = Some(Personality::Friendly);
-                config.ephemeral = true;
             }
         })
         .build(&server)
         .await?;
 
     let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
+        .codex
+        .rollout_path()
         .expect("rollout path for initial thread");
     let resume_deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -160,7 +158,6 @@ async fn resumed_thread_emits_thread_initialized_analytics() -> Result<()> {
                 codex_protocol::protocol::SandboxPolicy::new_workspace_write_policy(),
             );
             config.personality = Some(Personality::Friendly);
-            config.ephemeral = true;
         })
         .resume(&server, initial.home.clone(), rollout_path)
         .await?;
