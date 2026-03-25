@@ -179,12 +179,6 @@ pub fn generate_ts_with_options(
         }
     }
 
-    if !ts_files.is_empty() {
-        for file in &ts_files {
-            normalize_typescript_whitespace_in_file(file)?;
-        }
-    }
-
     Ok(())
 }
 
@@ -1911,32 +1905,6 @@ fn prepend_header_if_missing(path: &Path) -> Result<()> {
     f.write_all(content.as_bytes())
         .with_context(|| format!("Failed to write content to {}", path.display()))?;
     Ok(())
-}
-
-fn normalize_typescript_whitespace_in_file(path: &Path) -> Result<()> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
-    let normalized = normalize_typescript_whitespace(&content);
-    if normalized == content {
-        return Ok(());
-    }
-
-    fs::write(path, normalized).with_context(|| format!("Failed to write {}", path.display()))?;
-    Ok(())
-}
-
-pub(crate) fn normalize_typescript_whitespace(content: &str) -> String {
-    let mut normalized = String::with_capacity(content.len());
-    for line in content.lines() {
-        normalized.push_str(line.trim_end());
-        normalized.push('\n');
-    }
-
-    if !content.ends_with('\n') {
-        normalized.pop();
-    }
-
-    normalized
 }
 
 fn ts_files_in(dir: &Path) -> Result<Vec<PathBuf>> {

@@ -66,7 +66,7 @@ name: string | null,
 /**
  * Arbitrary client-defined metadata.
  */
-metadata: { [key in string]?: string },
+metadata: { [key in string]?: string }, 
 /**
  * Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
  * (when `includeTurns` is true) responses.

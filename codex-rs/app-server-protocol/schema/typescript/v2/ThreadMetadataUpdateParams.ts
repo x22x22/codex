@@ -7,7 +7,7 @@ export type ThreadMetadataUpdateParams = { threadId: string,
 /**
  * Replace the stored client-defined metadata for this thread.
  */
-metadata?: { [key in string]?: string } | null,
+metadata?: { [key in string]?: string } | null, 
 /**
  * Patch the stored Git metadata for this thread.
  * Omit a field to leave it unchanged, set it to `null` to clear it, or
