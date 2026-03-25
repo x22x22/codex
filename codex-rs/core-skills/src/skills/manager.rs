@@ -23,6 +23,30 @@ use crate::skills::system::install_system_skills;
 use crate::skills::system::uninstall_system_skills;
 use codex_config::SkillsConfig;
 
+#[derive(Debug, Clone)]
+pub struct SkillsLoadInput {
+    pub cwd: PathBuf,
+    pub effective_skill_roots: Vec<PathBuf>,
+    pub config_layer_stack: ConfigLayerStack,
+    pub bundled_skills_enabled: bool,
+}
+
+impl SkillsLoadInput {
+    pub fn new(
+        cwd: PathBuf,
+        effective_skill_roots: Vec<PathBuf>,
+        config_layer_stack: ConfigLayerStack,
+        bundled_skills_enabled: bool,
+    ) -> Self {
+        Self {
+            cwd,
+            effective_skill_roots,
+            config_layer_stack,
+            bundled_skills_enabled,
+        }
+    }
+}
+
 pub struct SkillsManager {
     codex_home: PathBuf,
     restriction_product: Option<Product>,
@@ -62,20 +86,9 @@ impl SkillsManager {
     /// This path uses a cache keyed by the effective skill-relevant config state rather than just
     /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
     /// to share a directory.
-    pub fn skills_for_config(
-        &self,
-        cwd: &Path,
-        effective_skill_roots: &[PathBuf],
-        config_layer_stack: &ConfigLayerStack,
-        bundled_skills_enabled: bool,
-    ) -> SkillLoadOutcome {
-        let roots = self.skill_roots_for_config(
-            cwd,
-            effective_skill_roots,
-            config_layer_stack,
-            bundled_skills_enabled,
-        );
-        let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
+    pub fn skills_for_config(&self, input: &SkillsLoadInput) -> SkillLoadOutcome {
+        let roots = self.skill_roots_for_config(input);
+        let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
         if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
             return outcome;
@@ -90,15 +103,13 @@ impl SkillsManager {
         outcome
     }
 
-    pub fn skill_roots_for_config(
-        &self,
-        cwd: &Path,
-        effective_skill_roots: &[PathBuf],
-        config_layer_stack: &ConfigLayerStack,
-        bundled_skills_enabled: bool,
-    ) -> Vec<SkillRoot> {
-        let mut roots = skill_roots(config_layer_stack, cwd, effective_skill_roots.to_vec());
-        if !bundled_skills_enabled {
+    pub fn skill_roots_for_config(&self, input: &SkillsLoadInput) -> Vec<SkillRoot> {
+        let mut roots = skill_roots(
+            &input.config_layer_stack,
+            input.cwd.as_path(),
+            input.effective_skill_roots.clone(),
+        );
+        if !input.bundled_skills_enabled {
             roots.retain(|root| root.scope != SkillScope::System);
         }
         roots
@@ -106,40 +117,34 @@ impl SkillsManager {
 
     pub async fn skills_for_cwd(
         &self,
-        cwd: &Path,
-        effective_skill_roots: &[PathBuf],
+        input: &SkillsLoadInput,
         force_reload: bool,
-        config_layer_stack: &ConfigLayerStack,
     ) -> SkillLoadOutcome {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(input.cwd.as_path()) {
             return outcome;
         }
 
-        self.skills_for_cwd_with_extra_user_roots(
-            cwd,
-            effective_skill_roots,
-            force_reload,
-            &[],
-            config_layer_stack,
-        )
-        .await
+        self.skills_for_cwd_with_extra_user_roots(input, force_reload, &[])
+            .await
     }
 
     pub async fn skills_for_cwd_with_extra_user_roots(
         &self,
-        cwd: &Path,
-        effective_skill_roots: &[PathBuf],
+        input: &SkillsLoadInput,
         force_reload: bool,
         extra_user_roots: &[PathBuf],
-        config_layer_stack: &ConfigLayerStack,
     ) -> SkillLoadOutcome {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(input.cwd.as_path()) {
             return outcome;
         }
         let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
 
-        let mut roots = skill_roots(config_layer_stack, cwd, effective_skill_roots.to_vec());
-        if !bundled_skills_enabled_from_stack(config_layer_stack) {
+        let mut roots = skill_roots(
+            &input.config_layer_stack,
+            input.cwd.as_path(),
+            input.effective_skill_roots.clone(),
+        );
+        if !bundled_skills_enabled_from_stack(&input.config_layer_stack) {
             roots.retain(|root| root.scope != SkillScope::System);
         }
         roots.extend(
@@ -151,13 +156,13 @@ impl SkillsManager {
                     scope: SkillScope::User,
                 }),
         );
-        let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
+        let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let outcome = self.build_skill_outcome(roots, &skill_config_rules);
         let mut cache = self
             .cache_by_cwd
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(cwd.to_path_buf(), outcome.clone());
+        cache.insert(input.cwd.clone(), outcome.clone());
         outcome
     }
 

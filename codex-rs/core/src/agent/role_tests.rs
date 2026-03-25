@@ -4,6 +4,7 @@ use crate::config::ConfigBuilder;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
+use crate::skills::skills_load_input_from_config;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -632,12 +633,8 @@ enabled = false
     let skills_manager = SkillsManager::new(home.path().to_path_buf(), true);
     let plugin_outcome = plugins_manager.plugins_for_config(&config);
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
-    let outcome = skills_manager.skills_for_config(
-        config.cwd.as_path(),
-        &effective_skill_roots,
-        &config.config_layer_stack,
-        config.bundled_skills_enabled(),
-    );
+    let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
+    let outcome = skills_manager.skills_for_config(&skills_input);
     let skill = outcome
         .skills
         .iter()

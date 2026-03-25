@@ -2,10 +2,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::Config;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
@@ -20,6 +22,7 @@ pub use codex_core_skills::skills::SkillError;
 pub use codex_core_skills::skills::SkillLoadOutcome;
 pub use codex_core_skills::skills::SkillMetadata;
 pub use codex_core_skills::skills::SkillPolicy;
+pub use codex_core_skills::skills::SkillsLoadInput;
 pub use codex_core_skills::skills::SkillsManager;
 pub use codex_core_skills::skills::build_skill_name_counts;
 pub use codex_core_skills::skills::collect_env_var_dependencies;
@@ -37,6 +40,18 @@ pub use codex_core_skills::skills::remote;
 pub use codex_core_skills::skills::render;
 pub use codex_core_skills::skills::render_skills_section;
 pub use codex_core_skills::skills::system;
+
+pub(crate) fn skills_load_input_from_config(
+    config: &Config,
+    effective_skill_roots: Vec<PathBuf>,
+) -> SkillsLoadInput {
+    SkillsLoadInput::new(
+        config.cwd.clone(),
+        effective_skill_roots,
+        config.config_layer_stack.clone(),
+        config.bundled_skills_enabled(),
+    )
+}
 
 pub(crate) async fn resolve_skill_dependencies_for_turn(
     sess: &Arc<Session>,

@@ -126,12 +126,13 @@ fn skills_for_config_with_stack(
     config_layer_stack: &ConfigLayerStack,
     effective_skill_roots: &[PathBuf],
 ) -> SkillLoadOutcome {
-    skills_manager.skills_for_config(
-        cwd.path(),
-        effective_skill_roots,
-        config_layer_stack,
+    let skills_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        effective_skill_roots.to_vec(),
+        config_layer_stack.clone(),
         bundled_skills_enabled_from_stack(config_layer_stack),
-    )
+    );
+    skills_manager.skills_for_config(&skills_input)
 }
 
 #[test]
@@ -229,13 +230,17 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
 
     write_user_skill(&extra_root, "x", "extra-skill", "from extra root");
     let extra_root_path = extra_root.path().to_path_buf();
+    let base_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
     let outcome_with_extra = skills_manager
         .skills_for_cwd_with_extra_user_roots(
-            cwd.path(),
-            &[],
+            &base_input,
             true,
             std::slice::from_ref(&extra_root_path),
-            &config_layer_stack,
         )
         .await;
     assert!(
@@ -253,9 +258,13 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
 
     // The cwd-only API returns the current cached entry for this cwd, even when that entry
     // was produced with extra roots.
-    let outcome_without_extra = skills_manager
-        .skills_for_cwd(cwd.path(), &[], false, &config_layer_stack)
-        .await;
+    let base_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
+    let outcome_without_extra = skills_manager.skills_for_cwd(&base_input, false).await;
     assert_eq!(outcome_without_extra.skills, outcome_with_extra.skills);
     assert_eq!(outcome_without_extra.errors, outcome_with_extra.errors);
 }
@@ -312,13 +321,17 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     write_user_skill(&extra_root_b, "x", "extra-skill-b", "from extra root b");
 
     let extra_root_a_path = extra_root_a.path().to_path_buf();
+    let base_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
     let outcome_a = skills_manager
         .skills_for_cwd_with_extra_user_roots(
-            cwd.path(),
-            &[],
+            &base_input,
             true,
             std::slice::from_ref(&extra_root_a_path),
-            &config_layer_stack,
         )
         .await;
     assert!(
@@ -337,11 +350,9 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     let extra_root_b_path = extra_root_b.path().to_path_buf();
     let outcome_b = skills_manager
         .skills_for_cwd_with_extra_user_roots(
-            cwd.path(),
-            &[],
+            &base_input,
             false,
             std::slice::from_ref(&extra_root_b_path),
-            &config_layer_stack,
         )
         .await;
     assert!(
@@ -359,11 +370,9 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
 
     let outcome_reloaded = skills_manager
         .skills_for_cwd_with_extra_user_roots(
-            cwd.path(),
-            &[],
+            &base_input,
             true,
             std::slice::from_ref(&extra_root_b_path),
-            &config_layer_stack,
         )
         .await;
     assert!(
@@ -526,10 +535,14 @@ async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill()
     let child_stack =
         config_stack_with_session_flags(&codex_home, &disabled_skill_config, &enabled_skill_config);
     let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), true);
+    let parent_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        Vec::new(),
+        parent_stack.clone(),
+        bundled_skills_enabled_from_stack(&parent_stack),
+    );
 
-    let parent_outcome = skills_manager
-        .skills_for_cwd(cwd.path(), &[], true, &parent_stack)
-        .await;
+    let parent_outcome = skills_manager.skills_for_cwd(&parent_input, true).await;
     let parent_skill = parent_outcome
         .skills
         .iter()

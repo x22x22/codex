@@ -36,6 +36,7 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
 use crate::skills::render_skills_section;
+use crate::skills::skills_load_input_from_config;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -473,12 +474,8 @@ impl Codex {
 
         let plugin_outcome = plugins_manager.plugins_for_config(&config);
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
-        let loaded_skills = skills_manager.skills_for_config(
-            config.cwd.as_path(),
-            &effective_skill_roots,
-            &config.config_layer_stack,
-            config.bundled_skills_enabled(),
-        );
+        let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
+        let loaded_skills = skills_manager.skills_for_config(&skills_input);
 
         for err in &loaded_skills.errors {
             error!(
@@ -2452,12 +2449,12 @@ impl Session {
             .plugins_manager
             .plugins_for_config(&per_turn_config);
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
-        let skills_outcome = Arc::new(self.services.skills_manager.skills_for_config(
-            per_turn_config.cwd.as_path(),
-            &effective_skill_roots,
-            &per_turn_config.config_layer_stack,
-            per_turn_config.bundled_skills_enabled(),
-        ));
+        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+        let skills_outcome = Arc::new(
+            self.services
+                .skills_manager
+                .skills_for_config(&skills_input),
+        );
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.conversation_id,
             Some(Arc::clone(&self.services.auth_manager)),
@@ -5004,13 +5001,14 @@ mod handlers {
                 &config_layer_stack,
                 config.features.enabled(Feature::Plugins),
             );
+            let skills_input = crate::skills::SkillsLoadInput::new(
+                cwd.clone(),
+                effective_skill_roots,
+                config_layer_stack,
+                config.bundled_skills_enabled(),
+            );
             let outcome = skills_manager
-                .skills_for_cwd(
-                    &cwd,
-                    &effective_skill_roots,
-                    force_reload,
-                    &config_layer_stack,
-                )
+                .skills_for_cwd(&skills_input, force_reload)
                 .await;
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);
