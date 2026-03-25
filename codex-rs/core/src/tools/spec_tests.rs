@@ -1680,11 +1680,8 @@ async fn test_parallel_support_flags() {
 async fn test_test_model_info_includes_sync_tool() {
     let _config = test_config().await;
     let mut model_info = model_info_from_models_json("gpt-5-codex").await;
-    model_info.experimental_supported_tools = vec![
-        "test_sync_tool".to_string(),
-        "read_file".to_string(),
-        "list_dir".to_string(),
-    ];
+    model_info.experimental_supported_tools =
+        vec!["test_sync_tool".to_string(), "list_dir".to_string()];
     let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1702,11 +1699,6 @@ async fn test_test_model_info_includes_sync_tool() {
         tools
             .iter()
             .any(|tool| tool_name(&tool.spec) == "test_sync_tool")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool_name(&tool.spec) == "read_file")
     );
     assert!(tools.iter().any(|tool| tool_name(&tool.spec) == "list_dir"));
 }
