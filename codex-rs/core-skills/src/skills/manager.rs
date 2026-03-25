@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_config::ConfigLayerStack;
+use codex_config::CloudRequirementsLoader;
+use codex_config::LoaderOverrides;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -13,9 +15,7 @@ use toml::Value as TomlValue;
 use tracing::info;
 use tracing::warn;
 
-use crate::config_loader::CloudRequirementsLoader;
-use crate::config_loader::LoaderOverrides;
-use crate::config_loader::load_config_layers_state;
+
 use crate::skills::SkillLoadOutcome;
 use crate::skills::build_implicit_skill_path_indexes;
 use crate::skills::config_rules::SkillConfigRules;
@@ -119,12 +119,13 @@ impl SkillsManager {
         cwd: &Path,
         config: &Config,
         force_reload: bool,
+        config_layer_stack: &ConfigLayerStack,
     ) -> SkillLoadOutcome {
         if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
             return outcome;
         }
 
-        self.skills_for_cwd_with_extra_user_roots(cwd, config, force_reload, &[])
+        self.skills_for_cwd_with_extra_user_roots(cwd, effective_skill_roots, force_reload, &[], config_layer_stack)
             .await
     }
 
@@ -134,6 +135,7 @@ impl SkillsManager {
         effective_skill_roots: &[PathBuf],
         force_reload: bool,
         extra_user_roots: &[PathBuf],
+        config_layer_stack: &ConfigLayerStack,
     ) -> SkillLoadOutcome {
         if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
             return outcome;
@@ -154,26 +156,6 @@ impl SkillsManager {
         };
 
         let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
-        let config_layer_stack = match load_config_layers_state(
-            &self.codex_home,
-            Some(cwd_abs),
-            &cli_overrides,
-            LoaderOverrides::default(),
-            CloudRequirementsLoader::default(),
-        )
-        .await
-        {
-            Ok(config_layer_stack) => config_layer_stack,
-            Err(err) => {
-                return SkillLoadOutcome {
-                    errors: vec![crate::skills::model::SkillError {
-                        path: cwd.to_path_buf(),
-                        message: err.to_string(),
-                    }],
-                    ..Default::default()
-                };
-            }
-        };
 
         let mut roots = skill_roots(
             &config_layer_stack,
