@@ -194,7 +194,7 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: config.cwd.clone(),
+            cwd: config.cwd.clone().to_path_buf(),
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
