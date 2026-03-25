@@ -157,7 +157,6 @@ object AgentTaskPlanner {
                 sessionController = sessionController,
                 requestUserInputHandler = requestUserInputHandler,
                 frameworkSessionId = pendingSession.parentSessionId,
-                keepForeground = true,
             )
             sessionController.startDirectSessionChildren(
                 parentSessionId = pendingSession.parentSessionId,
@@ -185,7 +184,6 @@ object AgentTaskPlanner {
         sessionController: AgentSessionController,
         requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
         frameworkSessionId: String? = null,
-        keepForeground: Boolean = false,
     ): AgentFrameworkToolBridge.StartDirectSessionRequest {
         Log.i(TAG, "Planning Agent session for objective=${userObjective.take(160)}")
         val isEligibleTargetPackage = { packageName: String ->
@@ -201,7 +199,7 @@ object AgentTaskPlanner {
         var plannerRequest: AgentFrameworkToolBridge.StartDirectSessionRequest? = null
         var lastPlannerError: IOException? = null
         for (attemptIndex in 0 until PLANNER_ATTEMPTS) {
-            val plannerResponse = AgentCodexAppServerClient.requestText(
+            val plannerResponse = AgentPlannerRuntimeManager.requestText(
                 context = context,
                 instructions = PLANNER_INSTRUCTIONS,
                 prompt = buildPlannerPrompt(
@@ -214,7 +212,6 @@ object AgentTaskPlanner {
                 executionSettings = executionSettings,
                 requestTimeoutMs = PLANNER_REQUEST_TIMEOUT_MS,
                 frameworkSessionId = frameworkSessionId,
-                keepForeground = keepForeground,
             )
             Log.i(TAG, "Planner response=${plannerResponse.take(400)}")
             previousPlannerResponse = plannerResponse

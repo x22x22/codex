@@ -49,11 +49,16 @@ The current repo now contains these implementation slices:
 - The Agent now provisions per-session network config with auth/base-url
   inputs before each Genie start, while the framework owns active session
   `/responses` execution and streaming.
-- Agent-anchored planning uses the same hosted Agent runtime but now keeps a
-  narrow foreground service alive while the Agent UI is backgrounded, because
-  the framework only permits `openFrameworkHttpExchange(...)` for active Genie
-  runtimes. Direct parent planning therefore attempts framework transport first
-  and falls back to the Agent-owned proxy only for that planner path.
+- Agent-anchored planning now uses one hosted Agent runtime per planning
+  session instead of a single shared planner runtime, so multiple top-level
+  Agent sessions can plan concurrently.
+- A single narrow foreground service now acts as a shared keepalive lease for
+  the app UID while any Agent-owned planner runtime is active in the
+  background.
+- The framework still only permits `openFrameworkHttpExchange(...)` for active
+  Genie runtimes. Each direct parent planner runtime therefore attempts
+  framework transport first and falls back to the Agent-owned proxy only for
+  that planner path.
 - The Genie runtime now keeps host dynamic tools limited to framework-only
   detached-target controls and frame capture, while standard Android shell and
   device commands stay in the normal Codex tool path.
@@ -152,6 +157,9 @@ the Android Agent/Genie flow.
   - publishing trace, question, result, and error events
   - requesting detached target actions when appropriate
 - The current implementation hosts `codex app-server` inside both the Agent and Genie sandboxes.
+- Agent-side planning no longer uses one shared hosted runtime; each concurrent
+  planning session owns its own short-lived hosted `codex app-server`
+  subprocess.
 - Kotlin is now only the host/bridge layer for:
   - framework lifecycle and result publication
   - Android dynamic tool execution
@@ -235,13 +243,18 @@ the Android Agent/Genie flow.
     including the direct-parent planner fallback when the framework rejects
     hidden Agent-side HTTP exchange opens outside an active Genie runtime
 - `android/app/src/main/java/com/openai/codex/agent/AgentRuntimeForegroundService.kt`
-  - narrow foreground-service keepalive for Agent-owned planning while the UI
+  - shared foreground-service keepalive for Agent-owned planning while the UI
     is backgrounded
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
   - Genie-side client for the framework-managed control bridge plus the
     framework-owned streaming HTTP exchange bridge
+- `android/app/src/main/java/com/openai/codex/agent/AgentPlannerRuntimeManager.kt`
+  - per-planning-session hosted Agent runtime manager, allowing multiple
+    concurrent top-level Agent planning sessions
 - `android/app/src/main/java/com/openai/codex/agent/AgentCodexAppServerClient.kt`
-  - hosted Agent `codex app-server` client for planning, orchestration, auto-answering, runtime metadata, and narrow Agent tool calls
+  - hosted Agent `codex app-server` client for runtime metadata, auth/model
+    operations, auto-answering, and narrow Agent tool calls outside the
+    concurrent planner runtime path
 
 ## Build
 

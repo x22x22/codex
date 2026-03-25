@@ -50,7 +50,6 @@ object AgentSessionLauncher {
                     sessionController = sessionController,
                     requestUserInputHandler = null,
                     frameworkSessionId = pendingSession.parentSessionId,
-                    keepForeground = true,
                 )
             }.onFailure { err ->
                 if (!sessionController.isTerminalSession(pendingSession.parentSessionId)) {

@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import java.util.concurrent.atomic.AtomicInteger
 
 class AgentRuntimeForegroundService : Service() {
     companion object {
@@ -16,20 +17,55 @@ class AgentRuntimeForegroundService : Service() {
         private const val NOTIFICATION_ID = 0xC0D3002
         private const val ACTION_START = "com.openai.codex.agent.action.START_RUNTIME_FOREGROUND"
         private const val ACTION_STOP = "com.openai.codex.agent.action.STOP_RUNTIME_FOREGROUND"
+        private val activeLeases = AtomicInteger(0)
 
-        fun start(context: Context) {
+        fun acquire(context: Context) {
+            val previous = activeLeases.getAndIncrement()
+            if (previous > 0) {
+                return
+            }
             val intent = Intent(context, AgentRuntimeForegroundService::class.java).apply {
                 action = ACTION_START
             }
             context.startForegroundService(intent)
         }
 
-        fun stop(context: Context) {
-            val intent = Intent(context, AgentRuntimeForegroundService::class.java).apply {
-                action = ACTION_STOP
+        fun release(context: Context) {
+            while (true) {
+                val current = activeLeases.get()
+                if (current <= 0) {
+                    return
+                }
+                if (!activeLeases.compareAndSet(current, current - 1)) {
+                    continue
+                }
+                if (current > 1) {
+                    return
+                }
+                val intent = Intent(context, AgentRuntimeForegroundService::class.java).apply {
+                    action = ACTION_STOP
+                }
+                context.startService(intent)
+                return
             }
-            context.startService(intent)
         }
+
+        fun start(context: Context) {
+            acquire(context)
+        }
+
+        fun stop(context: Context) {
+            release(context)
+        }
+
+        fun activeLeaseCount(): Int {
+            return activeLeases.get()
+        }
+
+        fun resetLeases() {
+            activeLeases.set(0)
+        }
+
     }
 
     override fun onStartCommand(
@@ -39,6 +75,7 @@ class AgentRuntimeForegroundService : Service() {
     ): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                resetLeases()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelfResult(startId)
             }
