@@ -1098,6 +1098,8 @@ fn default_read_only_subpaths_for_writable_root(
             subpaths.push(top_level_codex);
         }
     }
+    // A read-only `.codex/` directory does not stop writes through a
+    // symlinked `.codex/config.toml` that points back into the writable root.
     #[allow(clippy::expect_used)]
     let top_level_codex_config = writable_root
         .join(".codex/config.toml")
