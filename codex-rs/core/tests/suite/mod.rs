@@ -130,6 +130,7 @@ mod text_encoding_fix;
 mod thread_metadata;
 mod tool_harness;
 mod tool_parallelism;
+mod tool_suggest;
 mod tools;
 mod truncation;
 mod turn_state;
