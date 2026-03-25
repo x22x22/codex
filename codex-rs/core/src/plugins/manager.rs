@@ -206,32 +206,32 @@ impl LoadedPlugin {
     }
 }
 
-impl PluginCapabilitySummary {
-    fn from_plugin(plugin: &LoadedPlugin) -> Option<Self> {
-        if !plugin.is_active() {
-            return None;
-        }
-
-        let mut mcp_server_names: Vec<String> = plugin.mcp_servers.keys().cloned().collect();
-        mcp_server_names.sort_unstable();
-
-        let summary = Self {
-            config_name: plugin.config_name.clone(),
-            display_name: plugin
-                .manifest_name
-                .clone()
-                .unwrap_or_else(|| plugin.config_name.clone()),
-            description: prompt_safe_plugin_description(plugin.manifest_description.as_deref()),
-            has_skills: plugin.has_enabled_skills,
-            mcp_server_names,
-            app_connector_ids: plugin.apps.clone(),
-        };
-
-        (summary.has_skills
-            || !summary.mcp_server_names.is_empty()
-            || !summary.app_connector_ids.is_empty())
-        .then_some(summary)
+fn plugin_capability_summary_from_loaded(
+    plugin: &LoadedPlugin,
+) -> Option<PluginCapabilitySummary> {
+    if !plugin.is_active() {
+        return None;
     }
+
+    let mut mcp_server_names: Vec<String> = plugin.mcp_servers.keys().cloned().collect();
+    mcp_server_names.sort_unstable();
+
+    let summary = PluginCapabilitySummary {
+        config_name: plugin.config_name.clone(),
+        display_name: plugin
+            .manifest_name
+            .clone()
+            .unwrap_or_else(|| plugin.config_name.clone()),
+        description: prompt_safe_plugin_description(plugin.manifest_description.as_deref()),
+        has_skills: plugin.has_enabled_skills,
+        mcp_server_names,
+        app_connector_ids: plugin.apps.clone(),
+    };
+
+    (summary.has_skills
+        || !summary.mcp_server_names.is_empty()
+        || !summary.app_connector_ids.is_empty())
+    .then_some(summary)
 }
 
 impl From<PluginDetail> for PluginCapabilitySummary {
