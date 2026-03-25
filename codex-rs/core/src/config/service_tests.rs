@@ -237,6 +237,54 @@ async fn read_includes_origins_and_layers() {
     ));
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn write_value_succeeds_when_managed_preferences_expand_home_directory_paths() -> Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"\n")?;
+
+    let service = ConfigService::new(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides {
+            managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            managed_preferences_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+sandbox_mode = "workspace-write"
+[sandbox_workspace_write]
+writable_roots = ["~/code"]
+"#
+                    .as_bytes(),
+                ),
+            ),
+            macos_managed_config_requirements_base64: None,
+        },
+        CloudRequirementsLoader::default(),
+    );
+
+    let response = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+            key_path: "model".to_string(),
+            value: serde_json::json!("updated"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect("write succeeds");
+
+    assert_eq!(response.status, WriteStatus::Ok);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config"),
+        "model = \"updated\"\n"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn write_value_reports_override() {
     let tmp = tempdir().expect("tempdir");
@@ -384,6 +432,34 @@ async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
 
     let contents = std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
     assert_eq!(contents.trim(), "model = \"user\"");
+}
+
+#[tokio::test]
+async fn reserved_builtin_provider_override_rejected() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"\n").unwrap();
+
+    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let error = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
+            key_path: "model_providers.openai.name".to_string(),
+            value: serde_json::json!("OpenAI Override"),
+            merge_strategy: MergeStrategy::Replace,
+            expected_version: None,
+        })
+        .await
+        .expect_err("should reject reserved provider override");
+
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert!(error.to_string().contains("reserved built-in provider IDs"));
+    assert!(error.to_string().contains("`openai`"));
+
+    let contents = std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
+    assert_eq!(contents, "model = \"user\"\n");
 }
 
 #[tokio::test]

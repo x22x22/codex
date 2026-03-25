@@ -2,16 +2,15 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchFileChange;
-
-use crate::exec::SandboxType;
-use crate::util::resolve_path;
-
 use crate::protocol::AskForApproval;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::SandboxPolicy;
+use crate::util::resolve_path;
+use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::get_platform_sandbox;
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -43,7 +42,7 @@ pub fn assess_patch_safety(
         AskForApproval::OnFailure
         | AskForApproval::Never
         | AskForApproval::OnRequest
-        | AskForApproval::Reject(_) => {
+        | AskForApproval::Granular(_) => {
             // Continue to see if this can be auto-approved.
         }
         // TODO(ragona): I'm not sure this is actually correct? I believe in this case
@@ -56,7 +55,7 @@ pub fn assess_patch_safety(
     let rejects_sandbox_approval = matches!(policy, AskForApproval::Never)
         || matches!(
             policy,
-            AskForApproval::Reject(reject_config) if reject_config.sandbox_approval
+            AskForApproval::Granular(granular_config) if !granular_config.sandbox_approval
         );
 
     // Even though the patch appears to be constrained to writable paths, it is
@@ -103,22 +102,6 @@ pub fn assess_patch_safety(
         }
     } else {
         SafetyCheck::AskUser
-    }
-}
-
-pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType> {
-    if cfg!(target_os = "macos") {
-        Some(SandboxType::MacosSeatbelt)
-    } else if cfg!(target_os = "linux") {
-        Some(SandboxType::LinuxSeccomp)
-    } else if cfg!(target_os = "windows") {
-        if windows_sandbox_enabled {
-            Some(SandboxType::WindowsRestrictedToken)
-        } else {
-            None
-        }
-    } else {
-        None
     }
 }
 

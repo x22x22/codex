@@ -8,8 +8,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RejectConfig;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
@@ -65,6 +65,7 @@ async fn submit_turn_with_policies(
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy,
+            approvals_reviewer: None,
             sandbox_policy,
             model: test.session_configured.model.clone(),
             effort: None,
@@ -285,12 +286,12 @@ async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_false_s
         return Ok(());
     };
 
-    let approval_policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: false,
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: true,
         rules: true,
-        skill_approval: false,
-        request_permissions: false,
-        mcp_elicitations: false,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
     });
     let server = start_mock_server().await;
     let tool_call_id = "zsh-fork-skill-reject-false";
@@ -381,12 +382,12 @@ async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_true_st
         return Ok(());
     };
 
-    let approval_policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: true,
-        rules: false,
-        skill_approval: false,
-        request_permissions: false,
-        mcp_elicitations: false,
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
     });
     let server = start_mock_server().await;
     let tool_call_id = "zsh-fork-skill-reject-true";
@@ -475,12 +476,12 @@ async fn shell_zsh_fork_skill_script_reject_policy_with_skill_approval_true_skip
         return Ok(());
     };
 
-    let approval_policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: false,
-        rules: false,
-        skill_approval: true,
-        request_permissions: false,
-        mcp_elicitations: false,
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: true,
+        rules: true,
+        skill_approval: false,
+        request_permissions: true,
+        mcp_elicitations: true,
     });
     let server = start_mock_server().await;
     let tool_call_id = "zsh-fork-skill-reject-skill-approval-true";

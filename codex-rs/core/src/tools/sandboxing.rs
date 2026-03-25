@@ -9,10 +9,8 @@ use crate::codex::TurnContext;
 use crate::error::CodexErr;
 #[cfg(test)]
 use crate::protocol::SandboxPolicy;
-use crate::sandboxing::CommandSpec;
-use crate::sandboxing::SandboxManager;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
-use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
@@ -23,6 +21,12 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformError;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 use futures::Future;
 use futures::future::BoxFuture;
 use serde::Serialize;
@@ -94,7 +98,7 @@ where
 
     services.session_telemetry.counter(
         "codex.approval.requested",
-        1,
+        /*inc*/ 1,
         &[
             ("tool", tool_name),
             ("approved", decision.to_opaque_string()),
@@ -161,8 +165,8 @@ impl ExecApprovalRequirement {
 
 /// - Never, OnFailure: do not ask
 /// - OnRequest: ask unless filesystem access is unrestricted
-/// - Reject: ask unless filesystem access is unrestricted, but auto-reject
-///   when `sandbox_approval` rejection is enabled.
+/// - Granular: ask unless filesystem access is unrestricted, but auto-reject
+///   when granular sandbox approval is disabled.
 /// - UnlessTrusted: always ask
 pub(crate) fn default_exec_approval_requirement(
     policy: AskForApproval,
@@ -170,7 +174,7 @@ pub(crate) fn default_exec_approval_requirement(
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
         AskForApproval::Never | AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest | AskForApproval::Reject(_) => {
+        AskForApproval::OnRequest | AskForApproval::Granular(_) => {
             matches!(
                 file_system_sandbox_policy.kind,
                 FileSystemSandboxKind::Restricted
@@ -182,11 +186,12 @@ pub(crate) fn default_exec_approval_requirement(
     if needs_approval
         && matches!(
             policy,
-            AskForApproval::Reject(reject_config) if reject_config.rejects_sandbox_approval()
+            AskForApproval::Granular(granular_config)
+                if !granular_config.allows_sandbox_approval()
         )
     {
         ExecApprovalRequirement::Forbidden {
-            reason: "approval policy rejected sandbox approval prompt".to_string(),
+            reason: "approval policy disallowed sandbox approval prompt".to_string(),
         }
     } else if needs_approval {
         ExecApprovalRequirement::NeedsApproval {
@@ -268,7 +273,7 @@ pub(crate) trait Approvable<Req> {
             AskForApproval::UnlessTrusted => true,
             AskForApproval::Never => false,
             AskForApproval::OnRequest => false,
-            AskForApproval::Reject(reject_config) => !reject_config.sandbox_approval,
+            AskForApproval::Granular(granular_config) => granular_config.sandbox_approval,
         }
     }
 
@@ -277,15 +282,6 @@ pub(crate) trait Approvable<Req> {
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision>;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SandboxablePreference {
-    Auto,
-    #[allow(dead_code)] // Will be used by later tools.
-    Require,
-    #[allow(dead_code)] // Will be used by later tools.
-    Forbid,
 }
 
 pub(crate) trait Sandboxable {
@@ -322,7 +318,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 }
 
 pub(crate) struct SandboxAttempt<'a> {
-    pub sandbox: crate::exec::SandboxType,
+    pub sandbox: SandboxType,
     pub policy: &'a crate::protocol::SandboxPolicy,
     pub file_system_policy: &'a FileSystemSandboxPolicy,
     pub network_policy: NetworkSandboxPolicy,
@@ -332,17 +328,19 @@ pub(crate) struct SandboxAttempt<'a> {
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
+    pub windows_sandbox_private_desktop: bool,
 }
 
 impl<'a> SandboxAttempt<'a> {
     pub fn env_for(
         &self,
-        spec: CommandSpec,
+        command: SandboxCommand,
+        options: ExecOptions,
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         self.manager
-            .transform(crate::sandboxing::SandboxTransformRequest {
-                spec,
+            .transform(SandboxTransformRequest {
+                command,
                 policy: self.policy,
                 file_system_policy: self.file_system_policy,
                 network_policy: self.network_policy,
@@ -355,6 +353,10 @@ impl<'a> SandboxAttempt<'a> {
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
+                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            })
+            .map(|request| {
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
             })
     }
 }
