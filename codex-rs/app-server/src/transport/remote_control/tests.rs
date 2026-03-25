@@ -28,6 +28,7 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::test_support::auth_manager_from_auth;
 use codex_core::test_support::auth_manager_from_auth_with_home;
+use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -71,6 +72,12 @@ fn remote_control_auth_manager_with_home(codex_home: &TempDir) -> Arc<AuthManage
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
         codex_home.path().to_path_buf(),
     )
+}
+
+async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime> {
+    StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string())
+        .await
+        .expect("state runtime should initialize")
 }
 
 #[test]
@@ -795,6 +802,7 @@ async fn connect_remote_control_websocket_includes_http_error_details() {
         .await;
     });
     let codex_home = TempDir::new().expect("temp dir should create");
+    let state_db = remote_control_state_runtime(&codex_home).await;
     let auth_manager = remote_control_auth_manager();
     let mut enrollment = Some(RemoteControlEnrollment {
         server_id: "srv_e_test".to_string(),
@@ -803,7 +811,7 @@ async fn connect_remote_control_websocket_includes_http_error_details() {
 
     let err = match connect_remote_control_websocket(
         &remote_control_target,
-        remote_control_state_path(codex_home.path()).as_path(),
+        Some(state_db.as_ref()),
         auth_manager.as_ref(),
         &mut enrollment,
         None,
@@ -821,7 +829,7 @@ async fn connect_remote_control_websocket_includes_http_error_details() {
 #[tokio::test]
 async fn persisted_remote_control_enrollment_round_trips_by_target_and_account() {
     let codex_home = TempDir::new().expect("temp dir should create");
-    let state_path = remote_control_state_path(codex_home.path());
+    let state_db = remote_control_state_runtime(&codex_home).await;
     let first_target = normalize_remote_control_url("http://example.com/remote/control")
         .expect("first target should parse");
     let second_target = normalize_remote_control_url("http://example.com/other/control")
@@ -836,7 +844,7 @@ async fn persisted_remote_control_enrollment_round_trips_by_target_and_account()
     };
 
     update_persisted_remote_control_enrollment(
-        state_path.as_path(),
+        Some(state_db.as_ref()),
         &first_target,
         Some("account-a"),
         Some(&first_enrollment),
@@ -844,7 +852,7 @@ async fn persisted_remote_control_enrollment_round_trips_by_target_and_account()
     .await
     .expect("first enrollment should persist");
     update_persisted_remote_control_enrollment(
-        state_path.as_path(),
+        Some(state_db.as_ref()),
         &second_target,
         Some("account-a"),
         Some(&second_enrollment),
@@ -854,7 +862,7 @@ async fn persisted_remote_control_enrollment_round_trips_by_target_and_account()
 
     assert_eq!(
         load_persisted_remote_control_enrollment(
-            state_path.as_path(),
+            Some(state_db.as_ref()),
             &first_target,
             Some("account-a"),
         )
@@ -863,7 +871,7 @@ async fn persisted_remote_control_enrollment_round_trips_by_target_and_account()
     );
     assert_eq!(
         load_persisted_remote_control_enrollment(
-            state_path.as_path(),
+            Some(state_db.as_ref()),
             &first_target,
             Some("account-b"),
         )
@@ -872,7 +880,7 @@ async fn persisted_remote_control_enrollment_round_trips_by_target_and_account()
     );
     assert_eq!(
         load_persisted_remote_control_enrollment(
-            state_path.as_path(),
+            Some(state_db.as_ref()),
             &second_target,
             Some("account-a"),
         )
@@ -884,7 +892,7 @@ async fn persisted_remote_control_enrollment_round_trips_by_target_and_account()
 #[tokio::test]
 async fn clearing_persisted_remote_control_enrollment_removes_only_matching_entry() {
     let codex_home = TempDir::new().expect("temp dir should create");
-    let state_path = remote_control_state_path(codex_home.path());
+    let state_db = remote_control_state_runtime(&codex_home).await;
     let first_target = normalize_remote_control_url("http://example.com/remote/control")
         .expect("first target should parse");
     let second_target = normalize_remote_control_url("http://example.com/other/control")
@@ -899,7 +907,7 @@ async fn clearing_persisted_remote_control_enrollment_removes_only_matching_entr
     };
 
     update_persisted_remote_control_enrollment(
-        state_path.as_path(),
+        Some(state_db.as_ref()),
         &first_target,
         Some("account-a"),
         Some(&first_enrollment),
@@ -907,7 +915,7 @@ async fn clearing_persisted_remote_control_enrollment_removes_only_matching_entr
     .await
     .expect("first enrollment should persist");
     update_persisted_remote_control_enrollment(
-        state_path.as_path(),
+        Some(state_db.as_ref()),
         &second_target,
         Some("account-a"),
         Some(&second_enrollment),
@@ -916,7 +924,7 @@ async fn clearing_persisted_remote_control_enrollment_removes_only_matching_entr
     .expect("second enrollment should persist");
 
     update_persisted_remote_control_enrollment(
-        state_path.as_path(),
+        Some(state_db.as_ref()),
         &first_target,
         Some("account-a"),
         None,
@@ -926,7 +934,7 @@ async fn clearing_persisted_remote_control_enrollment_removes_only_matching_entr
 
     assert_eq!(
         load_persisted_remote_control_enrollment(
-            state_path.as_path(),
+            Some(state_db.as_ref()),
             &first_target,
             Some("account-a"),
         )
@@ -935,7 +943,7 @@ async fn clearing_persisted_remote_control_enrollment_removes_only_matching_entr
     );
     assert_eq!(
         load_persisted_remote_control_enrollment(
-            state_path.as_path(),
+            Some(state_db.as_ref()),
             &second_target,
             Some("account-a"),
         )
@@ -981,7 +989,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     let shutdown_token = CancellationToken::new();
     let remote_handle = start_remote_control(
         remote_control_url,
-        codex_home.path().to_path_buf(),
+        Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
@@ -1235,7 +1243,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     let shutdown_token = CancellationToken::new();
     let remote_handle = start_remote_control(
         remote_control_url,
-        codex_home.path().to_path_buf(),
+        Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
@@ -1311,7 +1319,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     let shutdown_token = CancellationToken::new();
     let remote_handle = start_remote_control(
         remote_control_url,
-        codex_home.path().to_path_buf(),
+        Some(remote_control_state_runtime(&codex_home).await),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
@@ -1545,6 +1553,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
             .expect("listener should have a local addr")
     );
     let codex_home = TempDir::new().expect("temp dir should create");
+    let state_db = remote_control_state_runtime(&codex_home).await;
     let remote_control_target =
         normalize_remote_control_url(&remote_control_url).expect("target should parse");
     let persisted_enrollment = RemoteControlEnrollment {
@@ -1552,7 +1561,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
         server_name: "persisted-server".to_string(),
     };
     update_persisted_remote_control_enrollment(
-        remote_control_state_path(codex_home.path()).as_path(),
+        Some(state_db.as_ref()),
         &remote_control_target,
         Some("account_id"),
         Some(&persisted_enrollment),
@@ -1565,7 +1574,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     let shutdown_token = CancellationToken::new();
     let remote_handle = start_remote_control(
         remote_control_url,
-        codex_home.path().to_path_buf(),
+        Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
@@ -1584,7 +1593,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     );
     assert_eq!(
         load_persisted_remote_control_enrollment(
-            remote_control_state_path(codex_home.path()).as_path(),
+            Some(state_db.as_ref()),
             &remote_control_target,
             Some("account_id"),
         )
@@ -1608,7 +1617,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
             .expect("listener should have a local addr")
     );
     let codex_home = TempDir::new().expect("temp dir should create");
-    let state_path = remote_control_state_path(codex_home.path());
+    let state_db = remote_control_state_runtime(&codex_home).await;
     let remote_control_target =
         normalize_remote_control_url(&remote_control_url).expect("target should parse");
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
@@ -1621,7 +1630,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         server_name: expected_server_name,
     };
     update_persisted_remote_control_enrollment(
-        state_path.as_path(),
+        Some(state_db.as_ref()),
         &remote_control_target,
         Some("account_id"),
         Some(&stale_enrollment),
@@ -1634,7 +1643,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     let shutdown_token = CancellationToken::new();
     let remote_handle = start_remote_control(
         remote_control_url,
-        codex_home.path().to_path_buf(),
+        Some(state_db.clone()),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
@@ -1671,7 +1680,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     );
     assert_eq!(
         load_persisted_remote_control_enrollment(
-            state_path.as_path(),
+            Some(state_db.as_ref()),
             &remote_control_target,
             Some("account_id"),
         )

@@ -8,11 +8,11 @@ use super::protocol::RemoteControlTarget;
 use super::protocol::ServerEnvelope;
 use super::protocol::ServerEvent;
 use codex_core::AuthManager;
+use codex_state::StateRuntime;
 use futures::SinkExt;
 use futures::StreamExt;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -39,7 +39,7 @@ struct BufferedServerEvent {
 #[allow(clippy::print_stderr)]
 pub(super) async fn run_remote_control_websocket_loop(
     remote_control_target: RemoteControlTarget,
-    remote_control_state_path: PathBuf,
+    state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,
     client_event_tx: mpsc::Sender<ClientEnvelope>,
     mut server_event_rx: mpsc::Receiver<RemoteControlQueuedServerEnvelope>,
@@ -73,7 +73,7 @@ pub(super) async fn run_remote_control_websocket_loop(
             _ = shutdown_token.cancelled() => break,
             connect_result = connect_remote_control_websocket(
                 &remote_control_target,
-                remote_control_state_path.as_path(),
+                state_db.as_deref(),
                 auth_manager.as_ref(),
                 &mut enrollment,
                 subscribe_cursor.as_deref(),

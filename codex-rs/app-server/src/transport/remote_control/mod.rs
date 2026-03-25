@@ -3,7 +3,6 @@ mod protocol;
 mod websocket;
 
 use self::enroll::load_remote_control_auth;
-use self::enroll::remote_control_state_path;
 use self::protocol::ClientEnvelope;
 pub use self::protocol::ClientEvent;
 pub use self::protocol::ClientId;
@@ -19,9 +18,9 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_core::AuthManager;
+use codex_state::StateRuntime;
 use std::collections::HashMap;
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -48,13 +47,12 @@ pub(super) struct RemoteControlQueuedServerEnvelope {
 
 pub(crate) async fn start_remote_control(
     remote_control_url: String,
-    codex_home: PathBuf,
+    state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
 ) -> io::Result<JoinHandle<()>> {
     let remote_control_url = normalize_remote_control_url(&remote_control_url)?;
-    let remote_control_state_path = remote_control_state_path(&codex_home);
     Ok(tokio::spawn(async move {
         let local_shutdown_token = shutdown_token.child_token();
         let (client_event_tx, client_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -63,7 +61,7 @@ pub(crate) async fn start_remote_control(
 
         let mut websocket_task = tokio::spawn(run_remote_control_websocket_loop(
             remote_control_url,
-            remote_control_state_path,
+            state_db,
             auth_manager,
             client_event_tx,
             server_event_rx,

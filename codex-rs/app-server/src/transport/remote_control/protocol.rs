@@ -12,20 +12,6 @@ pub(super) struct RemoteControlTarget {
     pub(super) enroll_url: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct RemoteControlStateToml {
-    #[serde(default)]
-    pub(super) enrollments: Vec<PersistedRemoteControlEnrollment>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct PersistedRemoteControlEnrollment {
-    pub(super) websocket_url: String,
-    pub(super) account_id: Option<String>,
-    pub(super) server_id: String,
-    pub(super) server_name: String,
-}
-
 #[derive(Debug, Serialize)]
 pub(super) struct EnrollRemoteServerRequest {
     pub(super) name: String,

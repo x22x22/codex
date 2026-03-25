@@ -531,13 +531,13 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = codex_state::StateRuntime::init(
+    let state_db = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
     )
     .await
-    .ok()
-    .map(log_db::start);
+    .ok();
+    let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
@@ -595,7 +595,7 @@ pub async fn run_main_with_transport(
         validate_remote_control_auth(auth_manager.as_ref()).await?;
         let accept_handle = start_remote_control(
             remote_control_config.base_url,
-            config.codex_home.clone(),
+            state_db.clone(),
             auth_manager.clone(),
             transport_event_tx.clone(),
             transport_shutdown_token.clone(),

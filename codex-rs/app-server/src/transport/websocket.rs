@@ -1,8 +1,8 @@
+use super::CHANNEL_CAPACITY;
+use super::TransportEvent;
 use super::auth::WebsocketAuthPolicy;
 use super::auth::authorize_upgrade;
 use super::auth::should_warn_about_unauthenticated_non_loopback_listener;
-use super::CHANNEL_CAPACITY;
-use super::TransportEvent;
 use super::forward_incoming_message;
 use super::serialize_outgoing_message;
 use crate::outgoing_message::ConnectionId;
