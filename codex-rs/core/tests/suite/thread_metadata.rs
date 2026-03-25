@@ -1,12 +1,13 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
+use codex_core::RolloutRecorder;
 use codex_core::config::Constrained;
-use codex_core::find_thread_path_by_id_str;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::InitialHistory;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
 use std::time::Duration;
@@ -127,12 +128,24 @@ async fn resumed_thread_emits_thread_initialized_analytics() -> Result<()> {
         .build(&server)
         .await?;
 
-    let rollout_path = find_thread_path_by_id_str(
-        initial.codex_home_path(),
-        &initial.session_configured.session_id.to_string(),
-    )
-    .await?
-    .expect("rollout path for initial thread");
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path for initial thread");
+    let resume_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if matches!(
+            RolloutRecorder::get_rollout_history(&rollout_path).await?,
+            InitialHistory::Resumed(_)
+        ) {
+            break;
+        }
+        if Instant::now() >= resume_deadline {
+            panic!("timed out waiting for rollout to become resumable");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     let _resumed = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
