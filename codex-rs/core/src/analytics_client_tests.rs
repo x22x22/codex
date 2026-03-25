@@ -4,15 +4,19 @@ use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
+use super::CodexThreadStartedEvent;
+use super::CodexThreadStartedEventRequest;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
 use super::InvocationType;
 use super::SubmissionType;
+use super::ThreadCreateSource;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
+use super::codex_thread_started_event_params;
 use super::codex_turn_event_params;
 use super::normalize_path_for_skill_id;
 use crate::plugins::AppConnectorId;
@@ -27,6 +31,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -250,6 +255,61 @@ fn turn_event_serializes_expected_shape() {
                 "personality": "pragmatic",
                 "num_input_images": 2,
                 "is_first_turn": true
+            }
+        })
+    );
+}
+
+#[test]
+fn thread_started_event_serializes_expected_shape() {
+    let event = TrackEventRequest::ThreadStarted(CodexThreadStartedEventRequest {
+        event_type: "codex_thread_started",
+        event_params: codex_thread_started_event_params(CodexThreadStartedEvent {
+            thread_id: "thread-0".to_string(),
+            model: "gpt-5".to_string(),
+            model_provider: "openai".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            reasoning_summary: Some(ReasoningSummary::Detailed),
+            service_tier: Some(ServiceTier::Flex),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_network_access: false,
+            collaboration_mode: ModeKind::Plan,
+            personality: Some(Personality::Friendly),
+            ephemeral: true,
+            session_source: SessionSource::Exec,
+            parent_thread_id: None,
+            create_source: ThreadCreateSource::ThreadStart,
+            created_at: 1_716_000_000,
+        }),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize thread started event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_thread_started",
+            "event_params": {
+                "thread_id": "thread-0",
+                "product_client_id": crate::default_client::originator().value,
+                "model": "gpt-5",
+                "model_provider": "openai",
+                "reasoning_effort": "high",
+                "reasoning_summary": "detailed",
+                "service_tier": "flex",
+                "approval_policy": "on-request",
+                "approvals_reviewer": "guardian_subagent",
+                "sandbox_policy": "read_only",
+                "sandbox_network_access": false,
+                "collaboration_mode": "plan",
+                "personality": "friendly",
+                "ephemeral": true,
+                "session_source": "exec",
+                "parent_thread_id": null,
+                "create_source": "thread_start",
+                "created_at": 1716000000
             }
         })
     );
