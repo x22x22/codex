@@ -79,7 +79,8 @@ fn load_secret_from_keyring<K: KeyringStore + ?Sized>(
     field: &str,
 ) -> Result<Option<Vec<u8>>, FullJsonKeyringError> {
     keyring_store
-        .load_secret(service, key)
+        .load(service, key)
+        .map(|value| value.map(String::into_bytes))
         .map_err(|err| credential_store_error("load", field, err))
 }
 
@@ -90,8 +91,11 @@ fn save_secret_to_keyring<K: KeyringStore + ?Sized>(
     value: &[u8],
     field: &str,
 ) -> Result<(), FullJsonKeyringError> {
+    let value = std::str::from_utf8(value).map_err(|err| {
+        FullJsonKeyringError::new(format!("failed to encode {field} as UTF-8: {err}"))
+    })?;
     keyring_store
-        .save_secret(service, key, value)
+        .save(service, key, value)
         .map_err(|err| credential_store_error("write", field, err))
 }
 
@@ -145,8 +149,8 @@ mod tests {
             .expect("JSON should exist");
         assert_eq!(loaded, expected);
         assert_eq!(
-            store.saved_secret(BASE_KEY),
-            Some(serde_json::to_vec(&expected).expect("JSON should serialize")),
+            store.saved_value(BASE_KEY),
+            Some(serde_json::to_string(&expected).expect("JSON should serialize")),
         );
     }
 
