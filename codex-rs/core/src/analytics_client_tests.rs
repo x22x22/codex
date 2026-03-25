@@ -6,7 +6,7 @@ use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
 use super::CodexThreadStartedEvent;
 use super::CodexThreadStartedEventRequest;
-use super::InitialHistoryType;
+use super::InitializationMode;
 use super::InvocationType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
@@ -218,7 +218,7 @@ fn thread_started_event_serializes_expected_shape() {
             personality: Some(Personality::Friendly),
             ephemeral: true,
             session_source: SessionSource::Exec,
-            initial_history_type: InitialHistoryType::New,
+            initialization_mode: InitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
             created_at: 1_716_000_000,
@@ -246,8 +246,8 @@ fn thread_started_event_serializes_expected_shape() {
                 "collaboration_mode": "plan",
                 "personality": "friendly",
                 "ephemeral": true,
-                "session_source": "exec",
-                "initial_history_type": "new",
+                "session_source": "user",
+                "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
                 "created_at": 1716000000
@@ -275,7 +275,7 @@ fn thread_started_event_serializes_subagent_source() {
             personality: None,
             ephemeral: false,
             session_source: SessionSource::SubAgent(SubAgentSource::Review),
-            initial_history_type: InitialHistoryType::New,
+            initialization_mode: InitializationMode::New,
             subagent_source: Some(SubAgentSource::Review),
             parent_thread_id: None,
             created_at: 1,
@@ -285,6 +285,39 @@ fn thread_started_event_serializes_subagent_source() {
     let payload = serde_json::to_value(&event).expect("serialize subagent thread started event");
     assert_eq!(payload["event_params"]["session_source"], "subagent");
     assert_eq!(payload["event_params"]["subagent_source"], "review");
+}
+
+#[test]
+fn thread_started_event_omits_non_user_non_subagent_session_source() {
+    let event = TrackEventRequest::ThreadStarted(CodexThreadStartedEventRequest {
+        event_type: "codex_thread_started",
+        event_params: codex_thread_started_event_params(CodexThreadStartedEvent {
+            thread_id: "thread-2".to_string(),
+            model: "gpt-5".to_string(),
+            model_provider: "openai".to_string(),
+            reasoning_effort: None,
+            reasoning_summary: None,
+            service_tier: None,
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            sandbox_network_access: false,
+            collaboration_mode: ModeKind::Default,
+            personality: None,
+            ephemeral: false,
+            session_source: SessionSource::Mcp,
+            initialization_mode: InitializationMode::New,
+            subagent_source: None,
+            parent_thread_id: None,
+            created_at: 1,
+        }),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize mcp thread started event");
+    assert_eq!(
+        payload["event_params"]["session_source"],
+        serde_json::Value::Null
+    );
 }
 
 #[test]

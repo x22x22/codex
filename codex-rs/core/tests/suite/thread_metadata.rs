@@ -81,8 +81,8 @@ async fn thread_start_tracks_thread_started_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["collaboration_mode"], "default");
     assert_eq!(event["event_params"]["personality"], "friendly");
     assert_eq!(event["event_params"]["ephemeral"], true);
-    assert_eq!(event["event_params"]["session_source"], "exec");
-    assert_eq!(event["event_params"]["initial_history_type"], "new");
+    assert_eq!(event["event_params"]["session_source"], "user");
+    assert_eq!(event["event_params"]["initialization_mode"], "new");
     assert_eq!(
         event["event_params"]["subagent_source"],
         serde_json::Value::Null
