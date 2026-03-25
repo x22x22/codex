@@ -1,7 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use tempfile::tempdir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -56,26 +55,6 @@ fn find_default_project_returns_initial_project() {
     let selected = find_default_project(&projects);
 
     assert_eq!(selected, projects.get(1));
-}
-
-#[test]
-fn sync_codex_api_key_writes_expected_auth_json() {
-    let temp_dir = tempdir().expect("tempdir");
-    let auth_path = temp_dir.path().join("codex").join("auth.json");
-
-    sync_codex_api_key("sk-test-key", &auth_path).expect("sync auth");
-
-    let written = std::fs::read_to_string(&auth_path).expect("read auth");
-    let parsed: AuthDotJson = serde_json::from_str(&written).expect("parse auth");
-    assert_eq!(
-        parsed,
-        AuthDotJson {
-            auth_mode: Some(AuthMode::ApiKey),
-            openai_api_key: Some("sk-test-key".to_string()),
-            tokens: None,
-            last_refresh: None,
-        }
-    );
 }
 
 #[tokio::test]

@@ -1,23 +1,13 @@
 //! Browser-based OAuth flow for provisioning OpenAI project API keys.
 
-use std::fs::OpenOptions;
-use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 
-use codex_app_server_protocol::AuthMode;
 use codex_client::build_reqwest_client_with_custom_ca;
-use codex_utils_home_dir::find_codex_home;
 use reqwest::Client;
 use reqwest::Method;
 use serde::Deserialize;
-use serde::Serialize;
 use url::Url;
 
-use crate::auth::AuthDotJson;
 use crate::pkce::PkceCodes;
 use crate::server::AuthorizationCodeServer;
 use crate::server::start_authorization_code_server;
@@ -147,238 +137,23 @@ pub fn start_api_provisioning(
     })
 }
 
-pub async fn run_from_env() -> Result<(), HelperError> {
-    match parse_args(std::env::args())? {
-        ParseOutcome::Help(help) => {
-            println!("{help}");
-            Ok(())
-        }
-        ParseOutcome::Run(options) => {
-            let auth_path = resolve_codex_auth_path(options.codex_auth_path.as_deref())?;
-            let session = start_api_provisioning(options.api_provision_options())?;
-            session.open_browser_or_print();
-            let provisioned = session.finish().await?;
-            let codex_auth_synced = !options.skip_codex_auth_sync;
-            if codex_auth_synced {
-                sync_codex_api_key(&provisioned.project_api_key, &auth_path)?;
-                eprintln!("Synced project API key to {}.", auth_path.display());
-            } else {
-                eprintln!("Skipping Codex auth sync.");
-            }
-            let output = ScriptOutput {
-                sensitive_id: provisioned.sensitive_id,
-                organization_id: provisioned.organization_id,
-                organization_title: provisioned.organization_title,
-                default_project_id: provisioned.default_project_id,
-                default_project_title: provisioned.default_project_title,
-                project_api_key: provisioned.project_api_key,
-                codex_auth_path: auth_path.display().to_string(),
-                codex_auth_synced,
-                access_token: options
-                    .include_access_token
-                    .then_some(provisioned.access_token),
-            };
-            print_output(&output, options.output)?;
-            Ok(())
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CliOptions {
-    issuer: String,
-    client_id: String,
-    audience: String,
-    api_base: String,
-    app: String,
-    callback_port: u16,
-    scope: String,
-    api_key_name: String,
-    project_poll_interval_seconds: u64,
-    project_poll_timeout_seconds: u64,
-    codex_auth_path: Option<PathBuf>,
-    skip_codex_auth_sync: bool,
-    include_access_token: bool,
-    output: OutputFormat,
-}
-
-impl Default for CliOptions {
-    fn default() -> Self {
-        Self {
-            issuer: AUTH_ISSUER.to_string(),
-            client_id: PLATFORM_HYDRA_CLIENT_ID.to_string(),
-            audience: PLATFORM_AUDIENCE.to_string(),
-            api_base: DEFAULT_API_BASE.to_string(),
-            app: DEFAULT_APP.to_string(),
-            callback_port: DEFAULT_CALLBACK_PORT,
-            scope: DEFAULT_SCOPE.to_string(),
-            api_key_name: DEFAULT_PROJECT_API_KEY_NAME.to_string(),
-            project_poll_interval_seconds: DEFAULT_PROJECT_POLL_INTERVAL_SECONDS,
-            project_poll_timeout_seconds: DEFAULT_PROJECT_POLL_TIMEOUT_SECONDS,
-            codex_auth_path: None,
-            skip_codex_auth_sync: false,
-            include_access_token: false,
-            output: OutputFormat::Json,
-        }
-    }
-}
-
-impl CliOptions {
-    fn api_provision_options(&self) -> ApiProvisionOptions {
-        ApiProvisionOptions {
-            issuer: self.issuer.clone(),
-            client_id: self.client_id.clone(),
-            audience: self.audience.clone(),
-            api_base: self.api_base.clone(),
-            app: self.app.clone(),
-            callback_port: self.callback_port,
-            scope: self.scope.clone(),
-            api_key_name: self.api_key_name.clone(),
-            project_poll_interval_seconds: self.project_poll_interval_seconds,
-            project_poll_timeout_seconds: self.project_poll_timeout_seconds,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputFormat {
-    Json,
-    SensitiveId,
-    ApiKey,
-}
-
-impl OutputFormat {
-    fn parse(raw: &str) -> Result<Self, HelperError> {
-        match raw {
-            "json" => Ok(Self::Json),
-            "sensitive_id" => Ok(Self::SensitiveId),
-            "api_key" => Ok(Self::ApiKey),
-            _ => Err(HelperError::message(format!(
-                "invalid value for `--output`: `{raw}`"
-            ))),
-        }
-    }
-}
-
-enum ParseOutcome {
-    Help(String),
-    Run(CliOptions),
-}
-
-fn parse_args<I>(args: I) -> Result<ParseOutcome, HelperError>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut args = args.into_iter();
-    let program = args
-        .next()
-        .unwrap_or_else(|| "get_sensitive_id_via_codex_oauth".to_string());
-    let mut options = CliOptions::default();
-    let mut rest = args.peekable();
-    while let Some(arg) = rest.next() {
-        match arg.as_str() {
-            "-h" | "--help" => return Ok(ParseOutcome::Help(usage(&program))),
-            "--issuer" => options.issuer = take_value(&mut rest, "--issuer")?,
-            "--client-id" => options.client_id = take_value(&mut rest, "--client-id")?,
-            "--audience" => options.audience = take_value(&mut rest, "--audience")?,
-            "--api-base" => options.api_base = take_value(&mut rest, "--api-base")?,
-            "--app" => options.app = take_value(&mut rest, "--app")?,
-            "--callback-port" => {
-                options.callback_port =
-                    parse_u16(take_value(&mut rest, "--callback-port")?, "--callback-port")?
-            }
-            "--scope" => options.scope = take_value(&mut rest, "--scope")?,
-            "--api-key-name" => options.api_key_name = take_value(&mut rest, "--api-key-name")?,
-            "--project-poll-interval-seconds" => {
-                options.project_poll_interval_seconds = parse_u64(
-                    take_value(&mut rest, "--project-poll-interval-seconds")?,
-                    "--project-poll-interval-seconds",
-                )?
-            }
-            "--project-poll-timeout-seconds" => {
-                options.project_poll_timeout_seconds = parse_u64(
-                    take_value(&mut rest, "--project-poll-timeout-seconds")?,
-                    "--project-poll-timeout-seconds",
-                )?
-            }
-            "--codex-auth-path" => {
-                options.codex_auth_path =
-                    Some(PathBuf::from(take_value(&mut rest, "--codex-auth-path")?))
-            }
-            "--skip-codex-auth-sync" => options.skip_codex_auth_sync = true,
-            "--include-access-token" => options.include_access_token = true,
-            "--output" => {
-                options.output = OutputFormat::parse(&take_value(&mut rest, "--output")?)?
-            }
-            _ => {
-                return Err(HelperError::message(format!(
-                    "unknown argument `{arg}`\n\n{}",
-                    usage(&program)
-                )));
-            }
-        }
-    }
-    validate_api_provision_options(&options.api_provision_options())?;
-    Ok(ParseOutcome::Run(options))
-}
-
 fn validate_api_provision_options(options: &ApiProvisionOptions) -> Result<(), HelperError> {
     if options.project_poll_interval_seconds == 0 {
         return Err(HelperError::message(
-            "--project-poll-interval-seconds must be greater than 0.".to_string(),
+            "project_poll_interval_seconds must be greater than 0.".to_string(),
         ));
     }
     if options.project_poll_timeout_seconds == 0 {
         return Err(HelperError::message(
-            "--project-poll-timeout-seconds must be greater than 0.".to_string(),
+            "project_poll_timeout_seconds must be greater than 0.".to_string(),
         ));
     }
     if options.api_key_name.trim().is_empty() {
         return Err(HelperError::message(
-            "--api-key-name must not be empty.".to_string(),
+            "api_key_name must not be empty.".to_string(),
         ));
     }
     Ok(())
-}
-
-fn usage(program: &str) -> String {
-    format!(
-        "Usage: {program} [OPTIONS]\n\n\
-Options:\n\
-  --issuer URL                          OAuth issuer base URL\n\
-  --client-id ID                        Hydra client id to use\n\
-  --audience URL                        OAuth audience\n\
-  --api-base URL                        Base API URL for onboarding exchange\n\
-  --app NAME                            `app` value for /dashboard/onboarding/login\n\
-  --callback-port PORT                  Local callback port (default: {DEFAULT_CALLBACK_PORT})\n\
-  --scope SCOPE                         OAuth scope string\n\
-  --api-key-name NAME                   Provisioned project API key name\n\
-  --project-poll-interval-seconds SEC   Delay between default-project checks\n\
-  --project-poll-timeout-seconds SEC    Maximum wait for organization/project readiness\n\
-  --codex-auth-path PATH                Explicit auth.json path\n\
-  --skip-codex-auth-sync                Do not write the provisioned API key to auth.json\n\
-  --include-access-token                Include the OAuth access token in JSON output\n\
-  --output FORMAT                       One of: json, sensitive_id, api_key\n\
-  -h, --help                            Show this help message"
-    )
-}
-
-fn take_value<I>(args: &mut std::iter::Peekable<I>, flag: &str) -> Result<String, HelperError>
-where
-    I: Iterator<Item = String>,
-{
-    args.next()
-        .ok_or_else(|| HelperError::message(format!("missing value for `{flag}`")))
-}
-
-fn parse_u16(raw: String, flag: &str) -> Result<u16, HelperError> {
-    raw.parse::<u16>()
-        .map_err(|err| HelperError::message(format!("invalid value for `{flag}`: {err}")))
-}
-
-fn parse_u64(raw: String, flag: &str) -> Result<u64, HelperError> {
-    raw.parse::<u64>()
-        .map_err(|err| HelperError::message(format!("invalid value for `{flag}`: {err}")))
 }
 
 fn build_authorize_url(
@@ -669,86 +444,6 @@ where
     }
     serde_json::from_slice(&body)
         .map_err(|err| HelperError::message(format!("{url} returned invalid JSON: {err}")))
-}
-
-fn resolve_codex_auth_path(explicit: Option<&Path>) -> Result<PathBuf, HelperError> {
-    match explicit {
-        Some(path) => Ok(path.to_path_buf()),
-        None => Ok(find_codex_home()
-            .map_err(|err| HelperError::message(format!("failed to resolve CODEX_HOME: {err}")))?
-            .join("auth.json")),
-    }
-}
-
-fn sync_codex_api_key(api_key: &str, auth_path: &Path) -> Result<(), HelperError> {
-    if let Some(parent) = auth_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            HelperError::message(format!(
-                "Failed to create auth directory {}: {err}",
-                parent.display()
-            ))
-        })?;
-    }
-    let auth = AuthDotJson {
-        auth_mode: Some(AuthMode::ApiKey),
-        openai_api_key: Some(api_key.to_string()),
-        tokens: None,
-        last_refresh: None,
-    };
-    let json = format!(
-        "{}\n",
-        serde_json::to_string_pretty(&auth).map_err(|err| {
-            HelperError::message(format!("failed to serialize auth.json contents: {err}"))
-        })?
-    );
-    let mut options = OpenOptions::new();
-    options.truncate(true).write(true).create(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-    }
-    let mut file = options.open(auth_path).map_err(|err| {
-        HelperError::message(format!(
-            "Failed to open {} for writing: {err}",
-            auth_path.display()
-        ))
-    })?;
-    file.write_all(json.as_bytes()).map_err(|err| {
-        HelperError::message(format!("Failed to write {}: {err}", auth_path.display()))
-    })?;
-    file.flush().map_err(|err| {
-        HelperError::message(format!("Failed to flush {}: {err}", auth_path.display()))
-    })
-}
-
-fn print_output(output: &ScriptOutput, format: OutputFormat) -> Result<(), HelperError> {
-    match format {
-        OutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(output).map_err(|err| {
-                    HelperError::message(format!("failed to serialize output: {err}"))
-                })?
-            );
-        }
-        OutputFormat::SensitiveId => println!("{}", output.sensitive_id),
-        OutputFormat::ApiKey => println!("{}", output.project_api_key),
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct ScriptOutput {
-    sensitive_id: String,
-    organization_id: String,
-    organization_title: Option<String>,
-    default_project_id: String,
-    default_project_title: Option<String>,
-    project_api_key: String,
-    codex_auth_path: String,
-    codex_auth_synced: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    access_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

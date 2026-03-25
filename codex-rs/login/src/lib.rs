@@ -17,12 +17,10 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
-pub use ApiProvisionError as OnboardOauthHelperError;
 pub use api_provision::ApiProvisionOptions;
 pub use api_provision::HelperError as ApiProvisionError;
 pub use api_provision::PendingApiProvisioning;
 pub use api_provision::ProvisionedApiKey;
-pub use api_provision::run_from_env as run_api_provision_helper_from_env;
 pub use api_provision::start_api_provisioning;
 pub use auth::AuthConfig;
 pub use auth::AuthCredentialsStoreMode;
