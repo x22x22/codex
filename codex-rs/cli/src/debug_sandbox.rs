@@ -172,6 +172,9 @@ async fn run_command_under_sandbox(
                         env_map,
                         /*timeout_ms*/ None,
                         config.permissions.windows_sandbox_private_desktop,
+                        /*read_roots_override*/ None,
+                        /*write_roots_override*/ None,
+                        /*deny_write_paths_override*/ &[],
                     )
                 } else {
                     run_windows_sandbox_capture(

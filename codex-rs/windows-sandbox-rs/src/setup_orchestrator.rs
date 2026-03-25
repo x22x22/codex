@@ -138,7 +138,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
         codex_home,
         Some(read_roots),
         Some(Vec::new()),
-        None,
+        /*deny_write_paths_override*/ None,
     )
 }
 
@@ -620,7 +620,7 @@ pub fn run_elevated_setup(
         codex_home,
         read_roots_override,
         write_roots_override,
-        None,
+        /*deny_write_paths_override*/ None,
     )
 }
 
