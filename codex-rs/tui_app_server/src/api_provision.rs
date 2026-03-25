@@ -13,13 +13,13 @@ use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::PendingApiProvisioning;
 use codex_login::ProvisionedApiKey;
 use codex_login::start_api_provisioning;
-use codex_login::upsert_dotenv_api_key;
-use codex_login::validate_dotenv_target;
 use codex_protocol::config_types::ForcedLoginMethod;
 use uuid::Uuid;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::dotenv_api_key::upsert_dotenv_api_key;
+use crate::dotenv_api_key::validate_dotenv_target;
 use crate::history_cell;
 use crate::history_cell::PlainHistoryCell;
 
@@ -223,13 +223,11 @@ mod tests {
     fn success_cell_renders_expected_copy() {
         let cell = success_cell(
             &ProvisionedApiKey {
-                sensitive_id: "session-123".to_string(),
                 organization_id: "org-default".to_string(),
                 organization_title: Some("Default Org".to_string()),
                 default_project_id: "proj-default".to_string(),
                 default_project_title: Some("Default Project".to_string()),
                 project_api_key: "sk-proj-123".to_string(),
-                access_token: "oauth-access-123".to_string(),
             },
             Path::new("/tmp/workspace/.env.local"),
             LiveApplyOutcome::Applied,
@@ -245,13 +243,11 @@ mod tests {
     fn success_cell_renders_skip_reason() {
         let cell = success_cell(
             &ProvisionedApiKey {
-                sensitive_id: "session-123".to_string(),
                 organization_id: "org-default".to_string(),
                 organization_title: None,
                 default_project_id: "proj-default".to_string(),
                 default_project_title: None,
                 project_api_key: "sk-proj-123".to_string(),
-                access_token: "oauth-access-123".to_string(),
             },
             Path::new("/tmp/workspace/.env.local"),
             LiveApplyOutcome::Skipped(chatgpt_required_message()),
