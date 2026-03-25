@@ -340,16 +340,12 @@ fn mcp_tool_call_span(
         mcp.connector.name = fields.connector_name.unwrap_or(""),
         tool.name = fields.tool_name,
         tool.call_id = fields.call_id,
-        conversation.id = Empty,
-        session.id = Empty,
-        turn.id = Empty,
+        conversation.id = %session.conversation_id,
+        session.id = %session.conversation_id,
+        turn.id = turn_context.sub_id.as_str(),
         server.address = Empty,
         server.port = Empty,
     );
-    let conversation_id = session.conversation_id.to_string();
-    span.record("conversation.id", conversation_id.as_str());
-    span.record("session.id", conversation_id.as_str());
-    span.record("turn.id", turn_context.sub_id.as_str());
     record_server_fields(&span, fields.server_origin);
     span
 }
