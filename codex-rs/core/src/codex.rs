@@ -352,7 +352,8 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
-use codex_analytics::CodexThreadInitializedEvent;
+use codex_analytics::CodexThreadContext;
+use codex_analytics::CodexThreadInitializedInput;
 use codex_analytics::CodexTurnEvent;
 use codex_analytics::InitializationMode;
 use codex_analytics::InvocationType;
@@ -673,43 +674,26 @@ impl Codex {
         session
             .services
             .analytics_events_client
-            .track_thread_initialized(CodexThreadInitializedEvent {
+            .track_thread_initialized(CodexThreadInitializedInput {
                 thread_id: thread_id.to_string(),
                 model: thread_initialized_configuration
                     .collaboration_mode
                     .model()
                     .to_string(),
-                model_provider: thread_initialized_configuration
-                    .original_config_do_not_use
-                    .model_provider_id
-                    .clone(),
-                reasoning_effort: thread_initialized_configuration
-                    .collaboration_mode
-                    .reasoning_effort(),
-                reasoning_summary: thread_initialized_configuration.model_reasoning_summary,
-                service_tier: thread_initialized_configuration.service_tier,
-                approval_policy: thread_initialized_configuration.approval_policy.value(),
-                approvals_reviewer: thread_initialized_configuration.approvals_reviewer,
-                sandbox_policy: thread_initialized_configuration
-                    .sandbox_policy
-                    .get()
-                    .clone(),
-                sandbox_network_access: thread_initialized_configuration
-                    .network_sandbox_policy
-                    .is_enabled(),
-                collaboration_mode: thread_initialized_configuration.collaboration_mode.mode,
-                personality: thread_initialized_configuration.personality,
-                ephemeral: thread_initialized_configuration
-                    .original_config_do_not_use
-                    .ephemeral,
-                initialization_mode,
-                subagent_source: session_source_subagent_source(&thread_session_source),
-                parent_thread_id: session_source_parent_thread_id(&thread_session_source),
-                session_source: thread_session_source,
+                product_client_id: crate::default_client::originator().value,
                 created_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
+                thread_context: CodexThreadContext {
+                    ephemeral: thread_initialized_configuration
+                        .original_config_do_not_use
+                        .ephemeral,
+                    session_source: thread_session_source,
+                    initialization_mode,
+                    subagent_source: session_source_subagent_source(&thread_session_source),
+                    parent_thread_id: session_source_parent_thread_id(&thread_session_source),
+                },
             });
 
         // This task will run until Op::Shutdown is received.
