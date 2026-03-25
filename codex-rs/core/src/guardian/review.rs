@@ -11,7 +11,6 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use tokio_util::sync::CancellationToken;
 
-use crate::approval_review::APPROVAL_REVIEW_TIMEOUT_MESSAGE;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 
@@ -36,6 +35,11 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
     "Proceed only with a materially safer alternative, ",
     "or if the user explicitly approves the action after being informed of the risk. ",
     "Otherwise, stop and request user input.",
+);
+
+pub(crate) const GUARDIAN_TIMEOUT_MESSAGE: &str = concat!(
+    "Automatic approval review timed out before it could finish evaluating this action. ",
+    "The action was not intentionally rejected, and a retry may succeed.",
 );
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,7 +181,7 @@ async fn run_guardian_review(
             format!("Automatic approval review failed: {err}"),
         ),
         GuardianReviewOutcome::TimedOut => {
-            let warning_event_message = APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string();
+            let warning_event_message = GUARDIAN_TIMEOUT_MESSAGE.to_string();
             session
                 .send_event(
                     turn.as_ref(),
