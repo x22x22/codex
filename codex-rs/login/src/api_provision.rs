@@ -1,4 +1,4 @@
-//! Browser-based helper for onboarding login and Codex auth provisioning.
+//! Browser-based OAuth flow for provisioning OpenAI project API keys.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -851,5 +851,5 @@ impl std::fmt::Display for HelperError {
 impl std::error::Error for HelperError {}
 
 #[cfg(test)]
-#[path = "onboard_oauth_helper_tests.rs"]
+#[path = "api_provision_tests.rs"]
 mod tests;

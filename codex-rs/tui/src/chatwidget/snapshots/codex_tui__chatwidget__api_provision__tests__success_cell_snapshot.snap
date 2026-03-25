@@ -1,6 +1,5 @@
 ---
-source: tui/src/api_provision.rs
-assertion_line: 192
+source: tui/src/chatwidget/api_provision.rs
 expression: render_cell(&cell)
 ---
 • Provisioned an API key for Default Org / Default Project and saved OPENAI_API_KEY to /tmp/workspace/.env.local. Updated this session to use the newly provisioned API key without touching auth.json.

@@ -291,6 +291,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+mod api_provision;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -4734,22 +4735,7 @@ impl ChatWidget {
                 });
             }
             SlashCommand::ApiProvision => {
-                let cwd = self.status_line_cwd().to_path_buf();
-                match crate::api_provision::start_command(
-                    self.app_event_tx.clone(),
-                    self.auth_manager.clone(),
-                    self.config.codex_home.clone(),
-                    cwd,
-                    self.config.forced_login_method,
-                ) {
-                    Ok(start_message) => {
-                        self.add_boxed_history(Box::new(start_message));
-                        self.request_redraw();
-                    }
-                    Err(err) => {
-                        self.add_error_message(err);
-                    }
-                }
+                self.start_api_provision();
             }
             SlashCommand::Copy => {
                 let Some(text) = self.last_copyable_output.as_deref() else {

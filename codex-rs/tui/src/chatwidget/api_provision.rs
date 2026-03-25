@@ -17,12 +17,33 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
+use super::ChatWidget;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::history_cell::PlainHistoryCell;
 
-pub(crate) fn start_command(
+impl ChatWidget {
+    pub(crate) fn start_api_provision(&mut self) {
+        match start_api_provision(
+            self.app_event_tx.clone(),
+            self.auth_manager.clone(),
+            self.config.codex_home.clone(),
+            self.status_line_cwd().to_path_buf(),
+            self.config.forced_login_method,
+        ) {
+            Ok(start_message) => {
+                self.add_to_history(start_message);
+                self.request_redraw();
+            }
+            Err(err) => {
+                self.add_error_message(err);
+            }
+        }
+    }
+}
+
+fn start_api_provision(
     app_event_tx: AppEventSender,
     auth_manager: Arc<AuthManager>,
     codex_home: PathBuf,
