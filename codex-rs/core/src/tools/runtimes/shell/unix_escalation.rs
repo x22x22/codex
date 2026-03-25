@@ -6,6 +6,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::is_likely_sandbox_denied;
+use crate::guardian::GuardianApprovalDecision;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -30,7 +31,6 @@ use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
@@ -424,33 +424,15 @@ impl CoreShellActionProvider {
         stopwatch: &Stopwatch,
         additional_permissions: Option<PermissionProfile>,
         decision_source: &DecisionSource,
-    ) -> anyhow::Result<ApprovalOutcome> {
+    ) -> anyhow::Result<ReviewDecision> {
         let command = join_program_and_argv(program, argv);
         let workdir = workdir.to_path_buf();
         let session = self.session.clone();
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
-        let tool_name = self.tool_name;
         Ok(stopwatch
             .pause_for(async move {
-                if routes_approval_to_guardian(&turn) {
-                    return review_approval_request(
-                        &session,
-                        &turn,
-                        GuardianApprovalRequest::Execve {
-                            id: call_id.clone(),
-                            tool_name: tool_name.to_string(),
-                            program: program.to_string_lossy().into_owned(),
-                            argv: argv.to_vec(),
-                            cwd: workdir,
-                            additional_permissions,
-                        },
-                        /*retry_reason*/ None,
-                    )
-                    .await
-                    .into();
-                }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),
                     // Currently, ApprovedForSession is only honored for skills,
@@ -488,6 +470,8 @@ impl CoreShellActionProvider {
                         Some(available_decisions),
                     )
                     .await
+                    .into_decision()
+                    .unwrap_or(ReviewDecision::Denied)
             })
             .await)
     }
@@ -539,6 +523,41 @@ impl CoreShellActionProvider {
                     .is_some()
                 {
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
+                } else if routes_approval_to_guardian(&self.turn) {
+                    match self
+                        .stopwatch
+                        .pause_for(review_approval_request(
+                            &self.session,
+                            &self.turn,
+                            GuardianApprovalRequest::Execve {
+                                id: self.call_id.clone(),
+                                tool_name: self.tool_name.to_string(),
+                                program: program.to_string_lossy().into_owned(),
+                                argv: argv.to_vec(),
+                                cwd: workdir.to_path_buf(),
+                                additional_permissions: prompt_permissions.clone(),
+                            },
+                            /*retry_reason*/ None,
+                        ))
+                        .await
+                    {
+                        GuardianApprovalDecision::Approved => {
+                            if needs_escalation {
+                                EscalationDecision::escalate(escalation_execution.clone())
+                            } else {
+                                EscalationDecision::run()
+                            }
+                        }
+                        GuardianApprovalDecision::TimedOut => EscalationDecision::deny(Some(
+                            APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string(),
+                        )),
+                        GuardianApprovalDecision::Denied => {
+                            EscalationDecision::deny(Some("User denied execution".to_string()))
+                        }
+                        GuardianApprovalDecision::Aborted => {
+                            EscalationDecision::deny(Some("User cancelled execution".to_string()))
+                        }
+                    }
                 } else {
                     match self
                         .prompt(
@@ -551,23 +570,15 @@ impl CoreShellActionProvider {
                         )
                         .await?
                     {
-                        ApprovalOutcome::TimedOut => EscalationDecision::deny(Some(
-                            APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string(),
-                        )),
-                        ApprovalOutcome::Decision {
-                            decision:
-                                ReviewDecision::Approved
-                                | ReviewDecision::ApprovedExecpolicyAmendment { .. },
-                        } => {
+                        ReviewDecision::Approved
+                        | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                             if needs_escalation {
                                 EscalationDecision::escalate(escalation_execution.clone())
                             } else {
                                 EscalationDecision::run()
                             }
                         }
-                        ApprovalOutcome::Decision {
-                            decision: ReviewDecision::ApprovedForSession,
-                        } => {
+                        ReviewDecision::ApprovedForSession => {
                             // Currently, we only add session approvals for
                             // skill scripts because we are storing only the
                             // `program` whereas prefix rules may be restricted by a longer prefix.
@@ -594,11 +605,8 @@ impl CoreShellActionProvider {
                                 EscalationDecision::run()
                             }
                         }
-                        ApprovalOutcome::Decision {
-                            decision:
-                                ReviewDecision::NetworkPolicyAmendment {
-                                    network_policy_amendment,
-                                },
+                        ReviewDecision::NetworkPolicyAmendment {
+                            network_policy_amendment,
                         } => match network_policy_amendment.action {
                             NetworkPolicyRuleAction::Allow => {
                                 if needs_escalation {
@@ -611,12 +619,12 @@ impl CoreShellActionProvider {
                                 EscalationDecision::deny(Some("User denied execution".to_string()))
                             }
                         },
-                        ApprovalOutcome::Decision {
-                            decision: ReviewDecision::Denied,
-                        } => EscalationDecision::deny(Some("User denied execution".to_string())),
-                        ApprovalOutcome::Decision {
-                            decision: ReviewDecision::Abort,
-                        } => EscalationDecision::deny(Some("User cancelled execution".to_string())),
+                        ReviewDecision::Denied => {
+                            EscalationDecision::deny(Some("User denied execution".to_string()))
+                        }
+                        ReviewDecision::Abort => {
+                            EscalationDecision::deny(Some("User cancelled execution".to_string()))
+                        }
                     }
                 }
             }
