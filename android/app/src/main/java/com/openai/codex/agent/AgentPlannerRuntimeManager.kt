@@ -9,10 +9,12 @@ import java.io.BufferedWriter
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import org.json.JSONArray
 import org.json.JSONObject
@@ -74,6 +76,7 @@ object AgentPlannerRuntimeManager {
         private lateinit var process: Process
         private lateinit var writer: BufferedWriter
         private lateinit var codexHome: File
+        private val closing = AtomicBoolean(false)
         private var stdoutThread: Thread? = null
         private var stderrThread: Thread? = null
         private var localProxy: AgentLocalCodexProxy? = null
@@ -102,6 +105,7 @@ object AgentPlannerRuntimeManager {
         }
 
         override fun close() {
+            closing.set(true)
             stdoutThread?.interrupt()
             stderrThread?.interrupt()
             if (::writer.isInitialized) {
@@ -422,21 +426,31 @@ object AgentPlannerRuntimeManager {
 
         private fun startStdoutPump() {
             stdoutThread = thread(name = "AgentPlannerStdout-$frameworkSessionId") {
-                process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line ->
-                        if (line.isBlank()) {
-                            return@forEach
-                        }
-                        val message = runCatching { JSONObject(line) }
-                            .getOrElse { err ->
-                                Log.w(TAG, "Failed to parse planner app-server stdout line", err)
+                try {
+                    process.inputStream.bufferedReader().useLines { lines ->
+                        lines.forEach { line ->
+                            if (line.isBlank()) {
                                 return@forEach
                             }
-                        if (message.has("id") && !message.has("method")) {
-                            pendingResponses[message.get("id").toString()]?.offer(message)
-                        } else {
-                            notifications.offer(message)
+                            val message = runCatching { JSONObject(line) }
+                                .getOrElse { err ->
+                                    Log.w(TAG, "Failed to parse planner app-server stdout line", err)
+                                    return@forEach
+                                }
+                            if (message.has("id") && !message.has("method")) {
+                                pendingResponses[message.get("id").toString()]?.offer(message)
+                            } else {
+                                notifications.offer(message)
+                            }
                         }
+                    }
+                } catch (err: InterruptedIOException) {
+                    if (!closing.get()) {
+                        Log.w(TAG, "Planner stdout pump interrupted unexpectedly", err)
+                    }
+                } catch (err: IOException) {
+                    if (!closing.get()) {
+                        Log.w(TAG, "Planner stdout pump failed", err)
                     }
                 }
             }
@@ -444,13 +458,23 @@ object AgentPlannerRuntimeManager {
 
         private fun startStderrPump() {
             stderrThread = thread(name = "AgentPlannerStderr-$frameworkSessionId") {
-                process.errorStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line ->
-                        if (line.contains(" ERROR ") || line.startsWith("ERROR")) {
-                            Log.e(TAG, line)
-                        } else if (line.contains(" WARN ") || line.startsWith("WARN")) {
-                            Log.w(TAG, line)
+                try {
+                    process.errorStream.bufferedReader().useLines { lines ->
+                        lines.forEach { line ->
+                            if (line.contains(" ERROR ") || line.startsWith("ERROR")) {
+                                Log.e(TAG, line)
+                            } else if (line.contains(" WARN ") || line.startsWith("WARN")) {
+                                Log.w(TAG, line)
+                            }
                         }
+                    }
+                } catch (err: InterruptedIOException) {
+                    if (!closing.get()) {
+                        Log.w(TAG, "Planner stderr pump interrupted unexpectedly", err)
+                    }
+                } catch (err: IOException) {
+                    if (!closing.get()) {
+                        Log.w(TAG, "Planner stderr pump failed", err)
                     }
                 }
             }
