@@ -475,11 +475,12 @@ fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
 #[test]
 fn parse_guardian_assessment_extracts_embedded_json() {
     let parsed = parse_guardian_assessment(Some(
-        "preface {\"risk_level\":\"medium\",\"risk_score\":42,\"rationale\":\"ok\",\"evidence\":[]}",
+        "preface {\"risk_level\":\"medium\",\"risk_score\":42,\"user_authorization_confidence\":84,\"rationale\":\"ok\",\"evidence\":[]}",
     ))
     .expect("guardian assessment");
 
     assert_eq!(parsed.risk_score, 42);
+    assert_eq!(parsed.user_authorization_confidence, 84);
     assert_eq!(parsed.risk_level, GuardianRiskLevel::Medium);
 }
 
@@ -492,6 +493,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let guardian_assessment = serde_json::json!({
         "risk_level": "medium",
         "risk_score": 35,
+        "user_authorization_confidence": 91,
         "rationale": "The user explicitly requested pushing the reviewed branch to the known remote.",
         "evidence": [{
             "message": "The user asked to check repo visibility and then push the docs fix.",
@@ -593,7 +595,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                 ev_assistant_message(
                     "msg-guardian-1",
                     &format!(
-                        "{{\"risk_level\":\"low\",\"risk_score\":5,\"rationale\":\"{first_rationale}\",\"evidence\":[]}}"
+                        "{{\"risk_level\":\"low\",\"risk_score\":5,\"user_authorization_confidence\":88,\"rationale\":\"{first_rationale}\",\"evidence\":[]}}"
                     ),
                 ),
                 ev_completed("resp-guardian-1"),
@@ -602,7 +604,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                 ev_response_created("resp-guardian-2"),
                 ev_assistant_message(
                     "msg-guardian-2",
-                    "{\"risk_level\":\"low\",\"risk_score\":7,\"rationale\":\"second guardian rationale\",\"evidence\":[]}",
+                    "{\"risk_level\":\"low\",\"risk_score\":7,\"user_authorization_confidence\":86,\"rationale\":\"second guardian rationale\",\"evidence\":[]}",
                 ),
                 ev_completed("resp-guardian-2"),
             ]),
@@ -817,6 +819,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     let first_assessment = serde_json::json!({
         "risk_level": "low",
         "risk_score": 4,
+        "user_authorization_confidence": 85,
         "rationale": "first guardian rationale",
         "evidence": [],
     })
@@ -824,6 +827,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     let second_assessment = serde_json::json!({
         "risk_level": "low",
         "risk_score": 7,
+        "user_authorization_confidence": 86,
         "rationale": "second guardian rationale",
         "evidence": [],
     })
@@ -831,6 +835,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     let third_assessment = serde_json::json!({
         "risk_level": "low",
         "risk_score": 9,
+        "user_authorization_confidence": 87,
         "rationale": "third guardian rationale",
         "evidence": [],
     })
