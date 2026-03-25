@@ -542,7 +542,6 @@ impl AnalyticsReducer {
             event.thread_id.clone(),
             ThreadState {
                 _initialized_event: event.clone(),
->>>>>>> origin/rhan/oob-thread-metadata
             },
         );
         out.push(TrackEventRequest::ThreadInitialized(

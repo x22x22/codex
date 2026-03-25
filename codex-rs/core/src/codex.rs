@@ -351,13 +351,9 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
-<<<<<<< HEAD
-use codex_analytics::CodexThreadInitializedEvent;
 use codex_analytics::CodexTurnEvent;
-=======
 use codex_analytics::CodexThreadContext;
 use codex_analytics::CodexThreadInitializedInput;
->>>>>>> origin/rhan/oob-thread-metadata
 use codex_analytics::InitializationMode;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
