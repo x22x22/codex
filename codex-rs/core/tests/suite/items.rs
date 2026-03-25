@@ -85,8 +85,7 @@ async fn wait_for_analytics_event(
             .into_iter()
             .filter(|request| request.url.path() == "/codex/analytics-events/events")
             .find_map(|request| {
-                let payload: Value =
-                    serde_json::from_slice(&request.body).expect("analytics payload");
+                let payload: Value = serde_json::from_slice(&request.body).ok()?;
                 payload["events"].as_array().and_then(|events| {
                     events
                         .iter()
