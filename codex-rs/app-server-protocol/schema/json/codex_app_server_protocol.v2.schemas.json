@@ -3431,6 +3431,12 @@
             "object",
             "null"
           ]
+        },
+        "requireFullAccessJustification": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": "object"

@@ -82,6 +82,7 @@ pub struct ConfigRequirements {
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
+    pub require_full_access_justification: Option<Sourced<bool>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
     pub network: Option<Sourced<NetworkConstraints>>,
@@ -105,6 +106,7 @@ impl Default for ConfigRequirements {
             feature_requirements: None,
             mcp_servers: None,
             exec_policy: None,
+            require_full_access_justification: None,
             enforce_residency: ConstrainedWithSource::new(
                 Constrained::allow_any(/*initial_value*/ None),
                 /*source*/ None,
@@ -291,6 +293,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
+    pub require_full_access_justification: Option<bool>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
@@ -329,6 +332,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
+    pub require_full_access_justification: Option<Sourced<bool>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
@@ -360,6 +364,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: _,
             allowed_sandbox_modes: _,
             allowed_web_search_modes: _,
+            require_full_access_justification: _,
             feature_requirements: _,
             mcp_servers: _,
             apps: _,
@@ -385,6 +390,7 @@ impl ConfigRequirementsWithSources {
                 allowed_approval_policies,
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
+                require_full_access_justification,
                 feature_requirements,
                 mcp_servers,
                 rules,
@@ -408,6 +414,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            require_full_access_justification,
             feature_requirements,
             mcp_servers,
             apps,
@@ -420,6 +427,8 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
+            require_full_access_justification: require_full_access_justification
+                .map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             apps: apps.map(|sourced| sourced.value),
@@ -470,6 +479,7 @@ impl ConfigRequirementsToml {
         self.allowed_approval_policies.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.allowed_web_search_modes.is_none()
+            && self.require_full_access_justification.is_none()
             && self
                 .feature_requirements
                 .as_ref()
@@ -497,6 +507,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            require_full_access_justification,
             feature_requirements,
             mcp_servers,
             apps: _apps,
@@ -602,6 +613,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
             None => None,
         };
+        let require_full_access_justification = require_full_access_justification
+            .map(|Sourced { value, source }| Sourced::new(value, source));
         let web_search_mode = match allowed_web_search_modes {
             Some(Sourced {
                 value: modes,
@@ -685,6 +698,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             feature_requirements,
             mcp_servers,
             exec_policy,
+            require_full_access_justification,
             enforce_residency,
             network,
         })
@@ -718,6 +732,7 @@ mod tests {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            require_full_access_justification,
             feature_requirements,
             mcp_servers,
             apps,
@@ -732,6 +747,8 @@ mod tests {
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_web_search_modes: allowed_web_search_modes
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            require_full_access_justification: require_full_access_justification
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -760,6 +777,7 @@ mod tests {
             WebSearchModeRequirement::Cached,
             WebSearchModeRequirement::Live,
         ];
+        let require_full_access_justification = true;
         let feature_requirements = FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
         };
@@ -774,6 +792,7 @@ mod tests {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
+            require_full_access_justification: Some(require_full_access_justification),
             feature_requirements: Some(feature_requirements.clone()),
             mcp_servers: None,
             apps: None,
@@ -795,6 +814,10 @@ mod tests {
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 allowed_web_search_modes: Some(Sourced::new(
                     allowed_web_search_modes,
+                    enforce_source.clone(),
+                )),
+                require_full_access_justification: Some(Sourced::new(
+                    require_full_access_justification,
                     enforce_source.clone(),
                 )),
                 feature_requirements: Some(Sourced::new(
@@ -838,6 +861,7 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                require_full_access_justification: None,
                 feature_requirements: None,
                 mcp_servers: None,
                 apps: None,
@@ -881,6 +905,7 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                require_full_access_justification: None,
                 feature_requirements: None,
                 mcp_servers: None,
                 apps: None,
@@ -956,6 +981,19 @@ guardian_developer_instructions = """
         )?;
 
         assert!(requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_require_full_access_justification() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+require_full_access_justification = true
+"#,
+        )?;
+
+        assert_eq!(requirements.require_full_access_justification, Some(true));
+        assert!(!requirements.is_empty());
         Ok(())
     }
 
@@ -1228,6 +1266,13 @@ guardian_developer_instructions = """
         );
         assert_eq!(
             requirements
+                .require_full_access_justification
+                .as_ref()
+                .map(|requirement| (requirement.value, requirement.source.clone())),
+            None
+        );
+        assert_eq!(
+            requirements
                 .feature_requirements
                 .as_ref()
                 .map(|requirements| requirements.source.clone()),
@@ -1239,9 +1284,34 @@ guardian_developer_instructions = """
     }
 
     #[test]
+    fn full_access_justification_requirement_stores_requirement_source() -> Result<()> {
+        let source: ConfigRequirementsToml = from_str(
+            r#"
+                require_full_access_justification = true
+            "#,
+        )?;
+
+        let source_location = RequirementSource::CloudRequirements;
+        let mut target = ConfigRequirementsWithSources::default();
+        target.merge_unset_fields(source_location.clone(), source);
+        let requirements = ConfigRequirements::try_from(target)?;
+
+        assert_eq!(
+            requirements
+                .require_full_access_justification
+                .as_ref()
+                .map(|requirement| (requirement.value, requirement.source.clone())),
+            Some((true, source_location))
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn deserialize_allowed_approval_policies() -> Result<()> {
         let toml_str = r#"
             allowed_approval_policies = ["untrusted", "on-request"]
+            require_full_access_justification = true
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
         let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
@@ -1250,6 +1320,13 @@ guardian_developer_instructions = """
             requirements.approval_policy.value(),
             AskForApproval::UnlessTrusted,
             "currently, there is no way to specify the default value for approval policy in the toml, so it picks the first allowed value"
+        );
+        assert_eq!(
+            requirements
+                .require_full_access_justification
+                .as_ref()
+                .map(|requirement| requirement.value),
+            Some(true)
         );
         assert!(
             requirements

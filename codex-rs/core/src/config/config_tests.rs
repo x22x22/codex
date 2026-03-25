@@ -3059,6 +3059,60 @@ fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> s
 }
 
 #[test]
+fn load_config_uses_requirements_full_access_justification_flag() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        crate::config_loader::ConfigRequirements {
+            require_full_access_justification: Some(crate::config_loader::Sourced::new(
+                true,
+                crate::config_loader::RequirementSource::CloudRequirements,
+            )),
+            ..Default::default()
+        },
+        crate::config_loader::ConfigRequirementsToml {
+            require_full_access_justification: Some(true),
+            ..Default::default()
+        },
+    )
+    .map_err(std::io::Error::other)?;
+
+    let config = Config::load_config_with_layer_stack(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+        config_layer_stack,
+    )?;
+
+    assert!(config.require_full_access_justification);
+
+    Ok(())
+}
+
+#[test]
+fn config_toml_cannot_enable_full_access_justification_requirement() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = toml::from_str::<ConfigToml>("require_full_access_justification = true")
+        .expect("TOML deserialization should succeed");
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert!(!config.require_full_access_justification);
+
+    Ok(())
+}
+
+#[test]
 fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let missing_path = codex_home.path().join("agents").join("researcher.toml");
@@ -4273,6 +4327,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             },
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(None),
+            require_full_access_justification: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4416,6 +4471,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
+        require_full_access_justification: false,
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
@@ -4557,6 +4613,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
+        require_full_access_justification: false,
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
@@ -4684,6 +4741,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         },
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
+        require_full_access_justification: false,
         user_instructions: None,
         notify: None,
         cwd: fixture.cwd(),
@@ -4788,6 +4846,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         apps: None,
         rules: None,
         enforce_residency: None,
+        require_full_access_justification: None,
         network: None,
         guardian_developer_instructions: None,
     };
@@ -5388,6 +5447,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         apps: None,
         rules: None,
         enforce_residency: None,
+        require_full_access_justification: None,
         network: None,
         guardian_developer_instructions: None,
     };

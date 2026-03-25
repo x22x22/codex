@@ -8332,6 +8332,12 @@ impl ChatWidget {
                         return_to_permissions: !include_read_only,
                     });
                 })]
+            } else if preset.id == "full-access" {
+                self.full_access_preset_actions(
+                    preset.clone(),
+                    /*acknowledge_warning*/ false,
+                    /*persist_warning_acknowledged*/ false,
+                )
             } else if preset.id == "auto" {
                 #[cfg(target_os = "windows")]
                 {
@@ -8494,33 +8500,91 @@ impl ChatWidget {
         approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            let sandbox_clone = sandbox.clone();
-            tx.send(AppEvent::CodexOp(
-                AppCommand::override_turn_context(
-                    /*cwd*/ None,
-                    Some(approval),
-                    Some(approvals_reviewer),
-                    Some(sandbox_clone.clone()),
-                    /*windows_sandbox_level*/ None,
-                    /*model*/ None,
-                    /*effort*/ None,
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                )
-                .into_core(),
-            ));
-            tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-            tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
-            tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
-            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(
-                    format!("Permissions updated to {label}"),
-                    /*hint*/ None,
-                ),
-            )));
+            Self::send_permission_preset_updates(
+                tx,
+                approval,
+                sandbox.clone(),
+                label.as_str(),
+                approvals_reviewer,
+            );
         })]
+    }
+
+    fn full_access_preset_actions(
+        &self,
+        preset: ApprovalPreset,
+        acknowledge_warning: bool,
+        persist_warning_acknowledged: bool,
+    ) -> Vec<SelectionAction> {
+        if self.config.require_full_access_justification {
+            return vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenFullAccessJustificationPrompt {
+                    preset: preset.clone(),
+                    acknowledge_warning,
+                    persist_warning_acknowledged,
+                });
+            })];
+        }
+
+        let approval = preset.approval;
+        let sandbox = preset.sandbox.clone();
+        let label = preset.label.to_string();
+        let session_telemetry = self.session_telemetry.clone();
+        vec![Box::new(move |tx| {
+            session_telemetry.full_access_mode_enabled(
+                /*justification_required*/ false,
+                /*justification*/ None,
+                persist_warning_acknowledged,
+            );
+            if acknowledge_warning {
+                tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
+            }
+            if persist_warning_acknowledged {
+                tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
+            }
+            Self::send_permission_preset_updates(
+                tx,
+                approval,
+                sandbox.clone(),
+                label.as_str(),
+                ApprovalsReviewer::User,
+            );
+        })]
+    }
+
+    fn send_permission_preset_updates(
+        tx: &AppEventSender,
+        approval: AskForApproval,
+        sandbox: SandboxPolicy,
+        label: &str,
+        approvals_reviewer: ApprovalsReviewer,
+    ) {
+        let sandbox_clone = sandbox;
+        tx.send(AppEvent::CodexOp(
+            AppCommand::override_turn_context(
+                /*cwd*/ None,
+                Some(approval),
+                Some(approvals_reviewer),
+                Some(sandbox_clone.clone()),
+                /*windows_sandbox_level*/ None,
+                /*model*/ None,
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
+            )
+            .into_core(),
+        ));
+        tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
+        tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
+        tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
+        tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_info_event(
+                format!("Permissions updated to {label}"),
+                /*hint*/ None,
+            ),
+        )));
     }
 
     fn preset_matches_current(
@@ -8593,9 +8657,6 @@ impl ChatWidget {
         preset: ApprovalPreset,
         return_to_permissions: bool,
     ) {
-        let selected_name = preset.label.to_string();
-        let approval = preset.approval;
-        let sandbox = preset.sandbox;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Enable full access?").bold();
         let info_line = Line::from(vec![
@@ -8608,28 +8669,25 @@ impl ChatWidget {
         header_children.push(Box::new(
             Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
         ));
+        if self.config.require_full_access_justification {
+            header_children.push(Box::new(
+                Paragraph::new(vec![Line::from(
+                    "Your admin requires a written justification before full access is enabled.",
+                )])
+                .wrap(Wrap { trim: false }),
+            ));
+        }
         let header = ColumnRenderable::with(header_children);
 
-        let mut accept_actions = Self::approval_preset_actions(
-            approval,
-            sandbox.clone(),
-            selected_name.clone(),
-            ApprovalsReviewer::User,
+        let accept_actions = self.full_access_preset_actions(
+            preset.clone(),
+            /*acknowledge_warning*/ true,
+            /*persist_warning_acknowledged*/ false,
         );
-        accept_actions.push(Box::new(|tx| {
-            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
-        }));
 
-        let mut accept_and_remember_actions = Self::approval_preset_actions(
-            approval,
-            sandbox,
-            selected_name,
-            ApprovalsReviewer::User,
+        let accept_and_remember_actions = self.full_access_preset_actions(
+            preset, /*acknowledge_warning*/ true, /*persist_warning_acknowledged*/ true,
         );
-        accept_and_remember_actions.push(Box::new(|tx| {
-            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
-            tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
-        }));
 
         let deny_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             if return_to_permissions {
@@ -10470,6 +10528,50 @@ impl ChatWidget {
                     },
                     user_facing_hint: None,
                 });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_full_access_justification_prompt(
+        &mut self,
+        preset: ApprovalPreset,
+        acknowledge_warning: bool,
+        persist_warning_acknowledged: bool,
+    ) {
+        let tx = self.app_event_tx.clone();
+        let session_telemetry = self.session_telemetry.clone();
+        let approval = preset.approval;
+        let sandbox = preset.sandbox.clone();
+        let label = preset.label.to_string();
+        let view = CustomPromptView::new(
+            "Why do you need full access?".to_string(),
+            "Type a justification and press Enter".to_string(),
+            Some("Your admin requires a justification before enabling full access.".to_string()),
+            Box::new(move |prompt: String| {
+                let justification = prompt.trim().to_string();
+                if justification.is_empty() {
+                    return;
+                }
+
+                session_telemetry.full_access_mode_enabled(
+                    /*justification_required*/ true,
+                    Some(justification.as_str()),
+                    persist_warning_acknowledged,
+                );
+                if acknowledge_warning {
+                    tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
+                }
+                if persist_warning_acknowledged {
+                    tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
+                }
+                Self::send_permission_preset_updates(
+                    &tx,
+                    approval,
+                    sandbox.clone(),
+                    label.as_str(),
+                    ApprovalsReviewer::User,
+                );
             }),
         );
         self.bottom_pane.show_view(Box::new(view));

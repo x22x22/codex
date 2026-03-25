@@ -855,6 +855,7 @@ pub struct ConfigRequirements {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
+    pub require_full_access_justification: Option<bool>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
@@ -7239,6 +7240,7 @@ mod tests {
                 }]),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                require_full_access_justification: None,
                 feature_requirements: None,
                 enforce_residency: None,
                 network: None,
