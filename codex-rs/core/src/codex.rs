@@ -3887,6 +3887,7 @@ impl Session {
         let Some((active_turn_id, task)) = active_turn.tasks.first() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
+        let active_turn_id = active_turn_id.clone();
         let tracking = build_track_events_context(
             task.turn_context.model_info.slug.clone(),
             self.conversation_id.to_string(),
@@ -3924,7 +3925,7 @@ impl Session {
         self.services
             .analytics_events_client
             .track_turn_steer(tracking, CodexTurnSteerEvent);
-        Ok(active_turn_id.clone())
+        Ok(active_turn_id)
     }
 
     /// Returns the input if there was no task running to inject into.
