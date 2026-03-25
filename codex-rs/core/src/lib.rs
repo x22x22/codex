@@ -5,7 +5,6 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
 mod apps;
@@ -32,7 +31,7 @@ pub mod connectors;
 mod context_manager;
 mod contextual_user_message;
 pub mod custom_prompts;
-pub mod env;
+pub use codex_utils_path::env;
 mod environment_context;
 pub mod error;
 pub mod exec;
@@ -65,7 +64,8 @@ pub mod mention_syntax;
 mod mentions;
 pub mod message_history;
 mod model_provider_info;
-pub mod path_utils;
+pub mod utils;
+pub use utils::path_utils;
 pub mod personality_migration;
 pub mod plugins;
 mod sandbox_tags;
@@ -107,9 +107,9 @@ pub type NewConversation = NewThread;
 #[deprecated(note = "use CodexThread")]
 pub type CodexConversation = CodexThread;
 // Re-export common auth types for workspace consumers
-pub use analytics_client::AnalyticsEventsClient;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
+pub use codex_analytics::AnalyticsEventsClient;
 mod default_client_forwarding;
 
 /// Default Codex HTTP client headers and reqwest construction.
@@ -123,11 +123,14 @@ pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
 pub mod seatbelt;
+mod session_rollout_init_error;
 pub mod shell;
 pub mod shell_snapshot;
 pub mod skills;
 pub mod spawn;
-pub mod state_db;
+pub mod state_db_bridge;
+pub use codex_rollout::state_db;
+mod thread_rollout_truncation;
 mod tools;
 pub mod turn_diff_tracker;
 mod turn_metadata;

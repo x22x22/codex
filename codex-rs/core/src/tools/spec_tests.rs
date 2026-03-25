@@ -1665,21 +1665,13 @@ fn test_parallel_support_flags() {
 
     assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
     assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
-    assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
-    assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
-    assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
 }
 
 #[test]
 fn test_test_model_info_includes_sync_tool() {
     let _config = test_config();
     let mut model_info = model_info_from_models_json("gpt-5-codex");
-    model_info.experimental_supported_tools = vec![
-        "test_sync_tool".to_string(),
-        "read_file".to_string(),
-        "grep_files".to_string(),
-        "list_dir".to_string(),
-    ];
+    model_info.experimental_supported_tools = vec!["test_sync_tool".to_string()];
     let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1698,17 +1690,6 @@ fn test_test_model_info_includes_sync_tool() {
             .iter()
             .any(|tool| tool_name(&tool.spec) == "test_sync_tool")
     );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool_name(&tool.spec) == "read_file")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool_name(&tool.spec) == "grep_files")
-    );
-    assert!(tools.iter().any(|tool| tool_name(&tool.spec) == "list_dir"));
 }
 
 #[test]
@@ -1858,6 +1839,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
+    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1976,7 +1958,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
 }
 
 #[test]
-fn search_tool_requires_model_capability_only() {
+fn search_tool_requires_model_capability_and_feature_flag() {
     let model_info = search_capable_model_info();
     let app_tools = Some(HashMap::from([(
         "mcp__codex_apps__calendar_create_event".to_string(),
@@ -2012,6 +1994,22 @@ fn search_tool_requires_model_capability_only() {
     });
     let (tools, _) = build_specs(&tools_config, None, app_tools.clone(), &[]).build();
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
+
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, app_tools.clone(), &[]).build();
+    assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
+
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -2030,8 +2028,8 @@ fn search_tool_requires_model_capability_only() {
 fn tool_suggest_is_not_registered_without_feature_flag() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
-    features.enable(Feature::Apps);
-    features.enable(Feature::Plugins);
+    features.enable(Feature::ToolSearch);
+    features.disable(Feature::ToolSuggest);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -2074,12 +2072,11 @@ fn tool_suggest_requires_apps_and_plugins_features() {
 
     for disabled_feature in [Feature::Apps, Feature::Plugins] {
         let mut features = Features::with_defaults();
+        features.enable(Feature::ToolSearch);
         features.enable(Feature::ToolSuggest);
-        for feature in [Feature::Apps, Feature::Plugins] {
-            if feature != disabled_feature {
-                features.enable(feature);
-            }
-        }
+        features.enable(Feature::Apps);
+        features.enable(Feature::Plugins);
+        features.disable(disabled_feature);
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -2113,6 +2110,7 @@ fn search_tool_description_handles_no_enabled_apps() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
+    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -2139,6 +2137,7 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
+    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -2187,6 +2186,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
+    features.enable(Feature::ToolSearch);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -2253,6 +2253,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     features.enable(Feature::Plugins);
+    features.enable(Feature::ToolSearch);
     features.enable(Feature::ToolSuggest);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {

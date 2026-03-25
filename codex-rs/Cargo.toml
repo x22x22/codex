@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "analytics",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -25,6 +26,7 @@ members = [
     "skills",
     "core",
     "hooks",
+    "instructions",
     "secrets",
     "exec",
     "exec-server",
@@ -40,6 +42,7 @@ members = [
     "ollama",
     "process-hardening",
     "protocol",
+    "rollout",
     "rmcp-client",
     "responses-api-proxy",
     "sandboxing",
@@ -66,8 +69,11 @@ members = [
     "utils/approval-presets",
     "utils/oss",
     "utils/output-truncation",
+    "utils/path-utils",
+    "utils/plugins",
     "utils/fuzzy-match",
     "utils/stream-parser",
+    "utils/template",
     "codex-client",
     "codex-api",
     "state",
@@ -75,6 +81,7 @@ members = [
     "codex-experimental-api-macros",
     "test-macros",
     "package-manager",
+    "plugin",
     "artifacts",
 ]
 resolver = "2"
@@ -92,6 +99,7 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
+codex-analytics = { path = "analytics" }
 codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
 codex-code-mode = { path = "code-mode" }
@@ -120,6 +128,7 @@ codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
+codex-instructions = { path = "instructions" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
@@ -128,8 +137,10 @@ codex-mcp-server = { path = "mcp-server" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
+codex-plugin = { path = "plugin" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-rollout = { path = "rollout" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-sandboxing = { path = "sandboxing" }
@@ -156,12 +167,15 @@ codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-oss = { path = "utils/oss" }
 codex-utils-output-truncation = { path = "utils/output-truncation" }
+codex-utils-path = { path = "utils/path-utils" }
+codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "utils/stream-parser" }
+codex-utils-template = { path = "utils/template" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
@@ -379,7 +393,7 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-secrets",
+    "codex-utils-template",
     "codex-v8-poc",
 ]
 
