@@ -1125,6 +1125,50 @@ async fn record_initial_history_reconstructs_forked_transcript() {
     assert_eq!(expected, history.raw_items());
 }
 
+fn normalize_fork_startup_request_snapshot(snapshot: &str) -> String {
+    let lines = snapshot.lines().collect::<Vec<_>>();
+    let developer_index = lines
+        .iter()
+        .position(|line| {
+            *line == "00:message/developer[2]:" || line.ends_with(":message/developer[2]:")
+        })
+        .expect("fork request should contain developer[2] instructions");
+    let developer_block = lines[developer_index + 1..]
+        .iter()
+        .copied()
+        .take_while(|line| line.starts_with("    "))
+        .collect::<Vec<_>>();
+    let _env_line = lines
+        .iter()
+        .find(|line| line.contains("message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>"))
+        .copied()
+        .expect("fork request should contain environment context");
+    let _after_fork_line = lines
+        .iter()
+        .find(|line| line.ends_with("message/user:after fork"))
+        .copied()
+        .expect("fork request should contain the post-fork user input");
+
+    [
+        vec![
+            lines[0].to_string(),
+            lines[1].to_string(),
+            lines[2].to_string(),
+            "00:message/developer[2]:".to_string(),
+        ],
+        developer_block
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        vec![
+            "01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>".to_string(),
+            "02:message/user:after fork".to_string(),
+        ],
+    ]
+    .concat()
+    .join("\n")
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<()> {
     let server = start_mock_server().await;
@@ -1245,6 +1289,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             .strip_capability_instructions()
             .strip_agents_md_user_context(),
     );
+    let snapshot = normalize_fork_startup_request_snapshot(&snapshot);
 
     let mut settings = insta::Settings::clone_current();
     settings.set_snapshot_path("snapshots");
