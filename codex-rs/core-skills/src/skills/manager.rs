@@ -75,7 +75,7 @@ impl SkillsManager {
             config_layer_stack,
             bundled_skills_enabled,
         );
-        let skill_config_rules = skill_config_rules_from_stack(&config_layer_stack);
+        let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
         let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
         if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
             return outcome;
@@ -97,7 +97,7 @@ impl SkillsManager {
         config_layer_stack: &ConfigLayerStack,
         bundled_skills_enabled: bool,
     ) -> Vec<SkillRoot> {
-        let mut roots = skill_roots(&config_layer_stack, &cwd, effective_skill_roots.to_vec());
+        let mut roots = skill_roots(config_layer_stack, cwd, effective_skill_roots.to_vec());
         if !bundled_skills_enabled {
             roots.retain(|root| root.scope != SkillScope::System);
         }
@@ -138,8 +138,8 @@ impl SkillsManager {
         }
         let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
 
-        let mut roots = skill_roots(&config_layer_stack, cwd, effective_skill_roots.to_vec());
-        if !bundled_skills_enabled_from_stack(&config_layer_stack) {
+        let mut roots = skill_roots(config_layer_stack, cwd, effective_skill_roots.to_vec());
+        if !bundled_skills_enabled_from_stack(config_layer_stack) {
             roots.retain(|root| root.scope != SkillScope::System);
         }
         roots.extend(
@@ -151,7 +151,7 @@ impl SkillsManager {
                     scope: SkillScope::User,
                 }),
         );
-        let skill_config_rules = skill_config_rules_from_stack(&config_layer_stack);
+        let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
         let outcome = self.build_skill_outcome(roots, &skill_config_rules);
         let mut cache = self
             .cache_by_cwd
