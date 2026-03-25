@@ -957,10 +957,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     assert_eq!(expected, history_before_seed.raw_items());
 
     session
-        .record_context_updates_and_set_reference_context_item(
-            &turn_context,
-            /*maybe_user_input*/ None,
-        )
+        .record_context_updates_and_set_reference_context_item(&turn_context, &[])
         .await;
     expected.extend(
         session
@@ -971,10 +968,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     assert_eq!(expected, history_after_seed.raw_items());
 
     session
-        .record_context_updates_and_set_reference_context_item(
-            &turn_context,
-            /*maybe_user_input*/ None,
-        )
+        .record_context_updates_and_set_reference_context_item(&turn_context, &[])
         .await;
     let history_after_second_seed = session.clone_history().await;
     assert_eq!(
@@ -3719,11 +3713,7 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
 
     let reference_context_item = previous_context.to_turn_context_item();
     let update_items = session
-        .build_settings_update_items(
-            Some(&reference_context_item),
-            &current_context,
-            /*maybe_user_input*/ None,
-        )
+        .build_settings_update_items(Some(&reference_context_item), &current_context, &[])
         .await;
 
     let environment_update = update_items
@@ -3758,11 +3748,7 @@ async fn build_settings_update_items_emits_environment_item_for_time_changes() {
 
     let reference_context_item = previous_context.to_turn_context_item();
     let update_items = session
-        .build_settings_update_items(
-            Some(&reference_context_item),
-            &current_context,
-            /*maybe_user_input*/ None,
-        )
+        .build_settings_update_items(Some(&reference_context_item), &current_context, &[])
         .await;
 
     let environment_update = update_items
@@ -3797,7 +3783,7 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
         .build_settings_update_items(
             Some(&previous_context.to_turn_context_item()),
             &current_context,
-            /*maybe_user_input*/ None,
+            &[],
         )
         .await;
 
@@ -3826,7 +3812,7 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
         .build_settings_update_items(
             Some(&previous_context.to_turn_context_item()),
             &current_context,
-            /*maybe_user_input*/ None,
+            &[],
         )
         .await;
 
@@ -3860,11 +3846,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
         .set_previous_turn_settings(Some(previous_turn_settings))
         .await;
     let update_items = session
-        .build_settings_update_items(
-            Some(&previous_context_item),
-            &current_context,
-            /*maybe_user_input*/ None,
-        )
+        .build_settings_update_items(Some(&previous_context_item), &current_context, &[])
         .await;
 
     let developer_texts = developer_input_texts(&update_items);
@@ -4096,10 +4078,7 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
  {
     let (session, turn_context) = make_session_and_context().await;
     session
-        .record_context_updates_and_set_reference_context_item(
-            &turn_context,
-            /*maybe_user_input*/ None,
-        )
+        .record_context_updates_and_set_reference_context_item(&turn_context, &[])
         .await;
     let history = session.clone_history().await;
     let initial_context = session
@@ -4132,10 +4111,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         .record_into_history(std::slice::from_ref(&compacted_summary), &turn_context)
         .await;
     session
-        .record_context_updates_and_set_reference_context_item(
-            &turn_context,
-            /*maybe_user_input*/ None,
-        )
+        .record_context_updates_and_set_reference_context_item(&turn_context, &[])
         .await;
     {
         let mut state = session.state.lock().await;
@@ -4146,10 +4122,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         .await;
 
     session
-        .record_context_updates_and_set_reference_context_item(
-            &turn_context,
-            /*maybe_user_input*/ None,
-        )
+        .record_context_updates_and_set_reference_context_item(&turn_context, &[])
         .await;
 
     let history = session.clone_history().await;
@@ -4202,19 +4175,12 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     }
 
     let update_items = session
-        .build_settings_update_items(
-            Some(&previous_context_item),
-            &turn_context,
-            /*maybe_user_input*/ None,
-        )
+        .build_settings_update_items(Some(&previous_context_item), &turn_context, &[])
         .await;
     assert_eq!(update_items, Vec::new());
 
     session
-        .record_context_updates_and_set_reference_context_item(
-            &turn_context,
-            /*maybe_user_input*/ None,
-        )
+        .record_context_updates_and_set_reference_context_item(&turn_context, &[])
         .await;
 
     assert_eq!(
@@ -4329,10 +4295,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         }))
         .await;
     session
-        .record_context_updates_and_set_reference_context_item(
-            &turn_context,
-            /*maybe_user_input*/ None,
-        )
+        .record_context_updates_and_set_reference_context_item(&turn_context, &[])
         .await;
     session.ensure_rollout_materialized().await;
     session.flush_rollout().await;

@@ -2570,13 +2570,12 @@ impl Session {
         .await
     }
 
-    /// `maybe_user_input` is only consulted for explicit plugin mentions on this turn.
-    /// Pass `None` when no raw current-turn user input is available.
+    /// `user_input` is only consulted for explicit plugin mentions on this turn.
     async fn build_settings_update_items(
         &self,
         reference_context_item: Option<&TurnContextItem>,
         current_context: &TurnContext,
-        maybe_user_input: Option<&[UserInput]>,
+        user_input: &[UserInput],
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
@@ -2589,7 +2588,7 @@ impl Session {
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
         let additional_developer_sections = self
-            .build_explicit_plugin_developer_sections(current_context, maybe_user_input)
+            .build_explicit_plugin_developer_sections(current_context, user_input)
             .await;
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
@@ -2602,17 +2601,14 @@ impl Session {
         )
     }
 
-    /// `maybe_user_input` is only used to derive explicit plugin-mention guidance for this turn.
-    /// When the raw user input is unavailable, pass `None` and no turn-local plugin guidance will
-    /// be added to the canonical developer envelope.
     async fn build_explicit_plugin_developer_sections(
         &self,
         turn_context: &TurnContext,
-        maybe_user_input: Option<&[UserInput]>,
+        user_input: &[UserInput],
     ) -> Vec<String> {
-        let Some(user_input) = maybe_user_input else {
+        if user_input.is_empty() {
             return Vec::new();
-        };
+        }
 
         let loaded_plugins = self
             .services
@@ -3480,7 +3476,8 @@ impl Session {
     }
 
     /// `maybe_user_input` is only consulted for explicit plugin mentions on this turn.
-    /// Pass `None` when no raw current-turn user input is available.
+    /// Pass `None` when no raw current-turn user input is available, such as compaction callers
+    /// that are rebuilding prompt context from flattened history alone.
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
@@ -3605,10 +3602,12 @@ impl Session {
         {
             developer_sections.push(plugin_section);
         }
-        developer_sections.extend(
-            self.build_explicit_plugin_developer_sections(turn_context, maybe_user_input)
-                .await,
-        );
+        if let Some(user_input) = maybe_user_input {
+            developer_sections.extend(
+                self.build_explicit_plugin_developer_sections(turn_context, user_input)
+                    .await,
+            );
+        }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
                 turn_context.config.commit_attribution.as_deref(),
@@ -3697,26 +3696,26 @@ impl Session {
     /// reinjects full initial context into replacement history. Other non-regular tasks
     /// intentionally do not update the baseline.
     ///
-    /// `maybe_user_input` is only used to derive explicit plugin-mention guidance for the
-    /// canonical developer envelope on this turn.
+    /// `user_input` is only used to derive explicit plugin-mention guidance for the canonical
+    /// developer envelope on this turn.
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
-        maybe_user_input: Option<&[UserInput]>,
+        user_input: &[UserInput],
     ) {
         let reference_context_item = {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
         let context_items = if reference_context_item.is_none() {
-            self.build_initial_context(turn_context, maybe_user_input)
+            self.build_initial_context(turn_context, Some(user_input))
                 .await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
             self.build_settings_update_items(
                 reference_context_item.as_ref(),
                 turn_context,
-                maybe_user_input,
+                user_input,
             )
             .await
         };
@@ -5597,7 +5596,7 @@ pub(crate) async fn run_turn(
         .plugins_for_config(&turn_context.config);
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins here for telemetry/tool selection; the canonical context
-    // builders derive any explicit plugin guidance from `maybe_user_input`.
+    // builders derive any explicit plugin guidance from this turn's user input.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
@@ -5688,11 +5687,8 @@ pub(crate) async fn run_turn(
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
         .collect::<Vec<_>>();
 
-    sess.record_context_updates_and_set_reference_context_item(
-        turn_context.as_ref(),
-        /*maybe_user_input*/ Some(&input),
-    )
-    .await;
+    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref(), &input)
+        .await;
 
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
