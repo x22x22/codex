@@ -1,11 +1,11 @@
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
+use crate::maybe_emit_implicit_skill_invocation;
 use crate::protocol::EventMsg;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
-use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -25,6 +25,8 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use codex_features::Feature;
+use codex_otel::SessionTelemetry;
+use codex_otel::metrics::names::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_protocol::models::PermissionProfile;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -145,11 +147,12 @@ impl ToolHandler for UnifiedExecHandler {
                 let cwd = resolve_workdir_base_path(&arguments, context.turn.cwd.as_path())?;
                 let args: ExecCommandArgs =
                     parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+                let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
-                    turn.as_ref(),
+                    context.turn.as_ref(),
                     &args.cmd,
-                    args.workdir.as_deref(),
+                    &workdir,
                 )
                 .await;
                 let process_id = manager.allocate_process_id().await;
@@ -260,6 +263,7 @@ impl ToolHandler for UnifiedExecHandler {
                     });
                 }
 
+                emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
                 manager
                     .exec_command(
                         ExecCommandRequest {
@@ -321,6 +325,14 @@ impl ToolHandler for UnifiedExecHandler {
 
         Ok(response)
     }
+}
+
+fn emit_unified_exec_tty_metric(session_telemetry: &SessionTelemetry, tty: bool) {
+    session_telemetry.counter(
+        TOOL_CALL_UNIFIED_EXEC_METRIC,
+        /*inc*/ 1,
+        &[("tty", if tty { "true" } else { "false" })],
+    );
 }
 
 pub(crate) fn get_command(

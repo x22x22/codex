@@ -18,6 +18,10 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::tempdir;
+use tracing::Instrument;
+use tracing::Level;
+use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_test::internal::MockWriter;
 
 fn annotations(
     read_only: Option<bool>,
@@ -64,19 +68,30 @@ fn prompt_options(
 #[test]
 fn approval_required_when_read_only_false_and_destructive() {
     let annotations = annotations(Some(false), Some(true), None);
-    assert_eq!(requires_mcp_tool_approval(&annotations), true);
+    assert_eq!(requires_mcp_tool_approval(Some(&annotations)), true);
 }
 
 #[test]
 fn approval_required_when_read_only_false_and_open_world() {
     let annotations = annotations(Some(false), None, Some(true));
-    assert_eq!(requires_mcp_tool_approval(&annotations), true);
+    assert_eq!(requires_mcp_tool_approval(Some(&annotations)), true);
 }
 
 #[test]
 fn approval_required_when_destructive_even_if_read_only_true() {
     let annotations = annotations(Some(true), Some(true), Some(true));
-    assert_eq!(requires_mcp_tool_approval(&annotations), true);
+    assert_eq!(requires_mcp_tool_approval(Some(&annotations)), true);
+}
+
+#[test]
+fn approval_required_when_annotations_are_absent() {
+    assert_eq!(requires_mcp_tool_approval(None), true);
+}
+
+#[test]
+fn approval_not_required_when_read_only_and_other_hints_are_absent() {
+    let annotations = annotations(Some(true), None, None);
+    assert_eq!(requires_mcp_tool_approval(Some(&annotations)), false);
 }
 
 #[test]
@@ -105,6 +120,57 @@ fn approval_question_text_prepends_safety_reason() {
             Some("This tool may contact an external system."),
         ),
         "Tool call needs your approval. Reason: This tool may contact an external system."
+    );
+}
+
+#[tokio::test]
+async fn mcp_tool_call_span_records_expected_fields() {
+    let buffer: &'static std::sync::Mutex<Vec<u8>> =
+        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_level(true)
+        .with_ansi(false)
+        .with_max_level(Level::TRACE)
+        .with_span_events(FmtSpan::FULL)
+        .with_writer(MockWriter::new(buffer))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let (session, turn_context) = make_session_and_context().await;
+
+    async {}
+        .instrument(mcp_tool_call_span(
+            &session,
+            &turn_context,
+            McpToolCallSpanFields {
+                server_name: "rmcp",
+                tool_name: "echo",
+                call_id: "call-123",
+                server_origin: Some("https://example.com:8443/mcp"),
+                connector_id: Some("calendar"),
+                connector_name: Some("Calendar"),
+            },
+        ))
+        .await;
+
+    let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs");
+    assert!(
+        logs.contains("mcp.tools.call{otel.kind=\"client\"")
+            && logs.contains("rpc.system=\"jsonrpc\"")
+            && logs.contains("rpc.method=\"tools/call\"")
+            && logs.contains("mcp.server.name=\"rmcp\"")
+            && logs.contains("mcp.server.origin=\"https://example.com:8443/mcp\"")
+            && logs.contains("mcp.transport=\"streamable_http\"")
+            && logs.contains("mcp.connector.id=\"calendar\"")
+            && logs.contains("mcp.connector.name=\"Calendar\"")
+            && logs.contains("tool.name=\"echo\"")
+            && logs.contains("tool.call_id=\"call-123\"")
+            && logs.contains("server.address=\"example.com\"")
+            && logs.contains("server.port=8443")
+            && logs.contains("conversation.id=")
+            && logs.contains("session.id=")
+            && logs.contains("turn.id="),
+        "missing MCP tool span fields\nlogs:\n{logs}"
     );
 }
 
@@ -1053,6 +1119,75 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         &session,
         &turn_context,
         "call-2",
+        &invocation,
+        Some(&metadata),
+        AppToolApproval::Approve,
+    )
+    .await;
+
+    assert_eq!(
+        decision,
+        Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
+            "Tool call was cancelled because of safety risks: high-risk action".to_string(),
+        ))
+    );
+}
+
+#[tokio::test]
+async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/safety/arc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "outcome": "steer-model",
+            "short_reason": "needs approval",
+            "rationale": "high-risk action",
+            "risk_score": 96,
+            "risk_level": "critical",
+            "evidence": [{
+                "message": "dangerous_tool",
+                "why": "high-risk action",
+            }],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
+        crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    ));
+    let mut config = (*turn_context.config).clone();
+    config.chatgpt_base_url = server.uri();
+    turn_context.config = Arc::new(config);
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        tool: "dangerous_tool".to_string(),
+        arguments: Some(serde_json::json!({ "id": 1 })),
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: Some("calendar".to_string()),
+        connector_name: Some("Calendar".to_string()),
+        connector_description: Some("Manage events".to_string()),
+        tool_title: Some("Dangerous Tool".to_string()),
+        tool_description: Some("Performs a risky action.".to_string()),
+        codex_apps_meta: None,
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-3",
         &invocation,
         Some(&metadata),
         AppToolApproval::Approve,
