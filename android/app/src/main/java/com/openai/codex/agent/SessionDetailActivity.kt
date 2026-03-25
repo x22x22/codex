@@ -7,11 +7,15 @@ import android.content.Intent
 import android.graphics.Typeface
 import android.os.Binder
 import android.os.Bundle
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.StyleSpan
 import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.concurrent.thread
@@ -210,21 +214,26 @@ class SessionDetailActivity : Activity() {
                 append("\nThinking depth: ${executionSettings.reasoningEffort}")
             }
         }
-        findViewById<TextView>(R.id.session_detail_summary).text = summary.trimEnd()
+        findViewById<TextView>(R.id.session_detail_summary).text = formatDetailSummary(summary.trimEnd())
         renderChildSessions(viewState.childSessions, selectedChildSession?.sessionId)
-        findViewById<TextView>(R.id.session_detail_child_summary).text =
-            selectedChildSession?.let { child ->
-                SessionUiFormatter.detailSummary(
+        val childSummaryText = selectedChildSession?.let { child ->
+            SessionUiFormatter.detailSummary(
                     context = this,
                     session = child,
                     parentSession = topLevelSession,
                 )
-            } ?: if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT && viewState.childSessions.isEmpty()) {
-                "No child sessions yet. The Agent is still planning targets or waiting to start them."
-            } else {
-                "Select a child session to inspect it."
-            }
-        findViewById<TextView>(R.id.session_detail_timeline).text = renderTimeline(topLevelSession, selectedChildSession)
+        } ?: if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT && viewState.childSessions.isEmpty()) {
+            "No child sessions yet. The Agent is still planning targets or waiting to start them."
+        } else {
+            "Select a child session to inspect it. Tap the same child again to collapse it."
+        }
+        findViewById<TextView>(R.id.session_detail_child_summary).text = formatDetailSummary(childSummaryText)
+        findViewById<ScrollView>(R.id.session_detail_child_summary_container).scrollTo(0, 0)
+        findViewById<TextView>(R.id.session_detail_timeline).text = formatTimeline(
+            topLevelSession,
+            selectedChildSession,
+        )
+        findViewById<ScrollView>(R.id.session_detail_timeline_container).scrollTo(0, 0)
 
         val isWaitingForUser = actionableSession.state == AgentSessionInfo.STATE_WAITING_FOR_USER &&
             !actionableSession.latestQuestion.isNullOrBlank()
@@ -342,11 +351,13 @@ class SessionDetailActivity : Activity() {
                 }
                 this.layoutParams = layoutParams
                 setOnClickListener {
-                    if (session.sessionId != selectedChildSessionId) {
-                        selectedChildSessionId = session.sessionId
-                        requestedSessionId = topLevelSessionId
-                        updateUi(latestSnapshot)
+                    selectedChildSessionId = if (session.sessionId == selectedChildSessionId) {
+                        null
+                    } else {
+                        session.sessionId
                     }
+                    requestedSessionId = topLevelSessionId
+                    updateUi(latestSnapshot)
                 }
             }
             val title = TextView(this).apply {
@@ -376,6 +387,63 @@ class SessionDetailActivity : Activity() {
                 append(selectedChildSession.timeline)
             }
         }
+    }
+
+    private fun formatDetailSummary(summary: String): CharSequence {
+        val trimmed = summary.trim()
+        if (trimmed.isEmpty()) {
+            return ""
+        }
+        val builder = SpannableStringBuilder()
+        trimmed.lines().forEachIndexed { index, line ->
+            if (index > 0) {
+                builder.append("\n\n")
+            }
+            val separatorIndex = line.indexOf(':')
+            if (separatorIndex <= 0) {
+                builder.append(line)
+                return@forEachIndexed
+            }
+            val label = line.substring(0, separatorIndex)
+            val value = line.substring(separatorIndex + 1).trim()
+            appendBoldLine(builder, label)
+            if (value.isNotEmpty()) {
+                builder.append('\n')
+                builder.append(value)
+            }
+        }
+        return builder
+    }
+
+    private fun formatTimeline(
+        topLevelSession: AgentSessionDetails,
+        selectedChildSession: AgentSessionDetails?,
+    ): CharSequence {
+        val builder = SpannableStringBuilder()
+        appendBoldLine(builder, "Top-level session ${topLevelSession.sessionId}")
+        builder.append('\n')
+        builder.append(topLevelSession.timeline.ifBlank { "No framework events yet." })
+        selectedChildSession?.let { child ->
+            builder.append("\n\n")
+            appendBoldLine(builder, "Selected child ${child.sessionId}")
+            builder.append('\n')
+            builder.append(child.timeline.ifBlank { "No framework events yet." })
+        }
+        return builder
+    }
+
+    private fun appendBoldLine(
+        builder: SpannableStringBuilder,
+        text: String,
+    ) {
+        val start = builder.length
+        builder.append(text)
+        builder.setSpan(
+            StyleSpan(Typeface.BOLD),
+            start,
+            builder.length,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
     }
 
     private fun answerQuestion() {
