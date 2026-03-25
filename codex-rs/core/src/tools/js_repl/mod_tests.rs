@@ -2084,6 +2084,140 @@ console.log(JSON.stringify(out));
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_atlas_lib_open_uses_hidden_atlas_command() -> anyhow::Result<()> {
+    if !can_run_js_repl_runtime_tests().await {
+        return Ok(());
+    }
+
+    let (session, turn, rx_event) =
+        make_session_and_context_with_dynamic_tools_and_rx(vec![DynamicToolSpec {
+            name: "atlas_command".to_string(),
+            description: "Hidden bridge for AgentLib inside js_repl.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "payload": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                },
+                "required": ["payload"],
+                "additionalProperties": false
+            }),
+            defer_loading: true,
+        }])
+        .await;
+
+    *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+    let manager = turn.js_repl.manager().await?;
+    let code = r#"
+const tab = await AtlasLib.open("https://www.google.com");
+console.log(tab?.title ?? "");
+"#;
+
+    let session_for_response = Arc::clone(&session);
+    let response_watcher = async move {
+        let expected = [
+            (
+                "create_tab",
+                serde_json::json!({
+                    "type": "codex_repl",
+                    "command_output": { "id": "tab-1" }
+                }),
+            ),
+            (
+                "navigate_tab_url",
+                serde_json::json!({
+                    "type": "codex_repl",
+                    "command_output": {}
+                }),
+            ),
+            (
+                "playwright_wait_for_load_state",
+                serde_json::json!({
+                    "type": "codex_repl",
+                    "command_output": {}
+                }),
+            ),
+            (
+                "selected_tab",
+                serde_json::json!({
+                    "type": "codex_repl",
+                    "command_output": { "id": "tab-1" }
+                }),
+            ),
+            (
+                "list_tabs",
+                serde_json::json!({
+                    "type": "codex_repl",
+                    "command_output": {
+                        "tabs": [
+                            {
+                                "id": "tab-1",
+                                "title": "Google",
+                                "url": "https://www.google.com"
+                            }
+                        ]
+                    }
+                }),
+            ),
+        ];
+
+        let mut index = 0usize;
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(2), rx_event.recv()).await??;
+            if let EventMsg::DynamicToolCallRequest(request) = event.msg {
+                assert_eq!(request.tool, "atlas_command");
+                let payload_type = request
+                    .arguments
+                    .get("payload")
+                    .and_then(|value| value.get("type"))
+                    .and_then(serde_json::Value::as_str);
+                let (expected_type, response_payload) = &expected[index];
+                assert_eq!(payload_type, Some(*expected_type));
+                session_for_response
+                    .notify_dynamic_tool_response(
+                        &request.call_id,
+                        DynamicToolResponse {
+                            content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                                text: response_payload.to_string(),
+                            }],
+                            success: true,
+                        },
+                    )
+                    .await;
+                index += 1;
+                if index == expected.len() {
+                    return Ok::<(), anyhow::Error>(());
+                }
+            }
+        }
+    };
+
+    let (result, response_watcher_result) = tokio::join!(
+        manager.execute(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            tracker,
+            JsReplArgs {
+                code: code.to_string(),
+                timeout_ms: Some(15_000),
+            },
+        ),
+        response_watcher,
+    );
+
+    let result = result?;
+    response_watcher_result?;
+    assert_eq!(result.output, "Google");
+    assert!(session.get_pending_input().await.is_empty());
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn js_repl_prefers_env_node_module_dirs_over_config() -> anyhow::Result<()> {
     if !can_run_js_repl_runtime_tests().await {

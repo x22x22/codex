@@ -1972,7 +1972,7 @@ impl CodexMessageProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) {
-        let config = match derive_config_from_params(
+        let mut config = match derive_config_from_params(
             &cli_overrides,
             config_overrides,
             typesafe_overrides,
@@ -1991,6 +1991,11 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+
+        if listener_task_context.remote_browser_api.is_configured() {
+            config.user_instructions =
+                append_remote_browser_user_instructions(config.user_instructions.take());
+        }
 
         let dynamic_tools = if listener_task_context.remote_browser_api.is_configured() {
             merge_atlas_command_dynamic_tool(dynamic_tools.unwrap_or_default())
@@ -7823,6 +7828,31 @@ fn config_load_error(err: &std::io::Error) -> JSONRPCErrorError {
     }
 }
 
+fn render_remote_browser_user_instructions() -> &'static str {
+    "## Remote Browsing (AtlasLib)\n\
+- This session exposes remote browsing inside `js_repl` via `AtlasLib` (also available as `codex.browser`).\n\
+- When the user asks to use the remote browser, use `js_repl` and this API instead of probing MCP resources, searching for `remote_browser` tools, or fetching pages directly.\n\
+- Common flow: `const tab = await AtlasLib.open(\"https://www.google.com\"); console.log(tab?.title ?? \"\");`\n\
+- Available methods: `open`, `createTab`, `listTabs`, `getSelectedTab`, `getTab`, `navigate`, `waitForLoadState`, `count`, `click`, `dblclick`, `waitFor`, `textContent`, `innerText`, `getAttribute`, `isVisible`, `isEnabled`, `screenshot`, `visibleScreenshot`, and `tabsContent`.\n\
+- `AtlasLib.screenshot(...)` and `AtlasLib.visibleScreenshot(...)` return `{ base64, dataUrl }`; use `await codex.emitImage((await AtlasLib.visibleScreenshot({ tabId })).dataUrl)` when you need to show the browser image in the response."
+}
+
+fn append_remote_browser_user_instructions(existing: Option<String>) -> Option<String> {
+    let remote_browser_instructions = render_remote_browser_user_instructions();
+    match existing {
+        Some(instructions) => {
+            if instructions.contains("## Remote Browsing (AtlasLib)") {
+                Some(instructions)
+            } else if instructions.trim().is_empty() {
+                Some(remote_browser_instructions.to_string())
+            } else {
+                Some(format!("{instructions}\n\n{remote_browser_instructions}"))
+            }
+        }
+        None => Some(remote_browser_instructions.to_string()),
+    }
+}
+
 fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
     let mut seen = HashSet::new();
     for tool in tools {
@@ -8475,6 +8505,27 @@ mod tests {
             defer_loading: false,
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
+    fn append_remote_browser_user_instructions_appends_section() {
+        let instructions =
+            append_remote_browser_user_instructions(Some("base instructions".to_string()))
+                .expect("instructions");
+
+        assert!(instructions.contains("base instructions"));
+        assert!(instructions.contains("## Remote Browsing (AtlasLib)"));
+        assert!(instructions.contains("AtlasLib.open(\"https://www.google.com\")"));
+    }
+
+    #[test]
+    fn append_remote_browser_user_instructions_is_idempotent() {
+        let once = append_remote_browser_user_instructions(None).expect("instructions");
+        let twice =
+            append_remote_browser_user_instructions(Some(once.clone())).expect("instructions");
+
+        assert_eq!(twice.matches("## Remote Browsing (AtlasLib)").count(), 1);
+        assert_eq!(once, twice);
     }
 
     #[test]

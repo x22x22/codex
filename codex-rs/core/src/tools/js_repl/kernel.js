@@ -1437,6 +1437,338 @@ function normalizeEmitImageValue(value) {
   throw new Error("codex.emitImage received an unsupported value");
 }
 
+function contentItemsToText(items) {
+  if (!Array.isArray(items)) {
+    return null;
+  }
+
+  const parts = [];
+  for (const item of items) {
+    if (
+      isPlainObject(item) &&
+      (item.type === "input_text" || item.type === "output_text") &&
+      typeof item.text === "string" &&
+      item.text
+    ) {
+      parts.push(item.text);
+    }
+  }
+
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function extractToolResponseText(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  if (typeof value.output === "string") {
+    return value.output;
+  }
+
+  const outputItems = contentItemsToText(value.output);
+  if (outputItems) {
+    return outputItems;
+  }
+
+  if (isPlainObject(value.output)) {
+    if (typeof value.output.text === "string") {
+      return value.output.text;
+    }
+    const nestedItems =
+      contentItemsToText(value.output.content_items) ??
+      contentItemsToText(value.output.contentItems);
+    if (nestedItems) {
+      return nestedItems;
+    }
+  }
+
+  return contentItemsToText(value.content);
+}
+
+function parseAtlasCommandResult(value) {
+  const text = extractToolResponseText(value);
+  if (typeof text !== "string" || !text) {
+    throw new Error("AtlasLib expected atlas_command to return JSON text");
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `AtlasLib failed to parse atlas_command response: ${error.message}`,
+    );
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new Error("AtlasLib expected atlas_command to return a JSON object");
+  }
+
+  if (typeof parsed.error === "string" && parsed.error) {
+    throw new Error(parsed.error);
+  }
+
+  if (parsed.type === "codex_repl") {
+    if ("command_output" in parsed) {
+      return parsed.command_output;
+    }
+    throw new Error("AtlasLib expected atlas_command response.command_output");
+  }
+
+  return parsed;
+}
+
+function addDefinedField(target, key, value) {
+  if (value != null) {
+    target[key] = value;
+  }
+}
+
+function normalizeAtlasScreenshotResult(result) {
+  if (!isPlainObject(result) || typeof result.data !== "string" || !result.data) {
+    return result;
+  }
+
+  return {
+    base64: result.data,
+    dataUrl: `data:image/png;base64,${result.data}`,
+  };
+}
+
+function createAtlasLibApi(runTool) {
+  async function atlasCommand(payload) {
+    if (!isPlainObject(payload)) {
+      throw new Error("AtlasLib expects an object payload");
+    }
+    if (typeof payload.type !== "string" || !payload.type) {
+      throw new Error("AtlasLib payload.type is required");
+    }
+    return parseAtlasCommandResult(
+      await runTool("atlas_command", {
+        payload,
+      }),
+    );
+  }
+
+  const api = {
+    async runtimeConfig() {
+      return atlasCommand({ type: "runtime_config" });
+    },
+
+    async createTab() {
+      return atlasCommand({ type: "create_tab" });
+    },
+
+    async listTabs() {
+      const result = await atlasCommand({ type: "list_tabs" });
+      return Array.isArray(result?.tabs) ? result.tabs : [];
+    },
+
+    async getSelectedTab() {
+      const selected = await atlasCommand({ type: "selected_tab" });
+      if (!selected?.id) {
+        return null;
+      }
+      const tabs = await api.listTabs();
+      return tabs.find((tab) => tab?.id === selected.id) ?? { id: selected.id };
+    },
+
+    async getTab(tabId) {
+      const tabs = await api.listTabs();
+      return tabs.find((tab) => tab?.id === tabId) ?? null;
+    },
+
+    async waitForLoadState(options = {}) {
+      const payload = {
+        type: "playwright_wait_for_load_state",
+        state: options.state ?? "load",
+      };
+      addDefinedField(payload, "tab_id", options.tabId);
+      addDefinedField(payload, "timeout_ms", options.timeoutMs);
+      await atlasCommand(payload);
+    },
+
+    async navigate(url, options = {}) {
+      if (typeof url !== "string" || !url) {
+        throw new Error("AtlasLib.navigate expects a non-empty URL string");
+      }
+
+      const payload = {
+        type: "navigate_tab_url",
+        url,
+      };
+      addDefinedField(payload, "tab_id", options.tabId);
+      addDefinedField(payload, "timeout_ms", options.timeoutMs);
+      await atlasCommand(payload);
+
+      const waitForLoadState = options.waitForLoadState ?? options.waitFor ?? "load";
+      if (waitForLoadState) {
+        await api.waitForLoadState({
+          tabId: options.tabId,
+          state: waitForLoadState,
+          timeoutMs: options.timeoutMs,
+        });
+      }
+
+      return options.tabId ? api.getTab(options.tabId) : api.getSelectedTab();
+    },
+
+    async open(url, options = {}) {
+      const tabId = options.tabId ?? (await api.createTab())?.id;
+      return api.navigate(url, {
+        ...options,
+        tabId,
+      });
+    },
+
+    async count(selector, options = {}) {
+      const result = await atlasCommand({
+        type: "playwright_locator_count",
+        selector,
+        tab_id: options.tabId,
+        timeout_ms: options.timeoutMs,
+      });
+      return result?.count ?? result ?? 0;
+    },
+
+    async textContent(selector, options = {}) {
+      const result = await atlasCommand({
+        type: "playwright_locator_text_content",
+        selector,
+        tab_id: options.tabId,
+        timeout_ms: options.timeoutMs,
+      });
+      return result?.value ?? result ?? null;
+    },
+
+    async innerText(selector, options = {}) {
+      const result = await atlasCommand({
+        type: "playwright_locator_inner_text",
+        selector,
+        tab_id: options.tabId,
+        timeout_ms: options.timeoutMs,
+      });
+      return result?.value ?? result ?? null;
+    },
+
+    async getAttribute(selector, name, options = {}) {
+      const result = await atlasCommand({
+        type: "playwright_locator_get_attribute",
+        selector,
+        name,
+        tab_id: options.tabId,
+        timeout_ms: options.timeoutMs,
+      });
+      return result?.value ?? result ?? null;
+    },
+
+    async isVisible(selector, options = {}) {
+      const result = await atlasCommand({
+        type: "playwright_locator_is_visible",
+        selector,
+        tab_id: options.tabId,
+        timeout_ms: options.timeoutMs,
+      });
+      return result?.value ?? result ?? false;
+    },
+
+    async isEnabled(selector, options = {}) {
+      const result = await atlasCommand({
+        type: "playwright_locator_is_enabled",
+        selector,
+        tab_id: options.tabId,
+        timeout_ms: options.timeoutMs,
+      });
+      return result?.value ?? result ?? false;
+    },
+
+    async waitFor(selector, options = {}) {
+      const payload = {
+        type: "playwright_locator_wait_for",
+        selector,
+        state: options.state ?? "visible",
+      };
+      addDefinedField(payload, "tab_id", options.tabId);
+      addDefinedField(payload, "timeout_ms", options.timeoutMs);
+      await atlasCommand(payload);
+    },
+
+    async click(selector, options = {}) {
+      const payload = {
+        type: "playwright_locator_click",
+        selector,
+      };
+      addDefinedField(payload, "tab_id", options.tabId);
+      addDefinedField(payload, "timeout_ms", options.timeoutMs);
+      addDefinedField(payload, "modifiers", options.modifiers);
+      addDefinedField(payload, "button", options.button);
+      addDefinedField(payload, "force", options.force);
+      await atlasCommand(payload);
+    },
+
+    async dblclick(selector, options = {}) {
+      const payload = {
+        type: "playwright_locator_dblclick",
+        selector,
+      };
+      addDefinedField(payload, "tab_id", options.tabId);
+      addDefinedField(payload, "timeout_ms", options.timeoutMs);
+      addDefinedField(payload, "modifiers", options.modifiers);
+      addDefinedField(payload, "button", options.button);
+      addDefinedField(payload, "force", options.force);
+      await atlasCommand(payload);
+    },
+
+    async screenshot(options = {}) {
+      const payload = {
+        type: "playwright_screenshot",
+      };
+      addDefinedField(payload, "tab_id", options.tabId);
+      addDefinedField(payload, "timeout_ms", options.timeoutMs);
+      addDefinedField(payload, "full_page", options.fullPage);
+      return normalizeAtlasScreenshotResult(await atlasCommand(payload));
+    },
+
+    async visibleScreenshot(options = {}) {
+      const tabId = options.tabId ?? (await api.getSelectedTab())?.id;
+      if (!tabId) {
+        throw new Error(
+          "AtlasLib.visibleScreenshot requires a tabId or an active selected tab",
+        );
+      }
+      return normalizeAtlasScreenshotResult(
+        await atlasCommand({
+          type: "cua_get_visible_screenshot",
+          tab_id: tabId,
+        }),
+      );
+    },
+
+    async tabsContent(urls, options = {}) {
+      if (!Array.isArray(urls) || urls.length === 0) {
+        throw new Error("AtlasLib.tabsContent expects a non-empty array of URLs");
+      }
+
+      const payload = {
+        type: "tabs_content",
+        urls,
+        content_type: "text",
+      };
+      addDefinedField(payload, "timeout_ms", options.timeoutMs);
+
+      const result = await atlasCommand(payload);
+      return Array.isArray(result?.results) ? result.results : [];
+    },
+  };
+
+  return api;
+}
+
 const codex = {
   cwd,
   homeDir,
@@ -1538,6 +1870,9 @@ const codex = {
     };
   },
 };
+const atlasLib = createAtlasLibApi(codex.tool);
+codex.browser = atlasLib;
+codex.atlas = atlasLib;
 
 async function handleExec(message) {
   clearLocalFileModuleCaches();
@@ -1576,6 +1911,7 @@ async function handleExec(message) {
     let output = "";
 
     context.codex = codex;
+    context.AtlasLib = atlasLib;
     context.tmpDir = tmpDir;
 
     await execContextStorage.run(execState, async () => {
