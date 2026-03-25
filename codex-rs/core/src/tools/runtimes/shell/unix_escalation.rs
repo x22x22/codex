@@ -138,6 +138,7 @@ pub(super) async fn try_run_zsh_fork(
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        windows_restricted_token_filesystem_overlay: _windows_restricted_token_filesystem_overlay,
         arg0,
     } = sandbox_exec_request;
     let ParsedShellCommand { script, login, .. } = extract_shell_script(&command)?;
@@ -918,6 +919,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 sandbox_policy: self.sandbox_policy.clone(),
                 file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
                 network_sandbox_policy: self.network_sandbox_policy,
+                windows_restricted_token_filesystem_overlay: None,
                 arg0: self.arg0.clone(),
             },
             /*stdout_stream*/ None,
