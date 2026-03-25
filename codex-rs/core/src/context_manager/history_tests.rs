@@ -817,7 +817,7 @@ fn drop_last_n_user_turns_preserves_prefix() {
 }
 
 #[test]
-fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
+fn drop_last_n_user_turns_does_not_count_session_prefix_user_messages_as_turns() {
     let items = vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
         user_input_text_msg(
@@ -861,20 +861,6 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         expected_prefix_and_first_turn
     );
 
-    let expected_prefix_only = vec![
-        user_input_text_msg("<environment_context>ctx</environment_context>"),
-        user_input_text_msg(
-            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
-        ),
-        user_input_text_msg(
-            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
-        ),
-        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
-        user_input_text_msg(
-            "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
-        ),
-    ];
-
     let mut history = create_history_with_items(vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
         user_input_text_msg(
@@ -893,7 +879,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         assistant_msg("turn 2 assistant"),
     ]);
     history.drop_last_n_user_turns(2);
-    assert_eq!(history.for_prompt(&modalities), expected_prefix_only);
+    assert_eq!(history.for_prompt(&modalities), Vec::<ResponseItem>::new());
 
     let mut history = create_history_with_items(vec![
         user_input_text_msg("<environment_context>ctx</environment_context>"),
@@ -913,7 +899,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
         assistant_msg("turn 2 assistant"),
     ]);
     history.drop_last_n_user_turns(3);
-    assert_eq!(history.for_prompt(&modalities), expected_prefix_only);
+    assert_eq!(history.for_prompt(&modalities), Vec::<ResponseItem>::new());
 }
 
 #[test]

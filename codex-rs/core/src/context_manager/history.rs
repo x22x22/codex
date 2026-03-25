@@ -218,7 +218,7 @@ impl ContextManager {
     /// - `num_turns == 0` is a no-op
     /// - if there are no user turns, this is a no-op
     /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
-    ///   preserving any items that occurred before the first user message.
+    ///   preserving only non-contextual items that occurred before the first user message.
     ///
     /// If rollback trims a pre-turn developer message that mixes contextual fragments with
     /// persistent developer text from `build_initial_context`, this also clears
@@ -232,20 +232,19 @@ impl ContextManager {
 
         let snapshot = self.items.clone();
         let user_positions = user_message_positions(&snapshot);
-        let Some(&first_instruction_turn_idx) = user_positions.first() else {
+        let Some(&first_user_idx) = user_positions.first() else {
             self.replace(snapshot);
             return;
         };
 
         let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
         let mut cut_idx = if n_from_end >= user_positions.len() {
-            first_instruction_turn_idx
+            first_user_idx
         } else {
             user_positions[user_positions.len() - n_from_end]
         };
 
-        cut_idx =
-            self.trim_pre_turn_context_updates(&snapshot, first_instruction_turn_idx, cut_idx);
+        cut_idx = self.trim_pre_turn_context_updates(&snapshot, cut_idx);
 
         self.replace(snapshot[..cut_idx].to_vec());
     }
@@ -401,10 +400,6 @@ impl ContextManager {
     /// Returns the adjusted cut index after removing contextual developer/user items immediately
     /// above the rolled-back turn boundary.
     ///
-    /// `first_instruction_turn_idx` is the earliest rollback-eligible instruction-turn boundary
-    /// in `snapshot`. When rolling back the first real turn, a fully contextual prefix is treated
-    /// as session bootstrap and is therefore preserved.
-    ///
     /// `cut_idx` is the tentative slice boundary after dropping the requested number of
     /// instruction turns, before stripping contextual pre-turn items that sit immediately above
     /// that boundary. The trim walk stops as soon as it encounters a non-contextual item, so only
@@ -417,10 +412,8 @@ impl ContextManager {
     fn trim_pre_turn_context_updates(
         &mut self,
         snapshot: &[ResponseItem],
-        first_instruction_turn_idx: usize,
         mut cut_idx: usize,
     ) -> usize {
-        let original_cut_idx = cut_idx;
         let mut trimmed_mixed_dev_bundle = false;
         while cut_idx > 0 {
             match &snapshot[cut_idx - 1] {
@@ -439,10 +432,6 @@ impl ContextManager {
                 }
                 _ => break,
             }
-        }
-
-        if original_cut_idx == first_instruction_turn_idx && cut_idx == 0 {
-            return original_cut_idx;
         }
 
         if trimmed_mixed_dev_bundle {
