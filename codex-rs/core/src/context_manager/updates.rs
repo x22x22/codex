@@ -1,8 +1,8 @@
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
-use crate::plugins::ExplicitPluginInstructionsContext;
-use crate::plugins::build_plugin_developer_sections;
+use crate::plugins::PluginMentionInstructionsContext;
+use crate::plugins::build_plugin_mention_developer_sections;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_features::Feature;
@@ -194,7 +194,7 @@ pub(crate) fn build_settings_update_items(
     shell: &Shell,
     exec_policy: &Policy,
     personality_feature_enabled: bool,
-    explicit_plugin_instructions: &ExplicitPluginInstructionsContext,
+    plugin_mention_instructions: &PluginMentionInstructionsContext,
 ) -> Vec<ResponseItem> {
     // TODO(ccunningham): build_settings_update_items still does not cover every
     // model-visible item emitted by build_initial_context. Persist the remaining
@@ -213,8 +213,8 @@ pub(crate) fn build_settings_update_items(
     .into_iter()
     .flatten()
     .map(DeveloperInstructions::into_text)
-    .chain(build_plugin_developer_sections(
-        explicit_plugin_instructions,
+    .chain(build_plugin_mention_developer_sections(
+        plugin_mention_instructions,
     ))
     .collect::<Vec<_>>();
 

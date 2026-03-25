@@ -41,7 +41,7 @@ pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Opt
     ))
 }
 
-pub(crate) fn render_explicit_plugin_instructions(
+pub(crate) fn render_plugin_mention_instructions(
     plugin: &PluginCapabilitySummary,
     available_mcp_servers: &[String],
     available_apps: &[String],

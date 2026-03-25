@@ -178,7 +178,7 @@ pub(crate) async fn process_compacted_history(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        sess.build_initial_context(turn_context, /*explicit_plugin_instructions*/ None)
+        sess.build_initial_context(turn_context, /*plugin_mention_instructions*/ None)
             .await
     } else {
         Vec::new()

@@ -258,10 +258,10 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
-use crate::plugins::ExplicitPluginInstructionsContext;
+use crate::plugins::PluginMentionInstructionsContext;
 use crate::plugins::PluginsManager;
-use crate::plugins::build_explicit_plugin_instructions_context;
-use crate::plugins::build_plugin_developer_sections;
+use crate::plugins::build_plugin_mention_developer_sections;
+use crate::plugins::build_plugin_mention_instructions_context;
 use crate::plugins::render_plugins_section;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
@@ -2572,14 +2572,14 @@ impl Session {
         .await
     }
 
-    /// `explicit_plugin_instructions` carries the already-resolved turn-local plugin mention
+    /// `plugin_mention_instructions` carries the already-resolved turn-local plugin mention
     /// context from the current user input so this builder can render that guidance without
     /// re-listing MCP tools.
     async fn build_settings_update_items(
         &self,
         reference_context_item: Option<&TurnContextItem>,
         current_context: &TurnContext,
-        explicit_plugin_instructions: &ExplicitPluginInstructionsContext,
+        plugin_mention_instructions: &PluginMentionInstructionsContext,
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
@@ -2598,7 +2598,7 @@ impl Session {
             shell.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
-            explicit_plugin_instructions,
+            plugin_mention_instructions,
         )
     }
 
@@ -3438,14 +3438,14 @@ impl Session {
         }
     }
 
-    /// `explicit_plugin_instructions` is optional because compaction/rebuild callers do not have
+    /// `plugin_mention_instructions` is optional because compaction/rebuild callers do not have
     /// the raw current-turn user input needed to resolve explicit plugin mentions. When present,
     /// it carries the already-resolved plugin/tool/app context for turn-local plugin guidance in
     /// the canonical developer envelope.
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
-        explicit_plugin_instructions: Option<&ExplicitPluginInstructionsContext>,
+        plugin_mention_instructions: Option<&PluginMentionInstructionsContext>,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
@@ -3566,9 +3566,9 @@ impl Session {
         {
             developer_sections.push(plugin_section);
         }
-        if let Some(explicit_plugin_instructions) = explicit_plugin_instructions {
-            developer_sections.extend(build_plugin_developer_sections(
-                explicit_plugin_instructions,
+        if let Some(plugin_mention_instructions) = plugin_mention_instructions {
+            developer_sections.extend(build_plugin_mention_developer_sections(
+                plugin_mention_instructions,
             ));
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
@@ -3659,27 +3659,27 @@ impl Session {
     /// reinjects full initial context into replacement history. Other non-regular tasks
     /// intentionally do not update the baseline.
     ///
-    /// `explicit_plugin_instructions` carries the current turn's already-resolved explicit
+    /// `plugin_mention_instructions` carries the current turn's already-resolved explicit
     /// plugin-mention context so whichever canonical builder path runs can render that guidance
     /// exactly once without re-listing MCP tools.
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
-        explicit_plugin_instructions: &ExplicitPluginInstructionsContext,
+        plugin_mention_instructions: &PluginMentionInstructionsContext,
     ) {
         let reference_context_item = {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
         let context_items = if reference_context_item.is_none() {
-            self.build_initial_context(turn_context, Some(explicit_plugin_instructions))
+            self.build_initial_context(turn_context, Some(plugin_mention_instructions))
                 .await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
             self.build_settings_update_items(
                 reference_context_item.as_ref(),
                 turn_context,
-                explicit_plugin_instructions,
+                plugin_mention_instructions,
             )
             .await
         };
@@ -5651,7 +5651,7 @@ pub(crate) async fn run_turn(
         .iter()
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
         .collect::<Vec<_>>();
-    let explicit_plugin_instructions = build_explicit_plugin_instructions_context(
+    let plugin_mention_instructions = build_plugin_mention_instructions_context(
         &mentioned_plugins,
         &mcp_tools,
         &available_connectors,
@@ -5659,7 +5659,7 @@ pub(crate) async fn run_turn(
 
     sess.record_context_updates_and_set_reference_context_item(
         turn_context.as_ref(),
-        &explicit_plugin_instructions,
+        &plugin_mention_instructions,
     )
     .await;
 

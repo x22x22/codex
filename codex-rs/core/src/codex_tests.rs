@@ -12,7 +12,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::model_info;
-use crate::plugins::ExplicitPluginInstructionsContext;
+use crate::plugins::PluginMentionInstructionsContext;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
@@ -960,12 +960,12 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_context_updates_and_set_reference_context_item(
             &turn_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
     expected.extend(
         session
-            .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+            .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
             .await,
     );
     let history_after_seed = session.clone_history().await;
@@ -974,7 +974,7 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_context_updates_and_set_reference_context_item(
             &turn_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
     let history_after_second_seed = session.clone_history().await;
@@ -1350,7 +1350,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
     let rollout_path = attach_rollout_recorder(&sess).await;
 
     let initial_context = sess
-        .build_initial_context(tc.as_ref(), /*explicit_plugin_instructions*/ None)
+        .build_initial_context(tc.as_ref(), /*plugin_mention_instructions*/ None)
         .await;
     let turn_1 = vec![
         user_message("turn 1 user"),
@@ -1416,7 +1416,7 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
     attach_rollout_recorder(&sess).await;
 
     let initial_context = sess
-        .build_initial_context(tc.as_ref(), /*explicit_plugin_instructions*/ None)
+        .build_initial_context(tc.as_ref(), /*plugin_mention_instructions*/ None)
         .await;
     let turn_1 = vec![user_message("turn 1 user")];
     let mut full_history = Vec::new();
@@ -1444,7 +1444,7 @@ async fn thread_rollback_fails_without_persisted_rollout_path() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
     let initial_context = sess
-        .build_initial_context(tc.as_ref(), /*explicit_plugin_instructions*/ None)
+        .build_initial_context(tc.as_ref(), /*plugin_mention_instructions*/ None)
         .await;
     sess.record_into_history(&initial_context, tc.as_ref())
         .await;
@@ -1763,7 +1763,7 @@ async fn thread_rollback_fails_when_turn_in_progress() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
     let initial_context = sess
-        .build_initial_context(tc.as_ref(), /*explicit_plugin_instructions*/ None)
+        .build_initial_context(tc.as_ref(), /*plugin_mention_instructions*/ None)
         .await;
     sess.record_into_history(&initial_context, tc.as_ref())
         .await;
@@ -1786,7 +1786,7 @@ async fn thread_rollback_fails_when_num_turns_is_zero() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
 
     let initial_context = sess
-        .build_initial_context(tc.as_ref(), /*explicit_plugin_instructions*/ None)
+        .build_initial_context(tc.as_ref(), /*plugin_mention_instructions*/ None)
         .await;
     sess.record_into_history(&initial_context, tc.as_ref())
         .await;
@@ -3723,7 +3723,7 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
         .build_settings_update_items(
             Some(&reference_context_item),
             &current_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
 
@@ -3762,7 +3762,7 @@ async fn build_settings_update_items_emits_environment_item_for_time_changes() {
         .build_settings_update_items(
             Some(&reference_context_item),
             &current_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
 
@@ -3798,7 +3798,7 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
         .build_settings_update_items(
             Some(&previous_context.to_turn_context_item()),
             &current_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
 
@@ -3827,7 +3827,7 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
         .build_settings_update_items(
             Some(&previous_context.to_turn_context_item()),
             &current_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
 
@@ -3864,7 +3864,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
         .build_settings_update_items(
             Some(&previous_context_item),
             &current_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
 
@@ -3883,7 +3883,7 @@ async fn build_initial_context_uses_previous_realtime_state() {
     turn_context.realtime_active = true;
 
     let initial_context = session
-        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
         .await;
     let developer_texts = developer_input_texts(&initial_context);
     assert!(
@@ -3899,7 +3899,7 @@ async fn build_initial_context_uses_previous_realtime_state() {
         state.set_reference_context_item(Some(previous_context_item));
     }
     let resumed_context = session
-        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
         .await;
     let resumed_developer_texts = developer_input_texts(&resumed_context);
     assert!(
@@ -3926,7 +3926,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
         .await;
 
     let initial_context = session
-        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
         .await;
     let developer_texts = developer_input_texts(&initial_context);
     assert!(
@@ -3942,7 +3942,7 @@ async fn build_initial_context_omits_default_image_save_location_without_image_h
     let (session, turn_context) = make_session_and_context().await;
 
     let initial_context = session
-        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
         .await;
     let developer_texts = developer_input_texts(&initial_context);
 
@@ -4057,7 +4057,7 @@ async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
         .set_previous_turn_settings(Some(previous_turn_settings))
         .await;
     let initial_context = session
-        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
         .await;
     let developer_texts = developer_input_texts(&initial_context);
     assert!(
@@ -4081,7 +4081,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
         .set_previous_turn_settings(Some(previous_turn_settings))
         .await;
     let initial_context = session
-        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
         .await;
     let developer_texts = developer_input_texts(&initial_context);
     assert!(
@@ -4099,12 +4099,12 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
     session
         .record_context_updates_and_set_reference_context_item(
             &turn_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
     let history = session.clone_history().await;
     let initial_context = session
-        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
         .await;
     assert_eq!(history.raw_items().to_vec(), initial_context);
 
@@ -4135,7 +4135,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
     session
         .record_context_updates_and_set_reference_context_item(
             &turn_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
     {
@@ -4149,7 +4149,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
     session
         .record_context_updates_and_set_reference_context_item(
             &turn_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
 
@@ -4157,7 +4157,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
     let mut expected_history = vec![compacted_summary];
     expected_history.extend(
         session
-            .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+            .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
             .await,
     );
     assert_eq!(history.raw_items().to_vec(), expected_history);
@@ -4206,7 +4206,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         .build_settings_update_items(
             Some(&previous_context_item),
             &turn_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
     assert_eq!(update_items, Vec::new());
@@ -4214,7 +4214,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     session
         .record_context_updates_and_set_reference_context_item(
             &turn_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
 
@@ -4261,7 +4261,7 @@ async fn build_initial_context_prepends_model_switch_message() {
         .set_previous_turn_settings(Some(previous_turn_settings))
         .await;
     let initial_context = session
-        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
         .await;
 
     let ResponseItem::Message { role, content, .. } = &initial_context[0] else {
@@ -4332,7 +4332,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
     session
         .record_context_updates_and_set_reference_context_item(
             &turn_context,
-            &ExplicitPluginInstructionsContext::default(),
+            &PluginMentionInstructionsContext::default(),
         )
         .await;
     session.ensure_rollout_materialized().await;
@@ -4948,7 +4948,7 @@ async fn sample_rollout(
     let mut initial_context = session
         .build_initial_context(
             reconstruction_turn.as_ref(),
-            /*explicit_plugin_instructions*/ None,
+            /*plugin_mention_instructions*/ None,
         )
         .await;
     // Ensure personality_spec is present when Personality is enabled, so expected matches

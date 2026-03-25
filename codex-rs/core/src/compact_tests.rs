@@ -10,7 +10,7 @@ async fn process_compacted_history_with_test_session(
         .set_previous_turn_settings(previous_turn_settings.cloned())
         .await;
     let initial_context = session
-        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
         .await;
     let refreshed = crate::compact_remote::process_compacted_history(
         &session,

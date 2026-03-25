@@ -203,7 +203,7 @@ async fn run_compact_task_inner(
         let initial_context = sess
             .build_initial_context(
                 turn_context.as_ref(),
-                /*explicit_plugin_instructions*/ None,
+                /*plugin_mention_instructions*/ None,
             )
             .await;
         new_history =

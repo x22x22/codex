@@ -23,8 +23,8 @@ fn render_plugins_section_includes_descriptions_and_skill_naming_guidance() {
 }
 
 #[test]
-fn render_explicit_plugin_instructions_wraps_turn_local_guidance_in_stable_tag() {
-    let rendered = render_explicit_plugin_instructions(
+fn render_plugin_mention_instructions_wraps_turn_local_guidance_in_stable_tag() {
+    let rendered = render_plugin_mention_instructions(
         &PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
             display_name: "sample".to_string(),

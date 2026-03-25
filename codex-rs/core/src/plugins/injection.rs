@@ -5,17 +5,17 @@ use crate::connectors;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::plugins::PluginCapabilitySummary;
-use crate::plugins::render_explicit_plugin_instructions;
+use crate::plugins::render_plugin_mention_instructions;
 
 /// Turn-local data needed to render explicit plugin-mention guidance inside the
 /// canonical pre-user developer envelope.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ExplicitPluginInstructionsContext {
-    entries: Vec<ExplicitPluginInstructionsEntry>,
+pub(crate) struct PluginMentionInstructionsContext {
+    entries: Vec<PluginMentionInstructionsEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ExplicitPluginInstructionsEntry {
+struct PluginMentionInstructionsEntry {
     plugin: PluginCapabilitySummary,
     available_mcp_servers: Vec<String>,
     available_apps: Vec<String>,
@@ -23,13 +23,13 @@ struct ExplicitPluginInstructionsEntry {
 
 /// Capture the turn-local plugin/tool/app ingredients needed to render explicit plugin guidance
 /// later in the canonical context builders, without re-listing MCP tools.
-pub(crate) fn build_explicit_plugin_instructions_context(
+pub(crate) fn build_plugin_mention_instructions_context(
     mentioned_plugins: &[PluginCapabilitySummary],
     mcp_tools: &HashMap<String, ToolInfo>,
     available_connectors: &[connectors::AppInfo],
-) -> ExplicitPluginInstructionsContext {
+) -> PluginMentionInstructionsContext {
     if mentioned_plugins.is_empty() {
-        return ExplicitPluginInstructionsContext::default();
+        return PluginMentionInstructionsContext::default();
     }
 
     let entries = mentioned_plugins
@@ -62,7 +62,7 @@ pub(crate) fn build_explicit_plugin_instructions_context(
                 .into_iter()
                 .collect::<Vec<_>>();
 
-            ExplicitPluginInstructionsEntry {
+            PluginMentionInstructionsEntry {
                 plugin: plugin.clone(),
                 available_mcp_servers,
                 available_apps,
@@ -70,23 +70,23 @@ pub(crate) fn build_explicit_plugin_instructions_context(
         })
         .collect();
 
-    ExplicitPluginInstructionsContext { entries }
+    PluginMentionInstructionsContext { entries }
 }
 
-/// Render explicit plugin-mention guidance from the already-resolved per-turn plugin context.
+/// Render plugin-mention guidance from the already-resolved per-turn plugin context.
 ///
-/// The live turn path builds `ExplicitPluginInstructionsContext` once from the current turn's
+/// The live turn path builds `PluginMentionInstructionsContext` once from the current turn's
 /// plugin/tool/app inventory, then whichever canonical context builder runs uses this renderer.
-pub(crate) fn build_plugin_developer_sections(
-    explicit_plugin_instructions: &ExplicitPluginInstructionsContext,
+pub(crate) fn build_plugin_mention_developer_sections(
+    plugin_mention_instructions: &PluginMentionInstructionsContext,
 ) -> Vec<String> {
     // Turn each explicit plugin mention into developer-message sections that
     // can be folded into the canonical pre-user developer envelope for this turn.
-    explicit_plugin_instructions
+    plugin_mention_instructions
         .entries
         .iter()
         .filter_map(|entry| {
-            render_explicit_plugin_instructions(
+            render_plugin_mention_instructions(
                 &entry.plugin,
                 &entry.available_mcp_servers,
                 &entry.available_apps,
