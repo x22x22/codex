@@ -122,6 +122,12 @@ pub(crate) async fn handle_mcp_tool_call(
     }
     let request_meta =
         build_mcp_tool_call_request_meta(turn_context.as_ref(), &server, metadata.as_ref());
+    let connector_id = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.connector_id.clone());
+    let connector_name = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.connector_name.clone());
     let server_origin = sess
         .services
         .mcp_connection_manager
@@ -163,6 +169,8 @@ pub(crate) async fn handle_mcp_tool_call(
                         arguments_value: arguments_value.clone(),
                         request_meta: request_meta.clone(),
                         server_origin: server_origin.as_deref(),
+                        connector_id: connector_id.clone(),
+                        connector_name: connector_name.clone(),
                     },
                 )
                 .await;
@@ -248,6 +256,8 @@ pub(crate) async fn handle_mcp_tool_call(
             arguments_value: arguments_value.clone(),
             request_meta,
             server_origin: server_origin.as_deref(),
+            connector_id,
+            connector_name,
         },
     )
     .await;
@@ -282,10 +292,14 @@ async fn execute_mcp_tool_call(
     let tool_call_span = crate::network_trace::mcp_tool_call_span(
         sess.as_ref(),
         turn_context.as_ref(),
-        request.server,
-        request.tool_name,
-        request.call_id,
-        request.server_origin,
+        crate::network_trace::McpToolCallTrace {
+            server_name: request.server,
+            tool_name: request.tool_name,
+            call_id: request.call_id,
+            server_origin: request.server_origin,
+            connector_id: request.connector_id.as_deref(),
+            connector_name: request.connector_name.as_deref(),
+        },
     );
     let result = async {
         sess.call_tool(
@@ -319,6 +333,8 @@ struct McpToolCallRequest<'a> {
     arguments_value: Option<serde_json::Value>,
     request_meta: Option<serde_json::Value>,
     server_origin: Option<&'a str>,
+    connector_id: Option<String>,
+    connector_name: Option<String>,
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {

@@ -96,15 +96,21 @@ pub(crate) fn responses_http_request_span(
     span
 }
 
+pub(crate) struct McpToolCallTrace<'a> {
+    pub server_name: &'a str,
+    pub tool_name: &'a str,
+    pub call_id: &'a str,
+    pub server_origin: Option<&'a str>,
+    pub connector_id: Option<&'a str>,
+    pub connector_name: Option<&'a str>,
+}
+
 pub(crate) fn mcp_tool_call_span(
     session: &Session,
     turn_context: &TurnContext,
-    server_name: &str,
-    tool_name: &str,
-    call_id: &str,
-    server_origin: Option<&str>,
+    trace: McpToolCallTrace<'_>,
 ) -> Span {
-    let transport = match server_origin {
+    let transport = match trace.server_origin {
         Some("stdio") => "stdio",
         Some(_) => "streamable_http",
         None => "",
@@ -114,11 +120,13 @@ pub(crate) fn mcp_tool_call_span(
         otel.kind = "client",
         rpc.system = "jsonrpc",
         rpc.method = "tools/call",
-        mcp.server.name = server_name,
-        mcp.server.origin = server_origin.unwrap_or(""),
+        mcp.server.name = trace.server_name,
+        mcp.server.origin = trace.server_origin.unwrap_or(""),
         mcp.transport = transport,
-        tool.name = tool_name,
-        tool.call_id = call_id,
+        mcp.connector.id = trace.connector_id.unwrap_or(""),
+        mcp.connector.name = trace.connector_name.unwrap_or(""),
+        tool.name = trace.tool_name,
+        tool.call_id = trace.call_id,
         conversation.id = Empty,
         session.id = Empty,
         turn.id = Empty,
@@ -126,6 +134,6 @@ pub(crate) fn mcp_tool_call_span(
         server.port = Empty,
     );
     CorrelationFields::from_turn_context(session, turn_context).record_on(&span);
-    record_server_fields(&span, server_origin);
+    record_server_fields(&span, trace.server_origin);
     span
 }
