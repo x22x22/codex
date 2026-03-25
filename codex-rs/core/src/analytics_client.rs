@@ -50,7 +50,7 @@ pub(crate) struct CodexThreadStartedEvent {
     pub(crate) personality: Option<Personality>,
     pub(crate) ephemeral: bool,
     pub(crate) session_source: SessionSource,
-    pub(crate) initial_history_type: InitialHistoryType,
+    pub(crate) initialization_mode: InitializationMode,
     pub(crate) subagent_source: Option<SubAgentSource>,
     pub(crate) parent_thread_id: Option<String>,
     pub(crate) created_at: u64,
@@ -75,7 +75,7 @@ pub(crate) struct CodexTurnEvent {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum InitialHistoryType {
+pub(crate) enum InitializationMode {
     New,
     Forked,
     Resumed,
@@ -434,8 +434,8 @@ struct CodexThreadStartedEventParams {
     collaboration_mode: &'static str,
     personality: Option<String>,
     ephemeral: bool,
-    session_source: String,
-    initial_history_type: InitialHistoryType,
+    session_source: Option<&'static str>,
+    initialization_mode: InitializationMode,
     subagent_source: Option<String>,
     parent_thread_id: Option<String>,
     created_at: u64,
@@ -933,7 +933,7 @@ fn codex_thread_started_event_params(
         personality: thread_event.personality.map(|value| value.to_string()),
         ephemeral: thread_event.ephemeral,
         session_source: session_source_name(&thread_event.session_source),
-        initial_history_type: thread_event.initial_history_type,
+        initialization_mode: thread_event.initialization_mode,
         subagent_source: thread_event.subagent_source.map(subagent_source_name),
         parent_thread_id: thread_event.parent_thread_id,
         created_at: thread_event.created_at,
@@ -993,15 +993,11 @@ fn collaboration_mode_mode(mode: ModeKind) -> &'static str {
     }
 }
 
-fn session_source_name(session_source: &SessionSource) -> String {
+fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
     match session_source {
-        SessionSource::Cli => "cli".to_string(),
-        SessionSource::VSCode => "vscode".to_string(),
-        SessionSource::Exec => "exec".to_string(),
-        SessionSource::Mcp => "mcp".to_string(),
-        SessionSource::Custom(source) => source.clone(),
-        SessionSource::SubAgent(_) => "subagent".to_string(),
-        SessionSource::Unknown => "unknown".to_string(),
+        SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
+        SessionSource::SubAgent(_) => Some("subagent"),
+        SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
     }
 }
 
