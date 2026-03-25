@@ -4938,7 +4938,6 @@ mod handlers {
         let config = sess.get_config().await;
         let mut skills = Vec::new();
         for cwd in cwds {
-
             let config_layer_stack = match load_config_layers_state(
                 &self.codex_home,
                 Some(cwd_abs),
@@ -4961,7 +4960,12 @@ mod handlers {
             };
             let effective_skill_roots = skills_manager.effective_skill_roots(&config_layer_stack);
             let outcome = skills_manager
-                .skills_for_cwd(&cwd, &effective_skill_roots, force_reload, &config_layer_stack)
+                .skills_for_cwd(
+                    &cwd,
+                    &effective_skill_roots,
+                    force_reload,
+                    &config_layer_stack,
+                )
                 .await;
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);

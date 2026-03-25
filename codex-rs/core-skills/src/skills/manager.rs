@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use codex_config::ConfigLayerStack;
 use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -14,7 +14,6 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
 use tracing::info;
 use tracing::warn;
-
 
 use crate::skills::SkillLoadOutcome;
 use crate::skills::build_implicit_skill_path_indexes;
@@ -103,11 +102,7 @@ impl SkillsManager {
         config_layer_stack: &ConfigLayerStack,
         bundled_skills_enabled: bool,
     ) -> Vec<SkillRoot> {
-        let mut roots = skill_roots(
-            &config_layer_stack,
-            &cwd,
-            effective_skill_roots.to_vec(),
-        );
+        let mut roots = skill_roots(&config_layer_stack, &cwd, effective_skill_roots.to_vec());
         if !bundled_skills_enabled {
             roots.retain(|root| root.scope != SkillScope::System);
         }
@@ -117,7 +112,7 @@ impl SkillsManager {
     pub async fn skills_for_cwd(
         &self,
         cwd: &Path,
-        config: &Config,
+        effective_skill_roots: &[PathBuf],
         force_reload: bool,
         config_layer_stack: &ConfigLayerStack,
     ) -> SkillLoadOutcome {
@@ -125,8 +120,14 @@ impl SkillsManager {
             return outcome;
         }
 
-        self.skills_for_cwd_with_extra_user_roots(cwd, effective_skill_roots, force_reload, &[], config_layer_stack)
-            .await
+        self.skills_for_cwd_with_extra_user_roots(
+            cwd,
+            effective_skill_roots,
+            force_reload,
+            &[],
+            config_layer_stack,
+        )
+        .await
     }
 
     pub async fn skills_for_cwd_with_extra_user_roots(
@@ -157,11 +158,7 @@ impl SkillsManager {
 
         let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
 
-        let mut roots = skill_roots(
-            &config_layer_stack,
-            cwd,
-            effective_skill_roots.to_vec(),
-        );
+        let mut roots = skill_roots(&config_layer_stack, cwd, effective_skill_roots.to_vec());
         if !bundled_skills_enabled_from_stack(&config_layer_stack) {
             roots.retain(|root| root.scope != SkillScope::System);
         }

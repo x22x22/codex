@@ -507,7 +507,17 @@ impl CoreShellActionProvider {
             }
         };
         let effective_skill_roots = skills_manager.effective_skill_roots(&config_layer_stack);
-        let skills_outcome = self.session.services.skills_manager.skills_for_cwd(&self.turn.cwd, &effective_skill_roots, force_reload, &config_layer_stack).await;
+        let skills_outcome = self
+            .session
+            .services
+            .skills_manager
+            .skills_for_cwd(
+                &self.turn.cwd,
+                &effective_skill_roots,
+                force_reload,
+                &config_layer_stack,
+            )
+            .await;
 
         let program_path = program.as_path();
         for skill in skills_outcome.skills {
