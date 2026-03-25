@@ -47,6 +47,7 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
+use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillSummary;
 use codex_app_server_protocol::ThreadClosedNotification;
@@ -2045,6 +2046,7 @@ async fn make_chatwidget_manual(
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         last_copyable_output: None,
         running_commands: HashMap::new(),
+        collab_agent_metadata: HashMap::new(),
         pending_collab_spawn_requests: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -4676,6 +4678,16 @@ async fn live_app_server_collab_wait_items_render_history() {
         ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cc").expect("valid thread id");
     let other_receiver_thread_id =
         ThreadId::from_string("019cff70-2599-75e2-af72-b96db334332d").expect("valid thread id");
+    chat.set_collab_agent_metadata(
+        receiver_thread_id,
+        Some("Robie".to_string()),
+        Some("explorer".to_string()),
+    );
+    chat.set_collab_agent_metadata(
+        other_receiver_thread_id,
+        Some("Ada".to_string()),
+        Some("reviewer".to_string()),
+    );
 
     chat.handle_server_notification(
         ServerNotification::ItemStarted(ItemStartedNotification {
@@ -5133,6 +5145,56 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         other => panic!("expected InsertHistoryCell, got {other:?}"),
     };
     assert!(rendered.contains("Raw reasoning"));
+}
+
+#[tokio::test]
+async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+            },
+        }),
+        None,
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "reasoning-1".to_string(),
+            delta: "Summary only".to_string(),
+            summary_index: 0,
+        }),
+        None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec!["Summary only".to_string()],
+                content: Vec::new(),
+            },
+        }),
+        None,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => lines_to_single_string(&cell.transcript_lines(80)),
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert_eq!(rendered.matches("Summary only").count(), 1);
 }
 
 #[test]
