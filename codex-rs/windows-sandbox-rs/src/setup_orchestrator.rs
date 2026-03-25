@@ -50,6 +50,7 @@ const USERPROFILE_READ_ROOT_EXCLUSIONS: &[&str] = &[
     ".npm",
     ".pki",
     ".terraform.d",
+    "AppData",
 ];
 const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\Windows",
@@ -700,11 +701,13 @@ mod tests {
         let allowed_file = user_profile.join(".gitconfig");
         let excluded_dir = user_profile.join(".ssh");
         let excluded_case_variant = user_profile.join(".AWS");
+        let excluded_appdata = user_profile.join("AppData");
 
         fs::create_dir_all(&allowed_dir).expect("create allowed dir");
         fs::write(&allowed_file, "safe").expect("create allowed file");
         fs::create_dir_all(&excluded_dir).expect("create excluded dir");
         fs::create_dir_all(&excluded_case_variant).expect("create excluded case variant");
+        fs::create_dir_all(excluded_appdata.join("Local")).expect("create excluded appdata");
 
         let roots = profile_read_roots(user_profile);
         let actual: HashSet<PathBuf> = roots.into_iter().collect();
