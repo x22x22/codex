@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Base64
 import android.util.Log
 import android.view.View
 import android.widget.Button
@@ -26,6 +27,7 @@ class MainActivity : Activity() {
         private const val ACTION_DEBUG_CANCEL_ALL_AGENT_SESSIONS =
             "com.openai.codex.agent.action.DEBUG_CANCEL_ALL_AGENT_SESSIONS"
         private const val EXTRA_DEBUG_PROMPT = "prompt"
+        private const val EXTRA_DEBUG_PROMPT_BASE64 = "promptBase64"
         private const val EXTRA_DEBUG_TARGET_PACKAGE = "targetPackage"
         private const val EXTRA_DEBUG_FINAL_PRESENTATION_POLICY = "finalPresentationPolicy"
     }
@@ -179,7 +181,7 @@ class MainActivity : Activity() {
             }
 
             ACTION_DEBUG_START_AGENT_SESSION -> {
-                val prompt = intent.getStringExtra(EXTRA_DEBUG_PROMPT)?.trim().orEmpty()
+                val prompt = extractDebugPrompt(intent)
                 if (prompt.isEmpty()) {
                     intent.action = null
                     return
@@ -196,6 +198,22 @@ class MainActivity : Activity() {
                 intent.action = null
             }
         }
+    }
+
+    private fun extractDebugPrompt(intent: Intent): String {
+        intent.getStringExtra(EXTRA_DEBUG_PROMPT_BASE64)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let { encoded ->
+                runCatching {
+                    String(Base64.decode(encoded, Base64.DEFAULT), Charsets.UTF_8).trim()
+                }.onFailure { err ->
+                    Log.w(TAG, "Failed to decode debug promptBase64", err)
+                }.getOrNull()
+                    ?.takeIf(String::isNotEmpty)
+                    ?.let { return it }
+            }
+        return intent.getStringExtra(EXTRA_DEBUG_PROMPT)?.trim().orEmpty()
     }
 
     private fun startDebugSession(
