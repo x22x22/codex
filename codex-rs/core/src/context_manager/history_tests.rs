@@ -961,7 +961,7 @@ fn drop_last_n_user_turns_trims_explicit_plugin_guidance_above_rolled_back_turn(
         user_input_text_msg("turn 1 user"),
         assistant_msg("turn 1 assistant"),
         developer_msg(
-            "<explicit_plugin_instructions>\nCapabilities from the `sample` plugin:\n- Apps from this plugin available in this session: `Google Calendar`.\nUse these plugin-associated capabilities to help solve the task.\n</explicit_plugin_instructions>",
+            "<plugin_mention_instructions>\nCapabilities from the `sample` plugin:\n- Apps from this plugin available in this session: `Google Calendar`.\nUse these plugin-associated capabilities to help solve the task.\n</plugin_mention_instructions>",
         ),
         user_input_text_msg(
             "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",

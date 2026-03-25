@@ -36,7 +36,7 @@ fn render_explicit_plugin_instructions_wraps_turn_local_guidance_in_stable_tag()
     )
     .expect("explicit plugin instructions should render");
 
-    let expected = "<explicit_plugin_instructions>\nCapabilities from the `sample` plugin:\n- Skills from this plugin are prefixed with `sample:`.\n- Apps from this plugin available in this session: `Google Calendar`.\nUse these plugin-associated capabilities to help solve the task.\n</explicit_plugin_instructions>";
+    let expected = "<plugin_mention_instructions>\nCapabilities from the `sample` plugin:\n- Skills from this plugin are prefixed with `sample:`.\n- Apps from this plugin available in this session: `Google Calendar`.\nUse these plugin-associated capabilities to help solve the task.\n</plugin_mention_instructions>";
 
     assert_eq!(rendered, expected);
 }
