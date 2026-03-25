@@ -169,72 +169,42 @@ async fn run_guardian_review(
         Err(err) => GuardianReviewOutcome::Completed(Err(err.into())),
     };
 
-    let (assessment, status, decision, warning, risk_score, risk_level) = match outcome {
-        GuardianReviewOutcome::Completed(Ok(assessment)) => {
-            let (status, decision, verdict) =
-                if assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD {
-                    (
-                        GuardianAssessmentStatus::Approved,
-                        GuardianApprovalDecision::Approved,
-                        "approved",
-                    )
-                } else {
-                    (
-                        GuardianAssessmentStatus::Denied,
-                        GuardianApprovalDecision::Denied,
-                        "denied",
-                    )
-                };
-            let warning = format!(
-                "Automatic approval review {verdict} (risk: {}): {}",
-                guardian_risk_level_str(assessment.risk_level),
-                assessment.rationale
-            );
-            let risk_score = Some(assessment.risk_score);
-            let risk_level = Some(assessment.risk_level);
-            (
-                assessment, status, decision, warning, risk_score, risk_level,
-            )
-        }
-        GuardianReviewOutcome::Completed(Err(err)) => {
-            let assessment = GuardianAssessment {
-                risk_level: GuardianRiskLevel::High,
-                risk_score: 100,
-                rationale: format!("Automatic approval review failed: {err}"),
-                evidence: vec![],
-            };
-            let risk_score = Some(assessment.risk_score);
-            let risk_level = Some(assessment.risk_level);
-            let warning = format!(
-                "Automatic approval review denied (risk: {}): {}",
-                guardian_risk_level_str(assessment.risk_level),
-                assessment.rationale
-            );
-            (
-                assessment,
-                GuardianAssessmentStatus::Denied,
-                GuardianApprovalDecision::Denied,
-                warning,
-                risk_score,
-                risk_level,
-            )
-        }
+    let (risk_level, risk_score, rationale) = match outcome {
+        GuardianReviewOutcome::Completed(Ok(assessment)) => (
+            assessment.risk_level,
+            assessment.risk_score,
+            assessment.rationale,
+        ),
+        GuardianReviewOutcome::Completed(Err(err)) => (
+            GuardianRiskLevel::High,
+            100,
+            format!("Automatic approval review failed: {err}"),
+        ),
         GuardianReviewOutcome::TimedOut => {
-            let assessment = GuardianAssessment {
-                risk_level: GuardianRiskLevel::High,
-                risk_score: 100,
-                rationale: GUARDIAN_TIMEOUT_MESSAGE.to_string(),
-                evidence: vec![],
-            };
-            let warning = assessment.rationale.clone();
-            (
-                assessment,
-                GuardianAssessmentStatus::TimedOut,
-                GuardianApprovalDecision::TimedOut,
-                warning,
-                None,
-                None,
-            )
+            let warning_event_message = GUARDIAN_TIMEOUT_MESSAGE.to_string();
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::Warning(WarningEvent {
+                        message: warning_event_message.clone(),
+                    }),
+                )
+                .await;
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                        id: assessment_id,
+                        turn_id: assessment_turn_id,
+                        status: GuardianAssessmentStatus::TimedOut,
+                        risk_score: None,
+                        risk_level: None,
+                        rationale: Some(warning_event_message),
+                        action: Some(terminal_action),
+                    }),
+                )
+                .await;
+            return GuardianApprovalDecision::TimedOut;
         }
         GuardianReviewOutcome::Aborted => {
             session
@@ -255,10 +225,19 @@ async fn run_guardian_review(
         }
     };
 
+    let approved = risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD;
+    let verdict = if approved { "approved" } else { "denied" };
+    let warning_event_message = format!(
+        "Automatic approval review {verdict} (risk: {}): {rationale}",
+        guardian_risk_level_str(risk_level),
+    );
+
     session
         .send_event(
             turn.as_ref(),
-            EventMsg::Warning(WarningEvent { message: warning }),
+            EventMsg::Warning(WarningEvent {
+                message: warning_event_message,
+            }),
         )
         .await;
     session
@@ -267,16 +246,24 @@ async fn run_guardian_review(
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id,
                 turn_id: assessment_turn_id,
-                status,
-                risk_score,
-                risk_level,
-                rationale: Some(assessment.rationale.clone()),
+                status: if approved {
+                    GuardianAssessmentStatus::Approved
+                } else {
+                    GuardianAssessmentStatus::Denied
+                },
+                risk_score: Some(risk_score),
+                risk_level: Some(risk_level),
+                rationale: Some(rationale),
                 action: Some(terminal_action),
             }),
         )
         .await;
 
-    decision
+    if approved {
+        GuardianApprovalDecision::Approved
+    } else {
+        GuardianApprovalDecision::Denied
+    }
 }
 
 /// Public entrypoint for approval requests that should be reviewed by guardian.
