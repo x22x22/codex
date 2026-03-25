@@ -4416,8 +4416,14 @@ impl App {
         // This guard is only for intentional thread-switch shutdowns.
         // App-exit shutdowns are tracked by `pending_shutdown_exit_thread_id`
         // and resolved in `handle_active_thread_event`.
+        //
+        // For primary-thread swaps such as `/fork` and `/resume`, the old
+        // thread's `ShutdownComplete` can arrive after we've already replaced
+        // the chat widget. Those events do not carry a source thread id, so the
+        // thread id stored in this guard is advisory only; once armed, consume
+        // the next shutdown completion unconditionally.
         if matches!(event.msg, EventMsg::ShutdownComplete)
-            && self.suppress_shutdown_complete_thread_id == self.current_displayed_thread_id()
+            && self.suppress_shutdown_complete_thread_id.is_some()
         {
             self.suppress_shutdown_complete_thread_id = None;
             return;
@@ -5715,6 +5721,72 @@ mod tests {
             app.chat_widget.last_terminal_title,
             Some("codex".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn suppressed_shutdown_complete_after_replacing_chat_widget_does_not_exit() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let old_thread_id = ThreadId::new();
+        let new_thread_id = ThreadId::new();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "old-session".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: old_thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.suppress_shutdown_complete_thread_id = Some(old_thread_id);
+
+        let (mut replacement, _app_event_tx, _rx, _new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        replacement.handle_codex_event(Event {
+            id: "new-session".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: new_thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+        app.replace_chat_widget(replacement);
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_codex_event_now(Event {
+            id: "shutdown".to_string(),
+            msg: EventMsg::ShutdownComplete,
+        });
+
+        assert_eq!(app.suppress_shutdown_complete_thread_id, None);
+        assert!(app_event_rx.try_recv().is_err());
     }
 
     #[tokio::test]
