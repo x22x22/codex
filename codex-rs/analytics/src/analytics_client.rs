@@ -62,6 +62,24 @@ pub struct CodexThreadInitializedEvent {
     pub created_at: u64,
 }
 
+#[derive(Clone)]
+pub struct CodexThreadInitializedInput {
+    pub thread_id: String,
+    pub model: String,
+    pub product_client_id: String,
+    pub created_at: u64,
+    pub thread_context: CodexThreadContext,
+}
+
+#[derive(Clone)]
+pub struct CodexThreadContext {
+    pub ephemeral: bool,
+    pub session_source: SessionSource,
+    pub initialization_mode: InitializationMode,
+    pub subagent_source: Option<SubAgentSource>,
+    pub parent_thread_id: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InitializationMode {
@@ -104,7 +122,7 @@ pub struct AppInvocation {
 }
 
 pub enum AnalyticsInput {
-    ThreadInitialized(ThreadInitializedInput),
+    ThreadInitialized(CodexThreadInitializedInput),
     TurnEvent(TurnEventInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
@@ -113,15 +131,10 @@ pub enum AnalyticsInput {
     PluginStateChanged(PluginStateChangedInput),
 }
 
-pub struct ThreadInitializedInput {
-    pub thread_event: CodexThreadInitializedEvent,
-}
-
 pub struct TurnEventInput {
     pub tracking: TrackEventsContext,
     pub turn_event: CodexTurnEvent,
 }
-
 pub struct SkillInvokedInput {
     pub tracking: TrackEventsContext,
     pub invocations: Vec<SkillInvocation>,
@@ -258,10 +271,8 @@ impl AnalyticsEventsClient {
         }));
     }
 
-    pub fn track_thread_initialized(&self, thread_event: CodexThreadInitializedEvent) {
-        self.record(AnalyticsInput::ThreadInitialized(ThreadInitializedInput {
-            thread_event,
-        }));
+    pub fn track_thread_initialized(&self, input: CodexThreadInitializedInput) {
+        self.record(AnalyticsInput::ThreadInitialized(input));
     }
 
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
@@ -513,20 +524,29 @@ impl AnalyticsReducer {
 
     fn ingest_thread_initialized(
         &mut self,
-        input: ThreadInitializedInput,
+        input: CodexThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
+        let product_client_id = input.product_client_id.clone();
+        let event = CodexThreadInitializedEvent {
+            thread_id: input.thread_id,
+            model: input.model,
+            ephemeral: input.thread_context.ephemeral,
+            session_source: input.thread_context.session_source,
+            initialization_mode: input.thread_context.initialization_mode,
+            subagent_source: input.thread_context.subagent_source,
+            parent_thread_id: input.thread_context.parent_thread_id,
+            created_at: input.created_at,
+        };
         self.threads.insert(
-            input.thread_event.thread_id.clone(),
+            event.thread_id.clone(),
             ThreadState {
-                _initialized_event: input.thread_event.clone(),
+                _initialized_event: event.clone(),
+>>>>>>> origin/rhan/oob-thread-metadata
             },
         );
         out.push(TrackEventRequest::ThreadInitialized(
-            CodexThreadInitializedEventRequest {
-                event_type: "codex_thread_initialized",
-                event_params: codex_thread_initialized_event_params(input.thread_event),
-            },
+            codex_thread_initialized_event_request(product_client_id, event),
         ));
     }
 
@@ -588,7 +608,6 @@ impl AnalyticsReducer {
             ));
         }
     }
-
     fn ingest_app_mentioned(&mut self, input: AppMentionedInput, out: &mut Vec<TrackEventRequest>) {
         let AppMentionedInput { tracking, mentions } = input;
         out.extend(mentions.into_iter().map(|mention| {
@@ -713,13 +732,32 @@ fn personality_mode(personality: Option<Personality>) -> Option<String> {
         Some(personality) => Some(personality.to_string()),
     }
 }
-
 fn codex_thread_initialized_event_params(
+    thread_event: CodexThreadInitializedEvent,
+) -> CodexThreadInitializedEventParams {
+    codex_thread_initialized_event_params_with_product_client_id(originator().value, thread_event)
+}
+
+fn codex_thread_initialized_event_request(
+    product_client_id: String,
+    thread_event: CodexThreadInitializedEvent,
+) -> CodexThreadInitializedEventRequest {
+    CodexThreadInitializedEventRequest {
+        event_type: "codex_thread_initialized",
+        event_params: codex_thread_initialized_event_params_with_product_client_id(
+            product_client_id,
+            thread_event,
+        ),
+    }
+}
+
+fn codex_thread_initialized_event_params_with_product_client_id(
+    product_client_id: String,
     thread_event: CodexThreadInitializedEvent,
 ) -> CodexThreadInitializedEventParams {
     CodexThreadInitializedEventParams {
         thread_id: thread_event.thread_id,
-        product_client_id: originator().value,
+        product_client_id,
         model: thread_event.model,
         ephemeral: thread_event.ephemeral,
         session_source: session_source_name(&thread_event.session_source),
