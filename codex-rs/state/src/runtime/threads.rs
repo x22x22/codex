@@ -27,7 +27,8 @@ SELECT
     archived_at,
     git_sha,
     git_branch,
-    git_origin_url
+    git_origin_url,
+    metadata_json
 FROM threads
 WHERE id = ?
             "#,
@@ -364,7 +365,8 @@ SELECT
     archived_at,
     git_sha,
     git_branch,
-    git_origin_url
+    git_origin_url,
+    metadata_json
 FROM threads
             "#,
         );
@@ -467,8 +469,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    metadata_json,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -500,6 +503,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(metadata.metadata_json.as_str())
         .bind("enabled")
         .execute(self.pool.as_ref())
         .await?;
@@ -563,6 +567,19 @@ WHERE id = ?
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn update_thread_metadata_json(
+        &self,
+        thread_id: ThreadId,
+        metadata_json: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query("UPDATE threads SET metadata_json = ? WHERE id = ?")
+            .bind(metadata_json)
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn upsert_thread_with_creation_memory_mode(
         &self,
         metadata: &crate::ThreadMetadata,
@@ -594,8 +611,9 @@ INSERT INTO threads (
     git_sha,
     git_branch,
     git_origin_url,
+    metadata_json,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -618,7 +636,8 @@ ON CONFLICT(id) DO UPDATE SET
     archived_at = excluded.archived_at,
     git_sha = excluded.git_sha,
     git_branch = excluded.git_branch,
-    git_origin_url = excluded.git_origin_url
+    git_origin_url = excluded.git_origin_url,
+    metadata_json = excluded.metadata_json
             "#,
         )
         .bind(metadata.id.to_string())
@@ -649,6 +668,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
+        .bind(metadata.metadata_json.as_str())
         .bind(creation_memory_mode.unwrap_or("enabled"))
         .execute(self.pool.as_ref())
         .await?;

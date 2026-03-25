@@ -2574,6 +2574,7 @@ mod tests {
             agent_role: None,
             git_info: None,
             name: Some(String::from("Named thread")),
+            metadata: std::collections::BTreeMap::new(),
             turns: Vec::new(),
         };
 
