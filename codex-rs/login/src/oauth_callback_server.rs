@@ -24,6 +24,15 @@ use tiny_http::StatusCode;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 
+/// Strategy for handling a callback port that is already in use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PortConflictStrategy {
+    /// Attempt to cancel a previous callback server on the same port and retry.
+    CancelPrevious,
+    /// Return an error immediately without sending any request to the occupied port.
+    Fail,
+}
+
 /// Handle used to signal the callback server loop to exit.
 #[derive(Clone, Debug)]
 pub struct ShutdownHandle {
@@ -84,6 +93,7 @@ impl AuthorizationCodeServer {
 
 pub(crate) fn start_authorization_code_server<F>(
     port: u16,
+    port_conflict_strategy: PortConflictStrategy,
     callback_path: &str,
     force_state: Option<String>,
     auth_url_builder: F,
@@ -95,7 +105,7 @@ where
     let state = force_state.unwrap_or_else(generate_state);
     let callback_path = callback_path.to_string();
 
-    let (server, actual_port, rx) = bind_server_with_request_channel(port)?;
+    let (server, actual_port, rx) = bind_server_with_request_channel(port, port_conflict_strategy)?;
     let redirect_uri = format!("http://localhost:{actual_port}{callback_path}");
     let auth_url = match auth_url_builder(&redirect_uri, &pkce, &state) {
         Ok(auth_url) => auth_url,
@@ -139,8 +149,9 @@ pub(crate) enum HandledRequest<T> {
 
 pub(crate) fn bind_server_with_request_channel(
     port: u16,
+    port_conflict_strategy: PortConflictStrategy,
 ) -> io::Result<(Arc<Server>, u16, tokio::sync::mpsc::Receiver<Request>)> {
-    let server = bind_server(port)?;
+    let server = bind_server(port, port_conflict_strategy)?;
     let actual_port = match server.server_addr().to_ip() {
         Some(addr) => addr.port(),
         None => {
@@ -311,7 +322,7 @@ fn send_cancel_request(port: u16) -> io::Result<()> {
     Ok(())
 }
 
-fn bind_server(port: u16) -> io::Result<Server> {
+fn bind_server(port: u16, port_conflict_strategy: PortConflictStrategy) -> io::Result<Server> {
     let bind_address = format!("127.0.0.1:{port}");
     let mut cancel_attempted = false;
     let mut attempts = 0;
@@ -331,6 +342,13 @@ fn bind_server(port: u16) -> io::Result<Server> {
                 // If the address is in use, there is probably another instance of the callback
                 // server running. Attempt to cancel it and retry.
                 if is_addr_in_use {
+                    if port_conflict_strategy == PortConflictStrategy::Fail {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AddrInUse,
+                            format!("Port {bind_address} is already in use"),
+                        ));
+                    }
+
                     if !cancel_attempted {
                         cancel_attempted = true;
                         if let Err(cancel_err) = send_cancel_request(port) {
@@ -453,6 +471,20 @@ fn authorization_code_error_message(error_code: &str, error_description: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bind_server_fails_without_canceling_when_port_conflict_strategy_is_fail() {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral test listener");
+        let port = listener.local_addr().expect("read local addr").port();
+
+        let error = match bind_server(port, PortConflictStrategy::Fail) {
+            Ok(_) => panic!("expected occupied port to fail immediately"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+    }
 
     #[test]
     fn process_authorization_code_request_keeps_server_running_on_state_mismatch() {

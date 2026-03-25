@@ -36,6 +36,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::oauth_callback_server::HandledRequest;
+use crate::oauth_callback_server::PortConflictStrategy;
 use crate::oauth_callback_server::ShutdownHandle;
 use crate::oauth_callback_server::bind_server_with_request_channel;
 use crate::oauth_callback_server::generate_state;
@@ -110,7 +111,8 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
-    let (server, actual_port, rx) = bind_server_with_request_channel(opts.port)?;
+    let (server, actual_port, rx) =
+        bind_server_with_request_channel(opts.port, PortConflictStrategy::CancelPrevious)?;
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
     let auth_url = build_authorize_url(
         &opts.issuer,

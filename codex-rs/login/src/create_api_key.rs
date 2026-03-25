@@ -9,6 +9,7 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::oauth_callback_server::AuthorizationCodeServer;
+use crate::oauth_callback_server::PortConflictStrategy;
 use crate::oauth_callback_server::start_authorization_code_server;
 use crate::pkce::PkceCodes;
 
@@ -16,7 +17,9 @@ const AUTH_ISSUER: &str = "https://auth.openai.com";
 const PLATFORM_HYDRA_CLIENT_ID: &str = "app_2SKx67EdpoN0G6j64rFvigXD";
 const PLATFORM_AUDIENCE: &str = "https://api.openai.com/v1";
 const API_BASE: &str = "https://api.openai.com";
-const CALLBACK_PORT: u16 = 0;
+// This client is registered with Hydra for http://localhost:5000/auth/callback,
+// so the browser redirect must stay on port 5000.
+const CALLBACK_PORT: u16 = 5000;
 const CALLBACK_PATH: &str = "/auth/callback";
 const SCOPE: &str = "openid email profile offline_access";
 const APP: &str = "api";
@@ -104,6 +107,7 @@ pub fn start_create_api_key() -> Result<PendingCreateApiKey, CreateApiKeyError> 
     let client = build_http_client()?;
     let callback_server = start_authorization_code_server(
         options.callback_port,
+        PortConflictStrategy::Fail,
         CALLBACK_PATH,
         /*force_state*/ None,
         |redirect_uri, pkce, state| {
