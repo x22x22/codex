@@ -1926,6 +1926,7 @@ dependencies = [
  "codex-utils-image",
  "codex-utils-output-truncation",
  "codex-utils-path",
+ "codex-utils-plugins",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-stream-parser",
@@ -2004,10 +2005,10 @@ dependencies = [
  "codex-instructions",
  "codex-login",
  "codex-otel",
- "codex-plugin",
  "codex-protocol",
  "codex-skills",
  "codex-utils-absolute-path",
+ "codex-utils-plugins",
  "dirs",
  "dunce",
  "pretty_assertions",
@@ -2449,9 +2450,9 @@ name = "codex-plugin"
 version = "0.0.0"
 dependencies = [
  "codex-utils-absolute-path",
+ "codex-utils-plugins",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -3006,6 +3007,15 @@ dependencies = [
  "codex-utils-absolute-path",
  "dunce",
  "pretty_assertions",
+ "tempfile",
+]
+
+[[package]]
+name = "codex-utils-plugins"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

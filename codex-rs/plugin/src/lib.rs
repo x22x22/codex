@@ -1,10 +1,11 @@
 //! Shared plugin identifiers and telemetry-facing summaries.
 
-pub mod mention_syntax;
+pub use codex_utils_plugins::mention_syntax;
+pub use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
+pub use codex_utils_plugins::plugin_namespace_for_skill_path;
 
 mod load_outcome;
 mod plugin_id;
-mod plugin_namespace;
 
 pub use load_outcome::EffectiveSkillRoots;
 pub use load_outcome::LoadedPlugin;
@@ -13,8 +14,6 @@ pub use load_outcome::prompt_safe_plugin_description;
 pub use plugin_id::PluginId;
 pub use plugin_id::PluginIdError;
 pub use plugin_id::validate_plugin_segment;
-pub use plugin_namespace::PLUGIN_MANIFEST_PATH;
-pub use plugin_namespace::plugin_namespace_for_skill_path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AppConnectorId(pub String);

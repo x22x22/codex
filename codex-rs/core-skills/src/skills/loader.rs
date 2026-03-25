@@ -13,7 +13,7 @@ use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
-use codex_plugin::plugin_namespace_for_skill_path;
+use codex_utils_plugins::plugin_namespace_for_skill_path;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::NetworkPermissions;

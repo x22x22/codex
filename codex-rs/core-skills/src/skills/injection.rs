@@ -10,7 +10,7 @@ use codex_analytics::SkillInvocation;
 use codex_analytics::TrackEventsContext;
 use codex_instructions::SkillInstructions;
 use codex_otel::SessionTelemetry;
-use codex_plugin::mention_syntax::TOOL_MENTION_SIGIL;
+use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use tokio::fs;

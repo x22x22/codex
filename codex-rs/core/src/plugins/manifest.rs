@@ -1,4 +1,4 @@
-use codex_plugin::PLUGIN_MANIFEST_PATH;
+use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
