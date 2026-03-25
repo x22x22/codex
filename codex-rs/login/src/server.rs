@@ -11,6 +11,7 @@
 //! This module therefore keeps the user-facing error path and the structured-log path separate.
 //! Returned `io::Error` values still carry the detail needed by CLI/browser callers, while
 //! structured logs only emit explicitly reviewed fields plus redacted URL/error values.
+use std::future::Future;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -125,22 +126,6 @@ impl AuthorizationCodeServer {
         webbrowser::open(&self.auth_url).is_ok()
     }
 
-    pub fn open_browser_or_print(&self) -> bool {
-        let opened = self.open_browser();
-        if opened {
-            eprintln!(
-                "Starting local auth callback server.\nIf your browser did not open, navigate to this URL to continue:\n\n{}",
-                self.auth_url
-            );
-        } else {
-            eprintln!(
-                "Starting local auth callback server.\nOpen this URL in your browser to continue:\n\n{}",
-                self.auth_url
-            );
-        }
-        opened
-    }
-
     pub fn code_verifier(&self) -> &str {
         &self.code_verifier
     }
@@ -197,67 +182,19 @@ where
     let state = force_state.unwrap_or_else(generate_state);
     let callback_path = callback_path.to_string();
 
-    let server = bind_server(port)?;
-    let actual_port = match server.server_addr().to_ip() {
-        Some(addr) => addr.port(),
-        None => {
-            return Err(io::Error::new(
-                io::ErrorKind::AddrInUse,
-                "Unable to determine the server port",
-            ));
-        }
-    };
-    let server = Arc::new(server);
-
+    let (server, actual_port, rx) = bind_server_with_request_channel(port)?;
     let redirect_uri = format!("http://localhost:{actual_port}{callback_path}");
     let auth_url = auth_url_builder(&redirect_uri, &pkce, &state)?;
-
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Request>(16);
-    let _server_handle = {
-        let server = server.clone();
-        thread::spawn(move || -> io::Result<()> {
-            while let Ok(request) = server.recv() {
-                match tx.blocking_send(request) {
-                    Ok(()) => {}
-                    Err(error) => {
-                        eprintln!("Failed to send request to channel: {error}");
-                        return Err(io::Error::other("Failed to send request to channel"));
-                    }
-                }
-            }
-            Ok(())
-        })
-    };
-
-    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
-    let server_handle = {
-        let shutdown_notify = shutdown_notify.clone();
-        tokio::spawn(async move {
-            let result = loop {
-                tokio::select! {
-                    _ = shutdown_notify.notified() => {
-                        break Err(io::Error::other("Authentication was not completed"));
-                    }
-                    maybe_req = rx.recv() => {
-                        let Some(req) = maybe_req else {
-                            break Err(io::Error::other("Authentication was not completed"));
-                        };
-
-                        let url_raw = req.url().to_string();
-                        let response =
-                            process_authorization_code_request(&url_raw, &callback_path, &state);
-
-                        if let Some(result) = respond_to_request(req, response).await {
-                            break result;
-                        }
-                    }
-                }
-            };
-
-            server.unblock();
-            result
-        })
-    };
+    let (server_handle, shutdown_handle) = spawn_callback_server_loop(
+        server,
+        rx,
+        "Authentication was not completed",
+        move |url_raw| {
+            let callback_path = callback_path.clone();
+            let state = state.clone();
+            async move { process_authorization_code_request(&url_raw, &callback_path, &state) }
+        },
+    );
 
     Ok(AuthorizationCodeServer {
         auth_url,
@@ -265,7 +202,7 @@ where
         redirect_uri,
         code_verifier: pkce.code_verifier,
         server_handle,
-        shutdown_handle: ShutdownHandle { shutdown_notify },
+        shutdown_handle,
     })
 }
 
@@ -274,18 +211,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
-    let server = bind_server(opts.port)?;
-    let actual_port = match server.server_addr().to_ip() {
-        Some(addr) => addr.port(),
-        None => {
-            return Err(io::Error::new(
-                io::ErrorKind::AddrInUse,
-                "Unable to determine the server port",
-            ));
-        }
-    };
-    let server = Arc::new(server);
-
+    let (server, actual_port, rx) = bind_server_with_request_channel(opts.port)?;
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
     let auth_url = build_authorize_url(
         &opts.issuer,
@@ -299,63 +225,22 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
     }
-
-    // Map blocking reads from server.recv() to an async channel.
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Request>(16);
-    let _server_handle = {
-        let server = server.clone();
-        thread::spawn(move || -> io::Result<()> {
-            while let Ok(request) = server.recv() {
-                match tx.blocking_send(request) {
-                    Ok(()) => {}
-                    Err(error) => {
-                        eprintln!("Failed to send request to channel: {error}");
-                        return Err(io::Error::other("Failed to send request to channel"));
-                    }
-                }
+    let (server_handle, shutdown_handle) =
+        spawn_callback_server_loop(server, rx, "Login was not completed", move |url_raw| {
+            let redirect_uri = redirect_uri.clone();
+            let state = state.clone();
+            let opts = opts.clone();
+            let pkce = pkce.clone();
+            async move {
+                process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await
             }
-            Ok(())
-        })
-    };
-
-    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
-    let server_handle = {
-        let shutdown_notify = shutdown_notify.clone();
-        let server = server;
-        tokio::spawn(async move {
-            let result = loop {
-                tokio::select! {
-                    _ = shutdown_notify.notified() => {
-                        break Err(io::Error::other("Login was not completed"));
-                    }
-                    maybe_req = rx.recv() => {
-                        let Some(req) = maybe_req else {
-                            break Err(io::Error::other("Login was not completed"));
-                        };
-
-                        let url_raw = req.url().to_string();
-                        let response =
-                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
-
-                        if let Some(result) = respond_to_request(req, response).await {
-                            break result;
-                        }
-                    }
-                }
-            };
-
-            // Ensure that the server is unblocked so the thread dedicated to
-            // running `server.recv()` in a loop exits cleanly.
-            server.unblock();
-            result
-        })
-    };
+        });
 
     Ok(LoginServer {
         auth_url,
         actual_port,
         server_handle,
-        shutdown_handle: ShutdownHandle { shutdown_notify },
+        shutdown_handle,
     })
 }
 
@@ -624,6 +509,87 @@ fn html_headers() -> Vec<Header> {
         Ok(header) => vec![header],
         Err(_) => Vec::new(),
     }
+}
+
+fn bind_server_with_request_channel(
+    port: u16,
+) -> io::Result<(Arc<Server>, u16, tokio::sync::mpsc::Receiver<Request>)> {
+    let server = bind_server(port)?;
+    let actual_port = match server.server_addr().to_ip() {
+        Some(addr) => addr.port(),
+        None => {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "Unable to determine the server port",
+            ));
+        }
+    };
+    let server = Arc::new(server);
+
+    // Map blocking reads from server.recv() to an async channel.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Request>(16);
+    let _server_handle = {
+        let server = server.clone();
+        thread::spawn(move || -> io::Result<()> {
+            while let Ok(request) = server.recv() {
+                match tx.blocking_send(request) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        eprintln!("Failed to send request to channel: {error}");
+                        return Err(io::Error::other("Failed to send request to channel"));
+                    }
+                }
+            }
+            Ok(())
+        })
+    };
+
+    Ok((server, actual_port, rx))
+}
+
+fn spawn_callback_server_loop<T, F, Fut>(
+    server: Arc<Server>,
+    mut rx: tokio::sync::mpsc::Receiver<Request>,
+    incomplete_message: &'static str,
+    mut process_request: F,
+) -> (tokio::task::JoinHandle<io::Result<T>>, ShutdownHandle)
+where
+    T: Send + 'static,
+    F: FnMut(String) -> Fut + Send + 'static,
+    Fut: Future<Output = HandledRequest<T>> + Send + 'static,
+{
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let server_handle = {
+        let shutdown_notify = shutdown_notify.clone();
+        tokio::spawn(async move {
+            let result = loop {
+                tokio::select! {
+                    _ = shutdown_notify.notified() => {
+                        break Err(io::Error::other(incomplete_message));
+                    }
+                    maybe_req = rx.recv() => {
+                        let Some(req) = maybe_req else {
+                            break Err(io::Error::other(incomplete_message));
+                        };
+
+                        let url_raw = req.url().to_string();
+                        let response = process_request(url_raw).await;
+
+                        if let Some(result) = respond_to_request(req, response).await {
+                            break result;
+                        }
+                    }
+                }
+            };
+
+            // Ensure that the server is unblocked so the thread dedicated to
+            // running `server.recv()` in a loop exits cleanly.
+            server.unblock();
+            result
+        })
+    };
+
+    (server_handle, ShutdownHandle { shutdown_notify })
 }
 
 async fn respond_to_request<T>(req: Request, response: HandledRequest<T>) -> Option<io::Result<T>> {

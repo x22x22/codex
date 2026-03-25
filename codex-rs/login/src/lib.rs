@@ -16,8 +16,8 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
+pub use api_provision::ApiProvisionError;
 pub use api_provision::ApiProvisionOptions;
-pub use api_provision::HelperError as ApiProvisionError;
 pub use api_provision::PendingApiProvisioning;
 pub use api_provision::ProvisionedApiKey;
 pub use api_provision::start_api_provisioning;

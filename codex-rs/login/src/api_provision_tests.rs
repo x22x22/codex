@@ -154,13 +154,11 @@ async fn provision_from_authorization_code_provisions_api_key() {
     assert_eq!(
         output,
         ProvisionedApiKey {
-            sensitive_id: "session-123".to_string(),
             organization_id: "org-default".to_string(),
             organization_title: Some("Default Org".to_string()),
             default_project_id: "proj-default".to_string(),
             default_project_title: Some("Default Project".to_string()),
             project_api_key: "sk-proj-123".to_string(),
-            access_token: "oauth-access-123".to_string(),
         }
     );
 }

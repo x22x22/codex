@@ -17,10 +17,10 @@ const PLATFORM_HYDRA_CLIENT_ID: &str = "app_2SKx67EdpoN0G6j64rFvigXD";
 const PLATFORM_AUDIENCE: &str = "https://api.openai.com/v1";
 const DEFAULT_API_BASE: &str = "https://api.openai.com";
 const DEFAULT_CALLBACK_PORT: u16 = 5000;
-const DEFAULT_CALLBACK_PATH: &str = "/auth/callback";
+const CALLBACK_PATH: &str = "/auth/callback";
 const DEFAULT_SCOPE: &str = "openid email profile offline_access";
 const DEFAULT_APP: &str = "api";
-const DEFAULT_USER_AGENT: &str = "OpenAI-Onboard-Auth-Script/1.0";
+const USER_AGENT: &str = "Codex-API-Provision/1.0";
 const DEFAULT_PROJECT_API_KEY_NAME: &str = "Codex CLI";
 const DEFAULT_PROJECT_POLL_INTERVAL_SECONDS: u64 = 10;
 const DEFAULT_PROJECT_POLL_TIMEOUT_SECONDS: u64 = 60;
@@ -79,16 +79,12 @@ impl PendingApiProvisioning {
         self.callback_server.open_browser()
     }
 
-    pub fn open_browser_or_print(&self) -> bool {
-        self.callback_server.open_browser_or_print()
-    }
-
-    pub async fn finish(self) -> Result<ProvisionedApiKey, HelperError> {
+    pub async fn finish(self) -> Result<ProvisionedApiKey, ApiProvisionError> {
         let code = self
             .callback_server
             .wait_for_code(Duration::from_secs(OAUTH_TIMEOUT_SECONDS))
             .await
-            .map_err(|err| HelperError::message(err.to_string()))?;
+            .map_err(|err| ApiProvisionError::message(err.to_string()))?;
         provision_from_authorization_code(
             &self.client,
             &self.options,
@@ -102,30 +98,28 @@ impl PendingApiProvisioning {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProvisionedApiKey {
-    pub sensitive_id: String,
     pub organization_id: String,
     pub organization_title: Option<String>,
     pub default_project_id: String,
     pub default_project_title: Option<String>,
     pub project_api_key: String,
-    pub access_token: String,
 }
 
 pub fn start_api_provisioning(
     options: ApiProvisionOptions,
-) -> Result<PendingApiProvisioning, HelperError> {
+) -> Result<PendingApiProvisioning, ApiProvisionError> {
     validate_api_provision_options(&options)?;
     let client = build_http_client()?;
     let callback_server = start_authorization_code_server(
         options.callback_port,
-        DEFAULT_CALLBACK_PATH,
+        CALLBACK_PATH,
         /*force_state*/ None,
         |redirect_uri, pkce, state| {
             build_authorize_url(&options, redirect_uri, pkce, state)
                 .map_err(|err| std::io::Error::other(err.to_string()))
         },
     )
-    .map_err(|err| HelperError::message(err.to_string()))?;
+    .map_err(|err| ApiProvisionError::message(err.to_string()))?;
     let redirect_uri = callback_server.redirect_uri.clone();
 
     Ok(PendingApiProvisioning {
@@ -137,19 +131,19 @@ pub fn start_api_provisioning(
     })
 }
 
-fn validate_api_provision_options(options: &ApiProvisionOptions) -> Result<(), HelperError> {
+fn validate_api_provision_options(options: &ApiProvisionOptions) -> Result<(), ApiProvisionError> {
     if options.project_poll_interval_seconds == 0 {
-        return Err(HelperError::message(
+        return Err(ApiProvisionError::message(
             "project_poll_interval_seconds must be greater than 0.".to_string(),
         ));
     }
     if options.project_poll_timeout_seconds == 0 {
-        return Err(HelperError::message(
+        return Err(ApiProvisionError::message(
             "project_poll_timeout_seconds must be greater than 0.".to_string(),
         ));
     }
     if options.api_key_name.trim().is_empty() {
-        return Err(HelperError::message(
+        return Err(ApiProvisionError::message(
             "api_key_name must not be empty.".to_string(),
         ));
     }
@@ -161,12 +155,12 @@ fn build_authorize_url(
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
-) -> Result<String, HelperError> {
+) -> Result<String, ApiProvisionError> {
     let mut url = Url::parse(&format!(
         "{}/oauth/authorize",
         options.issuer.trim_end_matches('/')
     ))
-    .map_err(|err| HelperError::message(format!("invalid issuer URL: {err}")))?;
+    .map_err(|err| ApiProvisionError::message(format!("invalid issuer URL: {err}")))?;
     url.query_pairs_mut()
         .append_pair("audience", &options.audience)
         .append_pair("client_id", &options.client_id)
@@ -179,11 +173,11 @@ fn build_authorize_url(
     Ok(url.to_string())
 }
 
-fn build_http_client() -> Result<Client, HelperError> {
+fn build_http_client() -> Result<Client, ApiProvisionError> {
     build_reqwest_client_with_custom_ca(
         reqwest::Client::builder().timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS)),
     )
-    .map_err(|err| HelperError::message(format!("failed to build HTTP client: {err}")))
+    .map_err(|err| ApiProvisionError::message(format!("failed to build HTTP client: {err}")))
 }
 
 async fn provision_from_authorization_code(
@@ -192,7 +186,7 @@ async fn provision_from_authorization_code(
     redirect_uri: &str,
     code_verifier: &str,
     code: &str,
-) -> Result<ProvisionedApiKey, HelperError> {
+) -> Result<ProvisionedApiKey, ApiProvisionError> {
     let tokens = exchange_authorization_code_for_tokens(
         client,
         &options.issuer,
@@ -229,13 +223,11 @@ async fn provision_from_authorization_code(
     .sensitive_id;
 
     Ok(ProvisionedApiKey {
-        sensitive_id: login.user.session.sensitive_id,
         organization_id: target.organization_id,
         organization_title: target.organization_title,
         default_project_id: target.project_id,
         default_project_title: target.project_title,
         project_api_key: api_key,
-        access_token: tokens.access_token,
     })
 }
 
@@ -246,13 +238,13 @@ async fn exchange_authorization_code_for_tokens(
     redirect_uri: &str,
     code_verifier: &str,
     code: &str,
-) -> Result<OAuthTokens, HelperError> {
+) -> Result<OAuthTokens, ApiProvisionError> {
     let url = format!("{}/oauth/token", issuer.trim_end_matches('/'));
     execute_json(
         client
             .request(Method::POST, &url)
             .header(reqwest::header::ACCEPT, "application/json")
-            .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
             .json(&serde_json::json!({
                 "client_id": client_id,
                 "code_verifier": code_verifier,
@@ -271,7 +263,7 @@ async fn onboarding_login(
     api_base: &str,
     app: &str,
     access_token: &str,
-) -> Result<OnboardingLoginResponse, HelperError> {
+) -> Result<OnboardingLoginResponse, ApiProvisionError> {
     let url = format!(
         "{}/dashboard/onboarding/login",
         api_base.trim_end_matches('/')
@@ -280,7 +272,7 @@ async fn onboarding_login(
         client
             .request(Method::POST, &url)
             .header(reqwest::header::ACCEPT, "application/json")
-            .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
             .bearer_auth(access_token)
             .json(&serde_json::json!({ "app": app })),
         "POST",
@@ -293,13 +285,13 @@ async fn list_organizations(
     client: &Client,
     api_base: &str,
     session_key: &str,
-) -> Result<Vec<Organization>, HelperError> {
+) -> Result<Vec<Organization>, ApiProvisionError> {
     let url = format!("{}/v1/organizations", api_base.trim_end_matches('/'));
     let response: DataList<Organization> = execute_json(
         client
             .request(Method::GET, &url)
             .header(reqwest::header::ACCEPT, "application/json")
-            .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
             .bearer_auth(session_key),
         "GET",
         &url,
@@ -313,7 +305,7 @@ async fn list_projects(
     api_base: &str,
     session_key: &str,
     organization_id: &str,
-) -> Result<Vec<Project>, HelperError> {
+) -> Result<Vec<Project>, ApiProvisionError> {
     let url = format!(
         "{}/dashboard/organizations/{}/projects?detail=basic&limit=100",
         api_base.trim_end_matches('/'),
@@ -323,7 +315,7 @@ async fn list_projects(
         client
             .request(Method::GET, &url)
             .header(reqwest::header::ACCEPT, "application/json")
-            .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
             .header("openai-organization", organization_id)
             .bearer_auth(session_key),
         "GET",
@@ -339,7 +331,7 @@ async fn wait_for_default_project(
     session_key: &str,
     poll_interval_seconds: u64,
     timeout_seconds: u64,
-) -> Result<ProvisioningTarget, HelperError> {
+) -> Result<ProvisioningTarget, ApiProvisionError> {
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_seconds);
     loop {
         let organizations = list_organizations(client, api_base, session_key).await?;
@@ -363,7 +355,7 @@ async fn wait_for_default_project(
         };
 
         if std::time::Instant::now() >= deadline {
-            return Err(HelperError::message(format!(
+            return Err(ApiProvisionError::message(format!(
                 "Timed out waiting for an organization and default project. Last observed state: {last_state}"
             )));
         }
@@ -371,7 +363,7 @@ async fn wait_for_default_project(
             .saturating_duration_since(std::time::Instant::now())
             .as_secs();
         let sleep_seconds = poll_interval_seconds.min(remaining_seconds.max(1));
-        std::thread::sleep(Duration::from_secs(sleep_seconds));
+        tokio::time::sleep(Duration::from_secs(sleep_seconds)).await;
     }
 }
 
@@ -397,7 +389,7 @@ async fn create_project_api_key(
     session_key: &str,
     target: &ProvisioningTarget,
     key_name: &str,
-) -> Result<CreateApiKeyResponse, HelperError> {
+) -> Result<CreateApiKeyResponse, ApiProvisionError> {
     let url = format!(
         "{}/dashboard/organizations/{}/projects/{}/api_keys",
         api_base.trim_end_matches('/'),
@@ -408,7 +400,7 @@ async fn create_project_api_key(
         client
             .request(Method::POST, &url)
             .header(reqwest::header::ACCEPT, "application/json")
-            .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
+            .header(reqwest::header::USER_AGENT, USER_AGENT)
             .bearer_auth(session_key)
             .json(&serde_json::json!({
                 "action": "create",
@@ -424,26 +416,26 @@ async fn execute_json<T>(
     request: reqwest::RequestBuilder,
     method: &str,
     url: &str,
-) -> Result<T, HelperError>
+) -> Result<T, ApiProvisionError>
 where
     T: for<'de> Deserialize<'de>,
 {
     let response = request
         .send()
         .await
-        .map_err(|err| HelperError::message(format!("Network error calling {url}: {err}")))?;
+        .map_err(|err| ApiProvisionError::message(format!("Network error calling {url}: {err}")))?;
     let status = response.status();
     let body = response.bytes().await.map_err(|err| {
-        HelperError::message(format!("Failed reading response from {url}: {err}"))
+        ApiProvisionError::message(format!("Failed reading response from {url}: {err}"))
     })?;
     if !status.is_success() {
-        return Err(HelperError::api(
+        return Err(ApiProvisionError::api(
             format!("{method} {url} failed with HTTP {status}"),
             String::from_utf8_lossy(&body).into_owned(),
         ));
     }
     serde_json::from_slice(&body)
-        .map_err(|err| HelperError::message(format!("{url} returned invalid JSON: {err}")))
+        .map_err(|err| ApiProvisionError::message(format!("{url} returned invalid JSON: {err}")))
 }
 
 #[derive(Debug, Deserialize)]
@@ -512,38 +504,29 @@ struct CreatedApiKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HelperError {
+pub struct ApiProvisionError {
     message: String,
-    body: Option<String>,
 }
 
-impl HelperError {
+impl ApiProvisionError {
     fn message(message: String) -> Self {
-        Self {
-            message,
-            body: None,
-        }
+        Self { message }
     }
 
     fn api(message: String, body: String) -> Self {
         Self {
-            message,
-            body: Some(body),
+            message: format!("{message}: {body}"),
         }
-    }
-
-    pub fn body(&self) -> Option<&str> {
-        self.body.as_deref()
     }
 }
 
-impl std::fmt::Display for HelperError {
+impl std::fmt::Display for ApiProvisionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for HelperError {}
+impl std::error::Error for ApiProvisionError {}
 
 #[cfg(test)]
 #[path = "api_provision_tests.rs"]

@@ -261,13 +261,11 @@ mod tests {
     fn success_cell_snapshot() {
         let cell = success_cell(
             &ProvisionedApiKey {
-                sensitive_id: "session-123".to_string(),
                 organization_id: "org-default".to_string(),
                 organization_title: Some("Default Org".to_string()),
                 default_project_id: "proj-default".to_string(),
                 default_project_title: Some("Default Project".to_string()),
                 project_api_key: "sk-proj-123".to_string(),
-                access_token: "oauth-access-123".to_string(),
             },
             Path::new("/tmp/workspace/.env.local"),
             LiveApplyOutcome::Applied,
@@ -280,13 +278,11 @@ mod tests {
     fn success_cell_snapshot_when_live_apply_is_skipped() {
         let cell = success_cell(
             &ProvisionedApiKey {
-                sensitive_id: "session-123".to_string(),
                 organization_id: "org-default".to_string(),
                 organization_title: None,
                 default_project_id: "proj-default".to_string(),
                 default_project_title: None,
                 project_api_key: "sk-proj-123".to_string(),
-                access_token: "oauth-access-123".to_string(),
             },
             Path::new("/tmp/workspace/.env.local"),
             LiveApplyOutcome::Skipped(
