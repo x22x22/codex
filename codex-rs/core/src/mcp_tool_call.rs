@@ -51,6 +51,9 @@ use std::path::Path;
 use std::sync::Arc;
 use toml_edit::value;
 use tracing::Instrument;
+use tracing::Span;
+use tracing::field::Empty;
+use url::Url;
 
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
@@ -159,21 +162,39 @@ pub(crate) async fn handle_mcp_tool_call(
                 maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
                 let start = Instant::now();
-                let result = execute_mcp_tool_call(
-                    &sess,
-                    turn_context,
-                    McpToolCallRequest {
-                        server: &server,
+                let result = async {
+                    sess.call_tool(
+                        &server,
+                        &tool_name,
+                        arguments_value.clone(),
+                        request_meta.clone(),
+                    )
+                    .await
+                    .map_err(|e| format!("tool call error: {e:?}"))
+                }
+                .instrument(mcp_tool_call_span(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    McpToolCallSpanFields {
+                        server_name: &server,
                         tool_name: &tool_name,
                         call_id: &call_id,
-                        arguments_value: arguments_value.clone(),
-                        request_meta: request_meta.clone(),
                         server_origin: server_origin.as_deref(),
-                        connector_id: connector_id.clone(),
-                        connector_name: connector_name.clone(),
+                        connector_id: connector_id.as_deref(),
+                        connector_name: connector_name.as_deref(),
                     },
-                )
+                ))
                 .await;
+                let result = sanitize_mcp_tool_result_for_model(
+                    turn_context
+                        .model_info
+                        .input_modalities
+                        .contains(&InputModality::Image),
+                    result,
+                );
+                if let Err(error) = &result {
+                    tracing::warn!("MCP tool call error: {error:?}");
+                }
                 let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                     call_id: call_id.clone(),
                     invocation,
@@ -246,21 +267,34 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let start = Instant::now();
     // Perform the tool call.
-    let result = execute_mcp_tool_call(
-        &sess,
-        turn_context,
-        McpToolCallRequest {
-            server: &server,
+    let result = async {
+        sess.call_tool(&server, &tool_name, arguments_value.clone(), request_meta)
+            .await
+            .map_err(|e| format!("tool call error: {e:?}"))
+    }
+    .instrument(mcp_tool_call_span(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        McpToolCallSpanFields {
+            server_name: &server,
             tool_name: &tool_name,
             call_id: &call_id,
-            arguments_value: arguments_value.clone(),
-            request_meta,
             server_origin: server_origin.as_deref(),
-            connector_id,
-            connector_name,
+            connector_id: connector_id.as_deref(),
+            connector_name: connector_name.as_deref(),
         },
-    )
+    ))
     .await;
+    let result = sanitize_mcp_tool_result_for_model(
+        turn_context
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image),
+        result,
+    );
+    if let Err(error) = &result {
+        tracing::warn!("MCP tool call error: {error:?}");
+    }
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.clone(),
         invocation,
@@ -284,57 +318,64 @@ pub(crate) async fn handle_mcp_tool_call(
     CallToolResult::from_result(result)
 }
 
-async fn execute_mcp_tool_call(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    request: McpToolCallRequest<'_>,
-) -> Result<CallToolResult, String> {
-    let tool_call_span = crate::network_trace::mcp_tool_call_span(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        crate::network_trace::McpToolCallTrace {
-            server_name: request.server,
-            tool_name: request.tool_name,
-            call_id: request.call_id,
-            server_origin: request.server_origin,
-            connector_id: request.connector_id.as_deref(),
-            connector_name: request.connector_name.as_deref(),
-        },
+fn mcp_tool_call_span(
+    session: &Session,
+    turn_context: &TurnContext,
+    fields: McpToolCallSpanFields<'_>,
+) -> Span {
+    let transport = match fields.server_origin {
+        Some("stdio") => "stdio",
+        Some(_) => "streamable_http",
+        None => "",
+    };
+    let span = tracing::info_span!(
+        "mcp.tools.call",
+        otel.kind = "client",
+        rpc.system = "jsonrpc",
+        rpc.method = "tools/call",
+        mcp.server.name = fields.server_name,
+        mcp.server.origin = fields.server_origin.unwrap_or(""),
+        mcp.transport = transport,
+        mcp.connector.id = fields.connector_id.unwrap_or(""),
+        mcp.connector.name = fields.connector_name.unwrap_or(""),
+        tool.name = fields.tool_name,
+        tool.call_id = fields.call_id,
+        conversation.id = Empty,
+        session.id = Empty,
+        turn.id = Empty,
+        server.address = Empty,
+        server.port = Empty,
     );
-    let result = async {
-        sess.call_tool(
-            request.server,
-            request.tool_name,
-            request.arguments_value,
-            request.request_meta,
-        )
-        .await
-        .map_err(|e| format!("tool call error: {e:?}"))
-    }
-    .instrument(tool_call_span)
-    .await;
-    let result = sanitize_mcp_tool_result_for_model(
-        turn_context
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image),
-        result,
-    );
-    if let Err(error) = &result {
-        tracing::warn!("MCP tool call error: {error:?}");
-    }
-    result
+    let conversation_id = session.conversation_id.to_string();
+    span.record("conversation.id", conversation_id.as_str());
+    span.record("session.id", conversation_id.as_str());
+    span.record("turn.id", turn_context.sub_id.as_str());
+    record_server_fields(&span, fields.server_origin);
+    span
 }
 
-struct McpToolCallRequest<'a> {
-    server: &'a str,
+struct McpToolCallSpanFields<'a> {
+    server_name: &'a str,
     tool_name: &'a str,
     call_id: &'a str,
-    arguments_value: Option<serde_json::Value>,
-    request_meta: Option<serde_json::Value>,
     server_origin: Option<&'a str>,
-    connector_id: Option<String>,
-    connector_name: Option<String>,
+    connector_id: Option<&'a str>,
+    connector_name: Option<&'a str>,
+}
+
+fn record_server_fields(span: &Span, url: Option<&str>) {
+    let Some(url) = url else {
+        return;
+    };
+    let Ok(parsed) = Url::parse(url) else {
+        return;
+    };
+    if let Some(host) = parsed.host_str() {
+        span.record("server.address", host);
+    }
+    if let Some(port) = parsed.port_or_known_default() {
+        span.record("server.port", port as i64);
+    }
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {

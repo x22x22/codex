@@ -207,6 +207,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     assert!(
         logs.contains("turn{otel.name=\"session_task.turn\"")
             && logs.contains("mcp.tools.call{otel.kind=\"client\"")
+            && logs.contains("mcp.client.operation{otel.kind=\"client\"")
             && logs.contains("rpc.system=\"jsonrpc\"")
             && logs.contains("rpc.method=\"tools/call\"")
             && logs.contains("mcp.server.name=\"rmcp\"")
@@ -214,7 +215,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             && logs.contains("tool.name=\"echo\"")
             && logs.contains("tool.call_id=\"call-123\"")
             && logs.contains("turn.id="),
-        "missing mcp.tools.call span nested under session_task.turn\nlogs:\n{logs}"
+        "missing MCP tracing spans nested under session_task.turn\nlogs:\n{logs}"
     );
 
     server.verify().await;

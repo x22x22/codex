@@ -92,8 +92,6 @@ mod model_visible_layout;
 mod models_cache_ttl;
 mod models_etag_responses;
 mod otel;
-#[cfg(not(target_os = "windows"))]
-mod otel_apps;
 mod pending_input;
 mod permissions_messages;
 mod personality;
