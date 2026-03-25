@@ -361,7 +361,7 @@ fn track_events_job_type_uses_expected_tag_values() {
 }
 
 #[test]
-fn track_events_job_invoke_type_tag_uses_first_available_value() {
+fn track_events_job_event_count_matches_underlying_payloads() {
     let codex_home = TempDir::new().expect("tempdir should create");
     let config = Arc::new(load_test_config(codex_home.path()));
     let tracking = TrackEventsContext {
@@ -369,32 +369,31 @@ fn track_events_job_invoke_type_tag_uses_first_available_value() {
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
     };
-    let explicit_skill_job = TrackEventsJob::SkillInvocations(TrackSkillInvocationsJob {
+    let skill_job = TrackEventsJob::SkillInvocations(TrackSkillInvocationsJob {
         config: Arc::clone(&config),
         tracking: tracking.clone(),
-        invocations: vec![super::SkillInvocation {
-            skill_name: "doc".to_string(),
-            skill_scope: codex_protocol::protocol::SkillScope::Repo,
-            skill_path: codex_home.path().join("SKILL.md"),
-            invocation_type: InvocationType::Explicit,
-        }],
+        invocations: vec![
+            super::SkillInvocation {
+                skill_name: "doc".to_string(),
+                skill_scope: codex_protocol::protocol::SkillScope::Repo,
+                skill_path: codex_home.path().join("SKILL.md"),
+                invocation_type: InvocationType::Explicit,
+            },
+            super::SkillInvocation {
+                skill_name: "doc-2".to_string(),
+                skill_scope: codex_protocol::protocol::SkillScope::Repo,
+                skill_path: codex_home.path().join("SKILL-2.md"),
+                invocation_type: InvocationType::Implicit,
+            },
+        ],
     });
-    let implicit_app_job = TrackEventsJob::AppUsed(TrackAppUsedJob {
-        config: Arc::clone(&config),
-        tracking: tracking.clone(),
-        app: AppInvocation {
-            connector_id: Some("drive".to_string()),
-            app_name: Some("Google Drive".to_string()),
-            invocation_type: Some(InvocationType::Implicit),
-        },
-    });
-    let first_value_app_mentioned_job = TrackEventsJob::AppMentioned(TrackAppMentionedJob {
+    let app_mentioned_job = TrackEventsJob::AppMentioned(TrackAppMentionedJob {
         config: Arc::clone(&config),
         tracking: tracking.clone(),
         mentions: vec![
             AppInvocation {
                 connector_id: Some("drive".to_string()),
-                app_name: Some("Google Drive".to_string()),
+                app_name: Some("Drive".to_string()),
                 invocation_type: Some(InvocationType::Explicit),
             },
             AppInvocation {
@@ -402,27 +401,22 @@ fn track_events_job_invoke_type_tag_uses_first_available_value() {
                 app_name: Some("Calendar".to_string()),
                 invocation_type: Some(InvocationType::Implicit),
             },
+            AppInvocation {
+                connector_id: Some("gmail".to_string()),
+                app_name: Some("Gmail".to_string()),
+                invocation_type: None,
+            },
         ],
     });
-    let empty_skill_job = TrackEventsJob::SkillInvocations(TrackSkillInvocationsJob {
-        config: Arc::clone(&config),
-        tracking: tracking.clone(),
-        invocations: Vec::new(),
-    });
-    let no_invoke_type_job = TrackEventsJob::PluginUsed(TrackPluginUsedJob {
+    let plugin_job = TrackEventsJob::PluginUsed(TrackPluginUsedJob {
         config,
         tracking,
         plugin: sample_plugin_metadata(),
     });
 
-    assert_eq!(explicit_skill_job.invoke_type_tag(), Some("explicit"));
-    assert_eq!(implicit_app_job.invoke_type_tag(), Some("implicit"));
-    assert_eq!(
-        first_value_app_mentioned_job.invoke_type_tag(),
-        Some("explicit")
-    );
-    assert_eq!(empty_skill_job.invoke_type_tag(), None);
-    assert_eq!(no_invoke_type_job.invoke_type_tag(), None);
+    assert_eq!(skill_job.event_count(), 2);
+    assert_eq!(app_mentioned_job.event_count(), 3);
+    assert_eq!(plugin_job.event_count(), 1);
 }
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
