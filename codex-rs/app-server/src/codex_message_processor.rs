@@ -233,8 +233,8 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::state_db;
 use codex_core::state_db::StateDbHandle;
-use codex_core::state_db::init;
 use codex_core::state_db::reconcile_rollout;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
@@ -438,7 +438,7 @@ impl CodexMessageProcessor {
     async fn shared_state_db(&self) -> Option<StateDbHandle> {
         match self.state_db.as_ref() {
             Some(state_db) => Some(state_db.clone()),
-            None => init(self.config.as_ref()).await,
+            None => state_db::init(self.config.as_ref()).await,
         }
     }
 
