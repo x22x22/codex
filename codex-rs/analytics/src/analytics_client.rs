@@ -42,6 +42,7 @@ pub struct CodexThreadInitializedEvent {
 pub struct CodexThreadInitializedInput {
     pub thread_id: String,
     pub model: String,
+    pub product_client_id: String,
     pub created_at: u64,
     pub thread_context: CodexThreadContext,
 }
@@ -460,6 +461,7 @@ impl AnalyticsReducer {
         input: CodexThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
+        let product_client_id = input.product_client_id.clone();
         let event = CodexThreadInitializedEvent {
             thread_id: input.thread_id,
             model: input.model,
@@ -477,10 +479,7 @@ impl AnalyticsReducer {
             },
         );
         out.push(TrackEventRequest::ThreadInitialized(
-            CodexThreadInitializedEventRequest {
-                event_type: "codex_thread_initialized",
-                event_params: codex_thread_initialized_event_params(event),
-            },
+            codex_thread_initialized_event_request(product_client_id, event),
         ));
     }
 
@@ -603,9 +602,29 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
 fn codex_thread_initialized_event_params(
     thread_event: CodexThreadInitializedEvent,
 ) -> CodexThreadInitializedEventParams {
+    codex_thread_initialized_event_params_with_product_client_id(originator().value, thread_event)
+}
+
+fn codex_thread_initialized_event_request(
+    product_client_id: String,
+    thread_event: CodexThreadInitializedEvent,
+) -> CodexThreadInitializedEventRequest {
+    CodexThreadInitializedEventRequest {
+        event_type: "codex_thread_initialized",
+        event_params: codex_thread_initialized_event_params_with_product_client_id(
+            product_client_id,
+            thread_event,
+        ),
+    }
+}
+
+fn codex_thread_initialized_event_params_with_product_client_id(
+    product_client_id: String,
+    thread_event: CodexThreadInitializedEvent,
+) -> CodexThreadInitializedEventParams {
     CodexThreadInitializedEventParams {
         thread_id: thread_event.thread_id,
-        product_client_id: originator().value,
+        product_client_id,
         model: thread_event.model,
         ephemeral: thread_event.ephemeral,
         session_source: session_source_name(&thread_event.session_source),

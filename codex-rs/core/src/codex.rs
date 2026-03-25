@@ -677,6 +677,7 @@ impl Codex {
                     .collaboration_mode
                     .model()
                     .to_string(),
+                product_client_id: crate::default_client::originator().value,
                 created_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
