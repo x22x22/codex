@@ -954,6 +954,7 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
     );
 }
 
+#[test]
 fn drop_last_n_user_turns_trims_context_updates_above_first_rolled_back_turn() {
     let items = vec![
         assistant_msg("session prefix item"),
@@ -982,6 +983,8 @@ fn drop_last_n_user_turns_trims_context_updates_above_first_rolled_back_turn() {
             .expect("serialize expected reference context item")
     );
 }
+
+#[test]
 fn drop_last_n_user_turns_clears_reference_context_for_mixed_developer_context_bundles() {
     let items = vec![
         user_input_text_msg("turn 1 user"),
