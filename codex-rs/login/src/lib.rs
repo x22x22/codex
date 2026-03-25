@@ -3,6 +3,7 @@ pub mod token_data;
 
 mod api_provision;
 mod device_code_auth;
+mod oauth_callback_server;
 mod pkce;
 mod server;
 
@@ -11,9 +12,9 @@ pub use device_code_auth::DeviceCode;
 pub use device_code_auth::complete_device_code_login;
 pub use device_code_auth::request_device_code;
 pub use device_code_auth::run_device_code_login;
+pub use oauth_callback_server::ShutdownHandle;
 pub use server::LoginServer;
 pub use server::ServerOptions;
-pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
 pub use api_provision::ApiProvisionError;

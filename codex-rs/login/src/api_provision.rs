@@ -8,9 +8,9 @@ use reqwest::Method;
 use serde::Deserialize;
 use url::Url;
 
+use crate::oauth_callback_server::AuthorizationCodeServer;
+use crate::oauth_callback_server::start_authorization_code_server;
 use crate::pkce::PkceCodes;
-use crate::server::AuthorizationCodeServer;
-use crate::server::start_authorization_code_server;
 
 const AUTH_ISSUER: &str = "https://auth.openai.com";
 const PLATFORM_HYDRA_CLIENT_ID: &str = "app_2SKx67EdpoN0G6j64rFvigXD";
