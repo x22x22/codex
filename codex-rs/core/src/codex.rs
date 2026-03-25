@@ -172,6 +172,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::context_manager::is_user_turn_boundary;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -782,6 +783,17 @@ pub(crate) fn session_loop_termination_from_handle(
     }
     .boxed()
     .shared()
+}
+
+fn initial_history_has_prior_user_turns(conversation_history: &InitialHistory) -> bool {
+    conversation_history.scan_rollout_items(rollout_item_is_user_turn_boundary)
+}
+
+fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
+    match item {
+        RolloutItem::ResponseItem(item) => is_user_turn_boundary(item),
+        _ => false,
+    }
 }
 
 /// Context for an initialized model agent
@@ -2154,6 +2166,11 @@ impl Session {
                 SessionSource::SubAgent(_)
             )
         };
+        let has_prior_user_turns = initial_history_has_prior_user_turns(&conversation_history);
+        {
+            let mut state = self.state.lock().await;
+            state.set_next_turn_is_first(!has_prior_user_turns);
+        }
         match conversation_history {
             InitialHistory::New => {
                 // Defer initial context insertion until the first real turn starts so
@@ -5992,6 +6009,10 @@ pub(crate) async fn run_turn(
     }
 
     if !input.is_empty() {
+        let is_first_turn = {
+            let mut state = sess.state.lock().await;
+            state.take_next_turn_is_first()
+        };
         sess.services.analytics_events_client.track_turn_event(
             tracking,
             CodexTurnEvent {
@@ -6011,6 +6032,7 @@ pub(crate) async fn run_turn(
                         matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
                     })
                     .count(),
+                is_first_turn,
             },
         );
     }
