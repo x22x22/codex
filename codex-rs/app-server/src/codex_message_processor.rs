@@ -5504,7 +5504,7 @@ impl CodexMessageProcessor {
                 }
             };
             let config_layer_stack = match load_config_layers_state(
-                &self.codex_home,
+                &self.config.codex_home,
                 Some(cwd_abs),
                 cli_overrides,
                 LoaderOverrides::default(),
@@ -5529,14 +5529,14 @@ impl CodexMessageProcessor {
                 &config_layer_stack,
                 config.features.enabled(Feature::Plugins),
             );
+            let skills_input = codex_core::skills::SkillsLoadInput::new(
+                cwd.clone(),
+                effective_skill_roots,
+                config_layer_stack,
+                config.bundled_skills_enabled(),
+            );
             let outcome = skills_manager
-                .skills_for_cwd_with_extra_user_roots(
-                    &cwd,
-                    &effective_skill_roots,
-                    force_reload,
-                    extra_roots,
-                    &config_layer_stack,
-                )
+                .skills_for_cwd_with_extra_user_roots(&skills_input, force_reload, extra_roots)
                 .await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);

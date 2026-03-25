@@ -264,6 +264,8 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 mod tests {
     use super::*;
     use codex_core::AnalyticsEventsClient;
+    use codex_core::AuthManager;
+    use codex_core::CodexAuth;
     use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
@@ -404,6 +406,9 @@ mod tests {
                 .await
                 .expect("load analytics config"),
         );
+        let auth_manager = Arc::new(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+            "test",
+        )));
         let config_api = ConfigApi::new(
             codex_home.path().to_path_buf(),
             Vec::new(),
@@ -411,7 +416,7 @@ mod tests {
             Arc::new(RwLock::new(CloudRequirementsLoader::default())),
             reloader.clone(),
             AnalyticsEventsClient::new(
-                Arc::clone(&analytics_config.auth_manager),
+                auth_manager,
                 analytics_config
                     .chatgpt_base_url
                     .trim_end_matches('/')
