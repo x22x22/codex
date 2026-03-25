@@ -325,10 +325,10 @@ async fn resumed_thread_turn_tracks_is_not_first_turn_analytics() -> anyhow::Res
             })
             .filter(|event| event["event_type"] == "codex_turn_event")
             .collect::<Vec<_>>();
-        if let Some(event) = turn_events.last().cloned() {
-            if turn_events.len() >= 2 {
-                break event;
-            }
+        if let Some(event) = turn_events.last().cloned()
+            && turn_events.len() >= 2
+        {
+            break event;
         }
         if Instant::now() >= deadline {
             panic!("timed out waiting for resumed turn analytics event");
