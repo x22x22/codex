@@ -309,7 +309,7 @@ async fn wait_for_default_project(
     session_key: &str,
     poll_interval_seconds: u64,
     timeout_seconds: u64,
-) -> Result<ProvisioningTarget, CreateApiKeyError> {
+) -> Result<ProjectApiKeyTarget, CreateApiKeyError> {
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_seconds);
     loop {
         let organizations = list_organizations(client, api_base, session_key).await?;
@@ -323,7 +323,7 @@ async fn wait_for_default_project(
                     list_projects(client, api_base, session_key, &organization.id).await?;
                 project_count += projects.len();
                 if let Some(project) = find_default_project(&projects) {
-                    return Ok(ProvisioningTarget {
+                    return Ok(ProjectApiKeyTarget {
                         organization_id: organization.id.clone(),
                         organization_title: organization.title.clone(),
                         project_id: project.id.clone(),
@@ -377,7 +377,7 @@ async fn create_project_api_key(
     client: &Client,
     api_base: &str,
     session_key: &str,
-    target: &ProvisioningTarget,
+    target: &ProjectApiKeyTarget,
     key_name: &str,
 ) -> Result<CreateProjectApiKeyResponse, CreateApiKeyError> {
     let url = format!(
@@ -476,7 +476,7 @@ struct Project {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ProvisioningTarget {
+struct ProjectApiKeyTarget {
     organization_id: String,
     organization_title: Option<String>,
     project_id: String,

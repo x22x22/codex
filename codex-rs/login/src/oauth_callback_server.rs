@@ -334,7 +334,7 @@ fn bind_server(port: u16) -> io::Result<Server> {
                     if !cancel_attempted {
                         cancel_attempted = true;
                         if let Err(cancel_err) = send_cancel_request(port) {
-                            eprintln!("Failed to cancel previous login server: {cancel_err}");
+                            eprintln!("Failed to cancel previous callback server: {cancel_err}");
                         }
                     }
 
