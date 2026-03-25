@@ -384,7 +384,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     background_tasks: TaskTracker,
-    state_db: Option<StateDbHandle>,
+    state_db: Mutex<Option<StateDbHandle>>,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
 }
@@ -436,9 +436,16 @@ pub(crate) struct CodexMessageProcessorArgs {
 
 impl CodexMessageProcessor {
     async fn shared_state_db(&self) -> Option<StateDbHandle> {
-        match self.state_db.as_ref() {
+        let mut state_db = self.state_db.lock().await;
+        match state_db.as_ref() {
             Some(state_db) => Some(state_db.clone()),
-            None => state_db::init(self.config.as_ref()).await,
+            None => {
+                let recovered = state_db::init(self.config.as_ref()).await;
+                if let Some(recovered) = recovered.as_ref() {
+                    *state_db = Some(recovered.clone());
+                }
+                recovered
+            }
         }
     }
 
@@ -523,7 +530,7 @@ impl CodexMessageProcessor {
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             background_tasks: TaskTracker::new(),
-            state_db,
+            state_db: Mutex::new(state_db),
             feedback,
             log_db,
         }
@@ -8528,12 +8535,21 @@ mod tests {
     use anyhow::Result;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_arg0::Arg0DispatchPaths;
+    use codex_core::ThreadManager;
+    use codex_core::config::ConfigBuilder;
+    use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+    use codex_feedback::CodexFeedback;
+    use codex_login::AuthManager;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::RwLock;
     use tempfile::TempDir;
 
     #[test]
@@ -9054,6 +9070,62 @@ mod tests {
                 .is_empty()
         );
         assert!(outgoing_rx.try_recv().is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_state_db_caches_successful_retry() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = Arc::new(
+            ConfigBuilder::default()
+                .codex_home(codex_home.path().to_path_buf())
+                .build()
+                .await?,
+        );
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            /*enable_codex_api_key_env*/ false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.as_ref(),
+            auth_manager.clone(),
+            SessionSource::Cli,
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(Feature::DefaultModeRequestUserInput),
+            },
+        ));
+        let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::channel::<OutgoingEnvelope>(1);
+        let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+
+        let processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
+            auth_manager,
+            thread_manager,
+            outgoing,
+            arg0_paths: Arg0DispatchPaths::default(),
+            config,
+            cli_overrides: Arc::new(RwLock::new(Vec::new())),
+            runtime_feature_enablement: Arc::new(RwLock::new(BTreeMap::new())),
+            cloud_requirements: Arc::new(RwLock::new(CloudRequirementsLoader::default())),
+            feedback: CodexFeedback::new(),
+            log_db: None,
+            state_db: None,
+        });
+
+        let first = processor
+            .shared_state_db()
+            .await
+            .expect("state db should initialize on retry");
+        let second = processor
+            .shared_state_db()
+            .await
+            .expect("cached state db should be reused");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(processor.state_db.lock().await.is_some());
+
         Ok(())
     }
 
