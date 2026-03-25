@@ -40,6 +40,7 @@ const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
 const USERPROFILE_READ_ROOT_EXCLUSIONS: &[&str] = &[
+    "AppData",
     ".ssh",
     ".gnupg",
     ".aws",
@@ -698,11 +699,13 @@ mod tests {
         let user_profile = tmp.path();
         let allowed_dir = user_profile.join("Documents");
         let allowed_file = user_profile.join(".gitconfig");
+        let excluded_appdata = user_profile.join("AppData");
         let excluded_dir = user_profile.join(".ssh");
         let excluded_case_variant = user_profile.join(".AWS");
 
         fs::create_dir_all(&allowed_dir).expect("create allowed dir");
         fs::write(&allowed_file, "safe").expect("create allowed file");
+        fs::create_dir_all(&excluded_appdata).expect("create excluded appdata dir");
         fs::create_dir_all(&excluded_dir).expect("create excluded dir");
         fs::create_dir_all(&excluded_case_variant).expect("create excluded case variant");
 
