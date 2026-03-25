@@ -34,18 +34,21 @@ use uuid::Uuid;
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::normalize_output_image_detail;
-use crate::sandboxing::CommandSpec;
-use crate::sandboxing::SandboxManager;
-use crate::sandboxing::SandboxPermissions;
+use crate::sandboxing::ExecOptions;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::sandboxing::SandboxablePreference;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::truncate_text;
+use codex_sandboxing::LinuxSandboxDetachedChildren;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxablePreference;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 
 pub(crate) const JS_REPL_PRAGMA_PREFIX: &str = "// codex-js-repl:";
 const KERNEL_SOURCE: &str = include_str!("kernel.js");
@@ -1028,20 +1031,6 @@ impl JsReplManager {
             );
         }
 
-        let spec = CommandSpec {
-            program: node_path.to_string_lossy().to_string(),
-            args: vec![
-                "--experimental-vm-modules".to_string(),
-                kernel_path.to_string_lossy().to_string(),
-            ],
-            cwd: turn.cwd.clone(),
-            env,
-            expiration: ExecExpiration::DefaultTimeout,
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: None,
-        };
-
         let sandbox = SandboxManager::new();
         let has_managed_network_requirements = turn
             .config
@@ -1056,9 +1045,23 @@ impl JsReplManager {
             turn.windows_sandbox_level,
             has_managed_network_requirements,
         );
+        let command = SandboxCommand {
+            program: node_path.to_string_lossy().to_string(),
+            args: vec![
+                "--experimental-vm-modules".to_string(),
+                kernel_path.to_string_lossy().to_string(),
+            ],
+            cwd: turn.cwd.clone(),
+            env,
+            additional_permissions: None,
+        };
+        let options = ExecOptions {
+            expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: ExecCapturePolicy::ShellTool,
+        };
         let exec_env = sandbox
-            .transform(crate::sandboxing::SandboxTransformRequest {
-                spec,
+            .transform(SandboxTransformRequest {
+                command,
                 policy: &turn.sandbox_policy,
                 file_system_policy: &turn.file_system_sandbox_policy,
                 network_policy: turn.network_sandbox_policy,
@@ -1069,14 +1072,16 @@ impl JsReplManager {
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions: None,
                 codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
-                linux_sandbox_detached_children:
-                    crate::exec::LinuxSandboxDetachedChildren::Disallow,
+                linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
                 use_legacy_landlock: turn.features.use_legacy_landlock(),
                 windows_sandbox_level: turn.windows_sandbox_level,
                 windows_sandbox_private_desktop: turn
                     .config
                     .permissions
                     .windows_sandbox_private_desktop,
+            })
+            .map(|request| {
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
             })
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
 
@@ -1609,8 +1614,8 @@ impl JsReplManager {
         let tracker = Arc::clone(&exec.tracker);
 
         match router
-            .dispatch_tool_call(
-                session.clone(),
+            .dispatch_tool_call_with_code_mode_result(
+                session,
                 turn,
                 tracker,
                 call,
@@ -1618,7 +1623,8 @@ impl JsReplManager {
             )
             .await
         {
-            Ok(response) => {
+            Ok(result) => {
+                let response = result.into_response();
                 let summary = Self::summarize_tool_call_response(&response);
                 match serde_json::to_value(response) {
                     Ok(value) => {
