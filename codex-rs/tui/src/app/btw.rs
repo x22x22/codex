@@ -1,4 +1,5 @@
 use super::*;
+use crate::chatwidget::InterruptedTurnNoticeMode;
 
 const BTW_RENAME_BLOCK_MESSAGE: &str = "BTW threads are ephemeral and cannot be renamed.";
 
@@ -16,6 +17,7 @@ impl App {
         let clear_btw_ui = |chat_widget: &mut crate::chatwidget::ChatWidget| {
             chat_widget.set_thread_footer_hint_override(/*items*/ None);
             chat_widget.clear_thread_rename_block();
+            chat_widget.set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Default);
         };
         let Some(active_thread_id) = self.current_displayed_thread_id() else {
             clear_btw_ui(&mut self.chat_widget);
@@ -32,6 +34,8 @@ impl App {
 
         self.chat_widget
             .set_thread_rename_block_message(BTW_RENAME_BLOCK_MESSAGE);
+        self.chat_widget
+            .set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Suppress);
         let mut depth = 1usize;
         while let Some(next_parent_thread_id) = self
             .btw_threads

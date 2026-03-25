@@ -2063,6 +2063,7 @@ async fn make_chatwidget_manual(
         thread_rename_block_message: None,
         forked_from: None,
         next_fork_banner_parent_label: None,
+        interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         startup_tooltip_override: None,
@@ -5646,6 +5647,27 @@ async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
 queued draft"
     );
     assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn suppressed_interrupted_turn_notice_skips_history_warning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Suppress);
+    chat.on_task_started();
+    chat.on_agent_message_delta("partial output".to_string());
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    let inserted = drain_insert_history(&mut rx);
+    assert!(
+        inserted.iter().all(|cell| {
+            let rendered = lines_to_single_string(cell);
+            !rendered.contains("Conversation interrupted - tell the model what to do differently.")
+                && !rendered.contains("Model interrupted to submit steer instructions.")
+        }),
+        "unexpected interrupted-turn notice in BTW thread: {inserted:?}"
+    );
 }
 
 #[tokio::test]

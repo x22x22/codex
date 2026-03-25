@@ -807,6 +807,7 @@ pub(crate) struct ChatWidget {
     forked_from: Option<ThreadId>,
     /// Pretty parent label used only for the next fork banner inserted on session configure.
     next_fork_banner_parent_label: Option<String>,
+    interrupted_turn_notice_mode: InterruptedTurnNoticeMode,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -1017,6 +1018,13 @@ impl From<&str> for UserMessage {
 struct PendingSteer {
     user_message: UserMessage,
     compare_key: PendingSteerCompareKey,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum InterruptedTurnNoticeMode {
+    #[default]
+    Default,
+    Suppress,
 }
 
 pub(crate) fn create_initial_user_message(
@@ -2672,7 +2680,9 @@ impl ChatWidget {
         self.finalize_turn();
         let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
         self.submit_pending_steers_after_interrupt = false;
-        if reason != TurnAbortReason::ReviewEnded {
+        if reason != TurnAbortReason::ReviewEnded
+            && self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress
+        {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(
                     "Model interrupted to submit steer instructions.".to_owned(),
@@ -4331,6 +4341,7 @@ impl ChatWidget {
             thread_rename_block_message: None,
             forked_from: None,
             next_fork_banner_parent_label: None,
+            interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
             queued_user_messages: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
@@ -6982,6 +6993,10 @@ impl ChatWidget {
 
     pub(crate) fn set_next_fork_banner_parent_label(&mut self, label: Option<String>) {
         self.next_fork_banner_parent_label = label;
+    }
+
+    pub(crate) fn set_interrupted_turn_notice_mode(&mut self, mode: InterruptedTurnNoticeMode) {
+        self.interrupted_turn_notice_mode = mode;
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
