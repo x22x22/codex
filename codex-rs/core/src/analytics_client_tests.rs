@@ -6,7 +6,6 @@ use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
-use super::CodexTurnSteerEvent;
 use super::InvocationType;
 use super::SubmissionType;
 use super::TrackEventRequest;
@@ -15,7 +14,6 @@ use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
 use super::codex_turn_event_params;
-use super::codex_turn_steer_event_params;
 use super::normalize_path_for_skill_id;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginCapabilitySummary;
@@ -227,7 +225,7 @@ fn turn_event_serializes_expected_shape() {
         ),
     });
 
-    let payload = serde_json::to_value(&event).expect("serialize codex turn event");
+    let payload = serde_json::to_value(&event).expect("serialize turn event");
 
     assert_eq!(
         payload,
@@ -237,7 +235,7 @@ fn turn_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "product_client_id": crate::default_client::originator().value,
-                "model_slug": "gpt-5",
+                "model": "gpt-5",
                 "submission_type": "prompt",
                 "model_provider": "openai",
                 "sandbox_policy": "read_only",
@@ -255,33 +253,6 @@ fn turn_event_serializes_expected_shape() {
     );
 }
 
-#[test]
-fn turn_steer_event_serializes_expected_shape() {
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-2".to_string(),
-        turn_id: "turn-2".to_string(),
-    };
-    let event = TrackEventRequest::TurnEvent(CodexTurnEventRequest {
-        event_type: "codex_turn_event",
-        event_params: codex_turn_steer_event_params(&tracking, CodexTurnSteerEvent),
-    });
-
-    let payload = serde_json::to_value(&event).expect("serialize codex turn steer event");
-
-    assert_eq!(
-        payload,
-        json!({
-            "event_type": "codex_turn_event",
-            "event_params": {
-                "thread_id": "thread-2",
-                "turn_id": "turn-2",
-                "product_client_id": crate::default_client::originator().value,
-                "model_slug": "gpt-5"
-            }
-        })
-    );
-}
 
 #[test]
 fn plugin_used_event_serializes_expected_shape() {

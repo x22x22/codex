@@ -48,9 +48,6 @@ pub(crate) struct CodexTurnEvent {
     pub(crate) num_input_images: usize,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct CodexTurnSteerEvent;
-
 pub(crate) fn build_track_events_context(
     model_slug: String,
     thread_id: String,
@@ -114,9 +111,6 @@ impl AnalyticsEventsQueue {
                     }
                     TrackEventsJob::TurnEvent(job) => {
                         send_track_turn_event(&auth_manager, job).await;
-                    }
-                    TrackEventsJob::TurnSteer(job) => {
-                        send_track_turn_steer(&auth_manager, job).await;
                     }
                     TrackEventsJob::PluginUsed(job) => {
                         send_track_plugin_used(&auth_manager, job).await;
@@ -244,19 +238,6 @@ impl AnalyticsEventsClient {
         );
     }
 
-    pub(crate) fn track_turn_steer(
-        &self,
-        tracking: TrackEventsContext,
-        turn_steer: CodexTurnSteerEvent,
-    ) {
-        track_turn_steer(
-            &self.queue,
-            Arc::clone(&self.config),
-            Some(tracking),
-            turn_steer,
-        );
-    }
-
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
@@ -299,7 +280,6 @@ enum TrackEventsJob {
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
     TurnEvent(TrackTurnEventJob),
-    TurnSteer(TrackTurnSteerJob),
     PluginUsed(TrackPluginUsedJob),
     PluginInstalled(TrackPluginManagementJob),
     PluginUninstalled(TrackPluginManagementJob),
@@ -329,12 +309,6 @@ struct TrackTurnEventJob {
     config: Arc<Config>,
     tracking: TrackEventsContext,
     turn_event: CodexTurnEvent,
-}
-
-struct TrackTurnSteerJob {
-    config: Arc<Config>,
-    tracking: TrackEventsContext,
-    turn_steer: CodexTurnSteerEvent,
 }
 
 struct TrackPluginUsedJob {
@@ -420,39 +394,24 @@ struct CodexAppUsedEventRequest {
     event_params: CodexAppMetadata,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Serialize)]
 struct CodexTurnEventParams {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    thread_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    turn_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_id: String,
+    turn_id: String,
     product_client_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model_slug: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
     submission_type: Option<SubmissionType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model_provider: Option<String>,
+    model_provider: String,
     sandbox_policy: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    service_tier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    approval_policy: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    approvals_reviewer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sandbox_network_access: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    service_tier: String,
+    approval_policy: String,
+    approvals_reviewer: String,
+    sandbox_network_access: bool,
     collaboration_mode: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     personality: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    num_input_images: Option<usize>,
+    num_input_images: usize,
 }
 
 #[derive(Serialize)]
@@ -578,26 +537,6 @@ pub(crate) fn track_turn_event(
         config,
         tracking,
         turn_event,
-    });
-    queue.try_send(job);
-}
-
-pub(crate) fn track_turn_steer(
-    queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
-    tracking: Option<TrackEventsContext>,
-    turn_steer: CodexTurnSteerEvent,
-) {
-    if config.analytics_enabled == Some(false) {
-        return;
-    }
-    let Some(tracking) = tracking else {
-        return;
-    };
-    let job = TrackEventsJob::TurnSteer(TrackTurnSteerJob {
-        config,
-        tracking,
-        turn_steer,
     });
     queue.try_send(job);
 }
@@ -741,20 +680,6 @@ async fn send_track_turn_event(auth_manager: &AuthManager, job: TrackTurnEventJo
     send_track_events(auth_manager, config, events).await;
 }
 
-async fn send_track_turn_steer(auth_manager: &AuthManager, job: TrackTurnSteerJob) {
-    let TrackTurnSteerJob {
-        config,
-        tracking,
-        turn_steer,
-    } = job;
-    let events = vec![TrackEventRequest::TurnEvent(CodexTurnEventRequest {
-        event_type: "codex_turn_event",
-        event_params: codex_turn_steer_event_params(&tracking, turn_steer),
-    })];
-
-    send_track_events(auth_manager, config, events).await;
-}
-
 async fn send_track_plugin_used(auth_manager: &AuthManager, job: TrackPluginUsedJob) {
     let TrackPluginUsedJob {
         config,
@@ -824,40 +749,25 @@ fn codex_turn_event_params(
     turn_event: CodexTurnEvent,
 ) -> CodexTurnEventParams {
     CodexTurnEventParams {
-        thread_id: Some(tracking.thread_id.clone()),
-        turn_id: Some(tracking.turn_id.clone()),
+        thread_id: tracking.thread_id.clone(),
+        turn_id: tracking.turn_id.clone(),
         product_client_id: Some(crate::default_client::originator().value),
-        model_slug: Some(tracking.model_slug.clone()),
+        model: Some(tracking.model_slug.clone()),
         submission_type: turn_event.submission_type,
-        model_provider: Some(turn_event.model_provider),
+        model_provider: turn_event.model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&turn_event.sandbox_policy)),
         reasoning_effort: turn_event.reasoning_effort.map(|value| value.to_string()),
         reasoning_summary: reasoning_summary_mode(turn_event.reasoning_summary),
-        service_tier: Some(
-            turn_event
-                .service_tier
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "default".to_string()),
-        ),
-        approval_policy: Some(turn_event.approval_policy.to_string()),
-        approvals_reviewer: Some(turn_event.approvals_reviewer.to_string()),
-        sandbox_network_access: Some(turn_event.sandbox_network_access),
+        service_tier: turn_event
+            .service_tier
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "default".to_string()),
+        approval_policy: turn_event.approval_policy.to_string(),
+        approvals_reviewer: turn_event.approvals_reviewer.to_string(),
+        sandbox_network_access: turn_event.sandbox_network_access,
         collaboration_mode: Some(collaboration_mode_mode(turn_event.collaboration_mode)),
         personality: personality_mode(turn_event.personality),
-        num_input_images: Some(turn_event.num_input_images),
-    }
-}
-
-fn codex_turn_steer_event_params(
-    tracking: &TrackEventsContext,
-    _turn_steer: CodexTurnSteerEvent,
-) -> CodexTurnEventParams {
-    CodexTurnEventParams {
-        thread_id: Some(tracking.thread_id.clone()),
-        turn_id: Some(tracking.turn_id.clone()),
-        product_client_id: Some(crate::default_client::originator().value),
-        model_slug: Some(tracking.model_slug.clone()),
-        ..Default::default()
+        num_input_images: turn_event.num_input_images,
     }
 }
 
