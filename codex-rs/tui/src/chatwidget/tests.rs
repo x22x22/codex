@@ -6620,10 +6620,14 @@ async fn slash_rename_with_args_is_rejected_for_btw_threads() {
 
 #[tokio::test]
 async fn slash_btw_requests_forked_side_question_while_task_running() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     let parent_thread_id = ThreadId::new();
     chat.thread_id = Some(parent_thread_id);
     chat.on_task_started();
+    chat.show_welcome_banner = false;
     chat.bottom_pane.set_composer_text(
         "/btw explore the codebase".to_string(),
         Vec::new(),
@@ -6652,6 +6656,17 @@ async fn slash_btw_requests_forked_side_question_while_task_running() {
         "expected no op on the parent thread"
     );
     assert_eq!(chat.bottom_pane.composer_text(), "");
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw BTW footer");
+    assert_snapshot!(
+        "slash_btw_requests_forked_side_question_while_task_running",
+        terminal.backend()
+    );
 }
 
 #[tokio::test]

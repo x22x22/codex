@@ -231,6 +231,8 @@ impl App {
                 }
             }
             Err(err) => {
+                self.chat_widget
+                    .set_thread_footer_hint_override(/*items*/ None);
                 self.chat_widget.add_error_message(format!(
                     "Failed to fork BTW thread from {parent_thread_id}: {err}"
                 ));

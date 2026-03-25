@@ -7261,10 +7261,14 @@ async fn submit_user_message_as_plain_user_turn_does_not_run_shell_commands() {
 
 #[tokio::test]
 async fn slash_btw_requests_forked_side_question_while_task_running() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     let parent_thread_id = ThreadId::new();
     chat.thread_id = Some(parent_thread_id);
     chat.on_task_started();
+    chat.show_welcome_banner = false;
     chat.bottom_pane.set_composer_text(
         "/btw explore the codebase".to_string(),
         Vec::new(),
@@ -7291,6 +7295,17 @@ async fn slash_btw_requests_forked_side_question_while_task_running() {
     assert!(
         op_rx.try_recv().is_err(),
         "expected no op on the parent thread"
+    );
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw BTW footer");
+    assert_snapshot!(
+        "slash_btw_requests_forked_side_question_while_task_running",
+        terminal.backend()
     );
 }
 

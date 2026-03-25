@@ -180,6 +180,8 @@ impl App {
                 if self.current_displayed_thread_id() == Some(parent_thread_id) {
                     self.chat_widget.rollout_path()
                 } else {
+                    self.chat_widget
+                        .set_thread_footer_hint_override(/*items*/ None);
                     self.chat_widget.add_error_message(format!(
                         "Failed to fork BTW thread from {parent_thread_id}: {err}"
                     ));
@@ -189,6 +191,8 @@ impl App {
         }
         .filter(|path| path.exists());
         let Some(parent_rollout_path) = parent_rollout_path else {
+            self.chat_widget
+                .set_thread_footer_hint_override(/*items*/ None);
             self.chat_widget.add_error_message(
                 "A thread must contain at least one turn before /btw can fork it.".to_string(),
             );
@@ -255,6 +259,8 @@ impl App {
                 }
             }
             Err(err) => {
+                self.chat_widget
+                    .set_thread_footer_hint_override(/*items*/ None);
                 let path_display = parent_rollout_path.display();
                 self.chat_widget.add_error_message(format!(
                     "Failed to start BTW thread from {path_display}: {err}"

@@ -4970,6 +4970,11 @@ impl ChatWidget {
                 let Some(user_message) = self.prepare_inline_submission_user_message() else {
                     return;
                 };
+                self.set_thread_footer_hint_override(Some(vec![(
+                    "BTW".to_string(),
+                    "starting...".to_string(),
+                )]));
+                self.request_redraw();
                 self.app_event_tx.send(AppEvent::StartBtw {
                     parent_thread_id,
                     user_message,
