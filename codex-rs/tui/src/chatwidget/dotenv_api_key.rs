@@ -95,7 +95,7 @@ fn write_dotenv_file(path: &Path, contents: &str) -> io::Result<()> {
 
     #[cfg(unix)]
     {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
 
     Ok(())

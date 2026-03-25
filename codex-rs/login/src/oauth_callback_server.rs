@@ -75,7 +75,7 @@ impl AuthorizationCodeServer {
                 let _ = server_handle.await;
                 Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "OAuth login timed out waiting for the browser callback.",
+                    "OAuth flow timed out waiting for the browser callback.",
                 ))
             }
         }
@@ -374,10 +374,10 @@ fn process_authorization_code_request(
         "/cancel" => HandledRequest::ResponseAndExit {
             status: StatusCode(200),
             headers: Vec::new(),
-            body: b"Login cancelled".to_vec(),
+            body: b"Authentication cancelled".to_vec(),
             result: Err(io::Error::new(
                 io::ErrorKind::Interrupted,
-                "Login cancelled",
+                "Authentication cancelled",
             )),
         },
         path if path == callback_path => {
@@ -405,7 +405,7 @@ fn process_authorization_code_request(
                 return HandledRequest::ResponseAndExit {
                     status: StatusCode(403),
                     headers: html_headers(),
-                    body: b"<h1>Sign-in failed</h1><p>Return to your terminal.</p>".to_vec(),
+                    body: b"<h1>Authentication failed</h1><p>Return to your terminal.</p>".to_vec(),
                     result: Err(io::Error::new(io::ErrorKind::PermissionDenied, message)),
                 };
             }
@@ -414,8 +414,9 @@ fn process_authorization_code_request(
                 Some(code) if !code.is_empty() => HandledRequest::ResponseAndExit {
                     status: StatusCode(200),
                     headers: html_headers(),
-                    body: b"<h1>Sign-in complete</h1><p>You can return to your terminal.</p>"
-                        .to_vec(),
+                    body:
+                        b"<h1>Authentication complete</h1><p>You can return to your terminal.</p>"
+                            .to_vec(),
                     result: Ok(code.clone()),
                 },
                 _ => HandledRequest::ResponseAndExit {
@@ -425,7 +426,7 @@ fn process_authorization_code_request(
                         .to_vec(),
                     result: Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "Missing authorization code. Sign-in could not be completed.",
+                        "Missing authorization code. Authentication could not be completed.",
                     )),
                 },
             }
@@ -445,8 +446,8 @@ fn authorization_code_error_message(error_code: &str, error_description: Option<
     if let Some(description) = error_description
         && !description.trim().is_empty()
     {
-        return format!("Sign-in failed: {description}");
+        return format!("Authentication failed: {description}");
     }
 
-    format!("Sign-in failed: {error_code}")
+    format!("Authentication failed: {error_code}")
 }
