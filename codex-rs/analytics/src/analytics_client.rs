@@ -599,6 +599,7 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
     }
 }
 
+#[cfg(test)]
 fn codex_thread_initialized_event_params(
     thread_event: CodexThreadInitializedEvent,
 ) -> CodexThreadInitializedEventParams {
