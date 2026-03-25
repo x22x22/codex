@@ -17,8 +17,11 @@ use crate::chatwidget::realtime::RealtimeConversationPhase;
 use crate::history_cell::UserHistoryCell;
 use crate::model_catalog::ModelCatalog;
 use crate::test_backend::VT100Backend;
+use crate::test_support::PathBufExt;
+use crate::test_support::test_path_display;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
@@ -32,9 +35,21 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::MarketplaceInterface;
 use codex_app_server_protocol::PatchApplyStatus as AppServerPatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
+use codex_app_server_protocol::PluginAuthPolicy;
+use codex_app_server_protocol::PluginDetail;
+use codex_app_server_protocol::PluginInstallPolicy;
+use codex_app_server_protocol::PluginInterface;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginMarketplaceEntry;
+use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSource;
+use codex_app_server_protocol::PluginSummary;
+use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SkillSummary;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::Turn as AppServerTurn;
@@ -58,9 +73,11 @@ use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::skills::model::SkillMetadata;
 use codex_features::FEATURES;
 use codex_features::Feature;
+use codex_git_utils::CommitLogEntry;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -444,10 +461,10 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         .sandbox_policy
         .set(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
-    chat.config.cwd = PathBuf::from("/home/user/main");
+    chat.config.cwd = PathBuf::from("/home/user/main").abs();
 
     let expected_sandbox = SandboxPolicy::new_read_only_policy();
-    let expected_cwd = PathBuf::from("/home/user/sub-agent");
+    let expected_cwd = PathBuf::from("/home/user/sub-agent").abs();
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
@@ -458,7 +475,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: expected_sandbox.clone(),
-        cwd: expected_cwd.clone(),
+        cwd: expected_cwd.to_path_buf(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -2042,6 +2059,8 @@ async fn make_chatwidget_manual(
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_partial_snapshot: None,
+        plugin_install_apps_needing_auth: Vec::new(),
+        plugin_install_auth_flow: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
         plugins_cache: PluginsCacheState::default(),
@@ -5117,6 +5136,56 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
     assert!(rendered.contains("Raw reasoning"));
 }
 
+#[tokio::test]
+async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+            },
+        }),
+        None,
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "reasoning-1".to_string(),
+            delta: "Summary only".to_string(),
+            summary_index: 0,
+        }),
+        None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec!["Summary only".to_string()],
+                content: Vec::new(),
+            },
+        }),
+        None,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => lines_to_single_string(&cell.transcript_lines(80)),
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert_eq!(rendered.matches("Summary only").count(), 1);
+}
+
 #[test]
 fn rendered_user_message_event_from_inputs_matches_flattened_user_message_shape() {
     let local_image = PathBuf::from("/tmp/local.png");
@@ -5818,13 +5887,13 @@ async fn realtime_error_closes_without_followup_closed_info() {
 
 #[cfg(not(target_os = "linux"))]
 #[tokio::test]
-async fn removing_active_realtime_placeholder_closes_realtime_conversation() {
+async fn deleted_realtime_meter_uses_shared_stop_path() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
     let placeholder_id = chat.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
     chat.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
 
-    chat.remove_transcription_placeholder(&placeholder_id);
+    assert!(chat.stop_realtime_conversation_for_deleted_meter(&placeholder_id));
 
     next_realtime_close_op(&mut op_rx);
     assert_eq!(chat.realtime_conversation.meter_placeholder_id, None);
@@ -6410,7 +6479,7 @@ async fn slash_init_skips_when_project_doc_exists() {
     let tempdir = tempdir().unwrap();
     let existing_path = tempdir.path().join(DEFAULT_PROJECT_DOC_FILENAME);
     std::fs::write(&existing_path, "existing instructions").unwrap();
-    chat.config.cwd = tempdir.path().to_path_buf();
+    chat.config.cwd = tempdir.path().to_path_buf().abs();
 
     chat.dispatch_command(SlashCommand::Init);
 
@@ -7307,12 +7376,12 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
 
     // Show commit picker with synthetic entries.
     let entries = vec![
-        codex_core::git_info::CommitLogEntry {
+        CommitLogEntry {
             sha: "1111111deadbeef".to_string(),
             timestamp: 0,
             subject: "Add new feature X".to_string(),
         },
-        codex_core::git_info::CommitLogEntry {
+        CommitLogEntry {
             sha: "2222222cafebabe".to_string(),
             timestamp: 0,
             subject: "Fix bug Y".to_string(),
@@ -7403,13 +7472,17 @@ async fn custom_prompt_enter_empty_does_not_send() {
 #[tokio::test]
 async fn view_image_tool_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let image_path = chat.config.cwd.join("example.png");
+    let image_path = chat
+        .config
+        .cwd
+        .join("example.png")
+        .expect("absolute image path");
 
     chat.handle_codex_event(Event {
         id: "sub-image".into(),
         msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
             call_id: "call-image".into(),
-            path: image_path,
+            path: image_path.to_path_buf(),
         }),
     });
 
@@ -7662,6 +7735,593 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     }
 
     lines.join("\n")
+}
+
+fn strip_osc8_for_snapshot(text: &str) -> String {
+    // Snapshots should assert the visible popup text, not terminal hyperlink escapes.
+    let bytes = text.as_bytes();
+    let mut stripped = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"\x1B]8;;") {
+            i += 5;
+            while i < bytes.len() {
+                if bytes[i] == b'\x07' {
+                    i += 1;
+                    break;
+                }
+                if i + 1 < bytes.len() && bytes[i] == b'\x1B' && bytes[i + 1] == b'\\' {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        let ch = text[i..]
+            .chars()
+            .next()
+            .expect("slice should always contain a char");
+        stripped.push(ch);
+        i += ch.len_utf8();
+    }
+
+    stripped
+}
+
+fn plugins_test_absolute_path(path: &str) -> AbsolutePathBuf {
+    std::env::temp_dir()
+        .join("codex-plugin-menu-tests")
+        .join(path)
+        .abs()
+}
+
+fn plugins_test_interface(
+    display_name: Option<&str>,
+    short_description: Option<&str>,
+    long_description: Option<&str>,
+) -> PluginInterface {
+    PluginInterface {
+        display_name: display_name.map(str::to_string),
+        short_description: short_description.map(str::to_string),
+        long_description: long_description.map(str::to_string),
+        developer_name: None,
+        category: None,
+        capabilities: Vec::new(),
+        website_url: None,
+        privacy_policy_url: None,
+        terms_of_service_url: None,
+        default_prompt: None,
+        brand_color: None,
+        composer_icon: None,
+        logo: None,
+        screenshots: Vec::new(),
+    }
+}
+
+fn plugins_test_summary(
+    id: &str,
+    name: &str,
+    display_name: Option<&str>,
+    description: Option<&str>,
+    installed: bool,
+    enabled: bool,
+    install_policy: PluginInstallPolicy,
+) -> PluginSummary {
+    PluginSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        source: PluginSource::Local {
+            path: plugins_test_absolute_path(&format!("plugins/{name}")),
+        },
+        installed,
+        enabled,
+        install_policy,
+        auth_policy: PluginAuthPolicy::OnInstall,
+        interface: Some(plugins_test_interface(display_name, description, None)),
+    }
+}
+
+fn plugins_test_curated_marketplace(plugins: Vec<PluginSummary>) -> PluginMarketplaceEntry {
+    PluginMarketplaceEntry {
+        name: OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+        path: plugins_test_absolute_path("marketplaces/chatgpt"),
+        interface: Some(MarketplaceInterface {
+            display_name: Some("ChatGPT Marketplace".to_string()),
+        }),
+        plugins,
+    }
+}
+
+fn plugins_test_repo_marketplace(plugins: Vec<PluginSummary>) -> PluginMarketplaceEntry {
+    PluginMarketplaceEntry {
+        name: "repo".to_string(),
+        path: plugins_test_absolute_path("marketplaces/repo"),
+        interface: Some(MarketplaceInterface {
+            display_name: Some("Repo Marketplace".to_string()),
+        }),
+        plugins,
+    }
+}
+
+fn plugins_test_response(marketplaces: Vec<PluginMarketplaceEntry>) -> PluginListResponse {
+    PluginListResponse {
+        marketplaces,
+        marketplace_load_errors: Vec::new(),
+        remote_sync_error: None,
+        featured_plugin_ids: Vec::new(),
+    }
+}
+
+fn render_loaded_plugins_popup(chat: &mut ChatWidget, response: PluginListResponse) -> String {
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    render_bottom_popup(chat, 100)
+}
+
+fn plugins_test_detail(
+    summary: PluginSummary,
+    description: Option<&str>,
+    skills: &[&str],
+    apps: &[(&str, bool)],
+    mcp_servers: &[&str],
+) -> PluginDetail {
+    PluginDetail {
+        marketplace_name: "ChatGPT Marketplace".to_string(),
+        marketplace_path: plugins_test_absolute_path("marketplaces/chatgpt"),
+        summary,
+        description: description.map(str::to_string),
+        skills: skills
+            .iter()
+            .map(|name| SkillSummary {
+                name: (*name).to_string(),
+                description: format!("{name} description"),
+                short_description: None,
+                interface: None,
+                path: PathBuf::from(format!("/skills/{name}/SKILL.md")),
+                enabled: true,
+            })
+            .collect(),
+        apps: apps
+            .iter()
+            .map(|(name, needs_auth)| AppSummary {
+                id: format!("{name}-id"),
+                name: (*name).to_string(),
+                description: Some(format!("{name} app")),
+                install_url: Some(format!("https://example.test/{name}")),
+                needs_auth: *needs_auth,
+            })
+            .collect(),
+        mcp_servers: mcp_servers.iter().map(|name| (*name).to_string()).collect(),
+    }
+}
+
+fn plugins_test_popup_row_position(popup: &str, needle: &str) -> usize {
+    popup
+        .find(needle)
+        .unwrap_or_else(|| panic!("expected popup to contain {needle}: {popup}"))
+}
+
+fn type_plugins_search_query(chat: &mut ChatWidget, query: &str) {
+    for ch in query.chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+    }
+}
+
+#[tokio::test]
+async fn plugins_popup_loading_state_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    chat.add_plugins_output();
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(
+        popup.contains("Loading available plugins..."),
+        "expected /plugins to open in a loading state before the marketplace arrives, got:\n{popup}"
+    );
+    assert_snapshot!("plugins_popup_loading_state", popup);
+}
+
+#[tokio::test]
+async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_name() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let mut response = plugins_test_response(vec![
+        plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-bravo",
+                "bravo",
+                Some("Bravo Search"),
+                Some("Search docs and tickets."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-alpha",
+                "alpha",
+                Some("Alpha Sync"),
+                Some("Already installed but disabled."),
+                true,
+                false,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-starter",
+                "starter",
+                Some("Starter"),
+                Some("Included by default."),
+                false,
+                true,
+                PluginInstallPolicy::InstalledByDefault,
+            ),
+        ]),
+        plugins_test_repo_marketplace(vec![plugins_test_summary(
+            "plugin-hidden",
+            "hidden",
+            Some("Hidden Repo Plugin"),
+            Some("Should not be shown in /plugins."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        )]),
+    ]);
+    response.remote_sync_error = Some("remote sync timed out".to_string());
+
+    let popup = render_loaded_plugins_popup(&mut chat, response);
+    assert_snapshot!("plugins_popup_curated_marketplace", popup);
+    assert!(
+        popup.contains("Hidden Repo Plugin"),
+        "expected /plugins to include non-curated marketplaces, got:\n{popup}"
+    );
+    assert!(
+        plugins_test_popup_row_position(&popup, "Alpha Sync")
+            < plugins_test_popup_row_position(&popup, "Bravo Search")
+            && plugins_test_popup_row_position(&popup, "Bravo Search")
+                < plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
+            && plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
+                < plugins_test_popup_row_position(&popup, "Starter"),
+        "expected /plugins rows to sort installed plugins first, then alphabetically, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summaries() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let summary = plugins_test_summary(
+        "plugin-figma",
+        "figma",
+        Some("Figma"),
+        Some("Design handoff."),
+        false,
+        true,
+        PluginInstallPolicy::Available,
+    );
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_detail(
+                summary,
+                Some("Turn Figma files into implementation context."),
+                &["design-review", "extract-copy"],
+                &[("Figma", true), ("Slack", false)],
+                &["figma-mcp", "docs-mcp"],
+            ),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert_snapshot!(
+        "plugin_detail_popup_installable",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let summary = plugins_test_summary(
+        "plugin-figma",
+        "figma",
+        Some("Figma"),
+        Some("Design handoff."),
+        true,
+        true,
+        PluginInstallPolicy::Available,
+    );
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd.to_path_buf(),
+        Ok(PluginReadResponse {
+            plugin: plugins_test_detail(
+                summary,
+                Some("Turn Figma files into implementation context."),
+                &["design-review", "extract-copy"],
+                &[("Figma", true), ("Slack", false)],
+                &["figma-mcp", "docs-mcp"],
+            ),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(
+        !popup.contains("Data shared with this app is subject to the app's"),
+        "expected installed plugin details to hide the disclosure line, got:\n{popup}"
+    );
+    assert_snapshot!(
+        "plugin_detail_popup_installed",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_refresh_replaces_selection_with_first_row() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let initial = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-notion",
+            "notion",
+            Some("Notion"),
+            Some("Workspace docs."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-slack",
+            "slack",
+            Some("Slack"),
+            Some("Team chat."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    render_loaded_plugins_popup(&mut chat, initial);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    let before = render_bottom_popup(&chat, 100);
+    assert!(
+        before.contains("› Slack"),
+        "expected Slack to be selected before refresh, got:\n{before}"
+    );
+
+    let refreshed = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-airtable",
+            "airtable",
+            Some("Airtable"),
+            Some("Structured records."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-notion",
+            "notion",
+            Some("Notion"),
+            Some("Workspace docs."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-slack",
+            "slack",
+            Some("Slack"),
+            Some("Team chat."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(refreshed));
+
+    let after = render_bottom_popup(&chat, 100);
+    assert!(
+        after.contains("› Airtable"),
+        "expected refresh to rebuild the popup from the new first row, got:\n{after}"
+    );
+    assert!(
+        after.contains("Slack"),
+        "expected refreshed popup to include the updated plugin list, got:\n{after}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_refreshes_installed_counts_after_install() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let initial = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-calendar",
+            "calendar",
+            Some("Calendar"),
+            Some("Schedule management."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-drive",
+            "drive",
+            Some("Drive"),
+            Some("Document access."),
+            true,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let before = render_loaded_plugins_popup(&mut chat, initial);
+    assert!(
+        before.contains("Installed 1 of 2 available plugins."),
+        "expected initial installed count before refresh, got:\n{before}"
+    );
+    assert!(
+        before.contains("Available"),
+        "expected pre-install popup copy before refresh, got:\n{before}"
+    );
+
+    let refreshed = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-calendar",
+            "calendar",
+            Some("Calendar"),
+            Some("Schedule management."),
+            true,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-drive",
+            "drive",
+            Some("Drive"),
+            Some("Document access."),
+            true,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(refreshed));
+
+    let after = render_bottom_popup(&chat, 100);
+    assert!(
+        after.contains("Installed 2 of 2 available plugins."),
+        "expected /plugins to refresh installed counts after install, got:\n{after}"
+    );
+    assert!(
+        after.contains("Installed   Press Enter to view plugin details."),
+        "expected refreshed selected row copy to reflect the installed plugin state, got:\n{after}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_search_filters_visible_rows_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-slack",
+                "slack",
+                Some("Slack"),
+                Some("Team chat."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "sla");
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert_snapshot!("plugins_popup_search_filtered", popup);
+    assert!(
+        !popup.contains("Calendar") && !popup.contains("Drive"),
+        "expected search to leave only matching rows visible, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-slack",
+                "slack",
+                Some("Slack"),
+                Some("Team chat."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "zzz");
+
+    let no_matches = render_bottom_popup(&chat, 100);
+    assert!(
+        no_matches.contains("zzz"),
+        "expected popup to show the typed search query, got:\n{no_matches}"
+    );
+    assert!(
+        no_matches.contains("no matches"),
+        "expected popup to render the no-matches UX, got:\n{no_matches}"
+    );
+
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Backspace));
+    }
+
+    let restored = render_bottom_popup(&chat, 100);
+    assert!(
+        restored.contains("Calendar") && restored.contains("Slack"),
+        "expected clearing the query to restore the plugin rows, got:\n{restored}"
+    );
+    assert!(
+        !restored.contains("no matches"),
+        "did not expect the no-matches state after clearing the query, got:\n{restored}"
+    );
 }
 
 #[tokio::test]
@@ -8219,8 +8879,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
     chat.bottom_pane.set_connectors_enabled(true);
 
     let temp = tempdir().expect("tempdir");
-    let config_toml_path =
-        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let config_toml_path = temp.path().join("config.toml").abs();
     let user_config = toml::from_str::<TomlValue>(
         "[apps.connector_1]\nenabled = false\ndisabled_reason = \"user\"\n",
     )
@@ -8284,8 +8943,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
         ..Default::default()
     };
     let temp = tempdir().expect("tempdir");
-    let config_toml_path =
-        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let config_toml_path = temp.path().join("config.toml").abs();
     chat.config.config_layer_stack =
         ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
             .expect("requirements stack")
@@ -8860,7 +9518,7 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
+        writable_roots: vec![PathBuf::from("C:\\extra").abs()],
         read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
@@ -9660,8 +10318,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
         .features
         .set_enabled(Feature::GuardianApproval, true);
 
-    let extra_root = AbsolutePathBuf::try_from("/tmp/guardian-approvals-extra")
-        .expect("absolute extra writable root");
+    let extra_root = PathBuf::from("/tmp/guardian-approvals-extra").abs();
 
     chat.handle_codex_event(Event {
         id: "session-configured-custom-workspace".to_string(),
@@ -11674,7 +12331,7 @@ async fn status_line_fast_mode_footer_snapshot() {
 #[tokio::test]
 async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.config.cwd = PathBuf::from("/tmp/project");
+    chat.config.cwd = PathBuf::from("/tmp/project").abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
         "context-remaining".to_string(),
@@ -11684,10 +12341,11 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
     chat.refresh_status_line();
+    let test_cwd = test_path_display("/tmp/project");
 
     assert_eq!(
         status_line_text(&chat),
-        Some("gpt-5.4 xhigh fast · 100% left · /tmp/project".to_string())
+        Some(format!("gpt-5.4 xhigh fast · 100% left · {test_cwd}"))
     );
 
     chat.set_model("gpt-5.3-codex");
@@ -11695,18 +12353,22 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
 
     assert_eq!(
         status_line_text(&chat),
-        Some("gpt-5.3-codex xhigh · 100% left · /tmp/project".to_string())
+        Some(format!("gpt-5.3-codex xhigh · 100% left · {test_cwd}"))
     );
 }
 
 #[tokio::test]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "snapshot path rendering differs on Windows"
+)]
 async fn status_line_model_with_reasoning_fast_footer_snapshot() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.show_welcome_banner = false;
-    chat.config.cwd = PathBuf::from("/tmp/project");
+    chat.config.cwd = PathBuf::from("/tmp/project").abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
         "context-remaining".to_string(),
@@ -11943,7 +12605,33 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
 }
 
 #[tokio::test]
-async fn hook_events_render_snapshot() {
+async fn pre_tool_use_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_protocol::protocol::HookEventName::PreToolUse,
+        "pre-tool-use:0:/tmp/hooks.json",
+        "warming the shell",
+        "pre_tool_use_hook_events_render_snapshot",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn session_start_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_protocol::protocol::HookEventName::SessionStart,
+        "session-start:0:/tmp/hooks.json",
+        "warming the shell",
+        "session_start_hook_events_render_snapshot",
+    )
+    .await;
+}
+
+async fn assert_hook_events_snapshot(
+    event_name: codex_protocol::protocol::HookEventName,
+    run_id: &str,
+    status_message: &str,
+    snapshot_name: &str,
+) {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
@@ -11951,15 +12639,15 @@ async fn hook_events_render_snapshot() {
         msg: EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
             turn_id: None,
             run: codex_protocol::protocol::HookRunSummary {
-                id: "session-start:0:/tmp/hooks.json".to_string(),
-                event_name: codex_protocol::protocol::HookEventName::SessionStart,
+                id: run_id.to_string(),
+                event_name,
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Thread,
+                scope: codex_protocol::protocol::HookScope::Turn,
                 source_path: PathBuf::from("/tmp/hooks.json"),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Running,
-                status_message: Some("warming the shell".to_string()),
+                status_message: Some(status_message.to_string()),
                 started_at: 1,
                 completed_at: None,
                 duration_ms: None,
@@ -11973,15 +12661,15 @@ async fn hook_events_render_snapshot() {
         msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
             turn_id: None,
             run: codex_protocol::protocol::HookRunSummary {
-                id: "session-start:0:/tmp/hooks.json".to_string(),
-                event_name: codex_protocol::protocol::HookEventName::SessionStart,
+                id: run_id.to_string(),
+                event_name,
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Thread,
+                scope: codex_protocol::protocol::HookScope::Turn,
                 source_path: PathBuf::from("/tmp/hooks.json"),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Completed,
-                status_message: Some("warming the shell".to_string()),
+                status_message: Some(status_message.to_string()),
                 started_at: 1,
                 completed_at: Some(11),
                 duration_ms: Some(10),
@@ -12004,7 +12692,7 @@ async fn hook_events_render_snapshot() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert_snapshot!("hook_events_render_snapshot", combined);
+    assert_snapshot!(snapshot_name, combined);
 }
 
 // Combined visual snapshot using vt100 for history + direct buffer overlay for UI.
