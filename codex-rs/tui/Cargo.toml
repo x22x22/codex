@@ -45,6 +45,7 @@ codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
+codex-skills = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-tui-app-server = { workspace = true }
@@ -137,6 +138,7 @@ arboard = { workspace = true }
 [dev-dependencies]
 codex-cli = { workspace = true }
 codex-core = { workspace = true }
+codex-skills = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }

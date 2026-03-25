@@ -15,13 +15,13 @@ use crate::skills_helpers::skill_display_name;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::connectors::connector_mention_slug;
 use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
-use codex_core::skills::model::SkillDependencies;
-use codex_core::skills::model::SkillInterface;
-use codex_core::skills::model::SkillMetadata;
-use codex_core::skills::model::SkillToolDependency;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_protocol::protocol::SkillsListEntry;
+use codex_skills::SkillDependencies;
+use codex_skills::SkillInterface;
+use codex_skills::SkillMetadata;
+use codex_skills::SkillToolDependency;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {

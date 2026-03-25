@@ -174,7 +174,7 @@ fn detect_skill_script_run(
     let script_path = normalize_path(script_path.as_path());
 
     for ancestor in script_path.ancestors() {
-        if let Some(candidate) = outcome.implicit_skills_by_scripts_dir.get(ancestor) {
+        if let Some(candidate) = outcome.implicit_skills_by_scripts_dir().get(ancestor) {
             return Some(candidate.clone());
         }
     }
@@ -201,7 +201,7 @@ fn detect_skill_doc_read(
         } else {
             normalize_path(&workdir.join(path))
         };
-        if let Some(candidate) = outcome.implicit_skills_by_doc_path.get(&candidate_path) {
+        if let Some(candidate) = outcome.implicit_skills_by_doc_path().get(&candidate_path) {
             return Some(candidate.clone());
         }
     }

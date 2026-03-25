@@ -103,8 +103,8 @@ pub struct SkillLoadOutcome {
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillError>,
     pub disabled_paths: HashSet<PathBuf>,
-    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<PathBuf, SkillMetadata>>,
-    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<PathBuf, SkillMetadata>>,
+    implicit_skills_by_scripts_dir: Arc<HashMap<PathBuf, SkillMetadata>>,
+    implicit_skills_by_doc_path: Arc<HashMap<PathBuf, SkillMetadata>>,
 }
 
 impl SkillLoadOutcome {
@@ -128,6 +128,23 @@ impl SkillLoadOutcome {
         self.skills
             .iter()
             .map(|skill| (skill, self.is_skill_enabled(skill)))
+    }
+
+    pub fn implicit_skills_by_doc_path(&self) -> &HashMap<PathBuf, SkillMetadata> {
+        &self.implicit_skills_by_doc_path
+    }
+
+    pub fn implicit_skills_by_scripts_dir(&self) -> &HashMap<PathBuf, SkillMetadata> {
+        &self.implicit_skills_by_scripts_dir
+    }
+
+    pub fn set_implicit_skill_indexes(
+        &mut self,
+        by_scripts_dir: HashMap<PathBuf, SkillMetadata>,
+        by_doc_path: HashMap<PathBuf, SkillMetadata>,
+    ) {
+        self.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
+        self.implicit_skills_by_doc_path = Arc::new(by_doc_path);
     }
 }
 

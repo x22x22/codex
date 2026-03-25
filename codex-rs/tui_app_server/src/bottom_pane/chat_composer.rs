@@ -216,8 +216,8 @@ use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_chatgpt::connectors;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::plugins::PluginCapabilitySummary;
-use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_skills::SkillMetadata;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -5414,7 +5414,7 @@ mod tests {
             name: "google-calendar:availability".to_string(),
             description: "Find availability and plan event changes".to_string(),
             short_description: None,
-            interface: Some(codex_core::skills::model::SkillInterface {
+            interface: Some(codex_skills::SkillInterface {
                 display_name: Some("Google Calendar".to_string()),
                 short_description: None,
                 icon_small: None,
@@ -5506,7 +5506,7 @@ mod tests {
                 name: "google-calendar-skill".to_string(),
                 description: "Find availability and plan event changes".to_string(),
                 short_description: None,
-                interface: Some(codex_core::skills::model::SkillInterface {
+                interface: Some(codex_skills::SkillInterface {
                     display_name: Some("Google Calendar".to_string()),
                     short_description: None,
                     icon_small: None,

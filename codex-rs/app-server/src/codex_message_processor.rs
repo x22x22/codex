@@ -7646,7 +7646,7 @@ fn has_model_resume_override(
 }
 
 fn skills_to_info(
-    skills: &[codex_core::skills::SkillMetadata],
+    skills: &[codex_skills::SkillMetadata],
     disabled_paths: &std::collections::HashSet<PathBuf>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
@@ -7692,7 +7692,7 @@ fn skills_to_info(
 }
 
 fn plugin_skills_to_info(
-    skills: &[codex_core::skills::SkillMetadata],
+    skills: &[codex_skills::SkillMetadata],
     disabled_skill_paths: &std::collections::HashSet<PathBuf>,
 ) -> Vec<SkillSummary> {
     skills
@@ -7745,7 +7745,7 @@ fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginS
 }
 
 fn errors_to_info(
-    errors: &[codex_core::skills::SkillError],
+    errors: &[codex_skills::SkillError],
 ) -> Vec<codex_app_server_protocol::SkillErrorInfo> {
     errors
         .iter()

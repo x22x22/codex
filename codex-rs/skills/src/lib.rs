@@ -1,3 +1,7 @@
+//! Shared skill models, rendering, and embedded system skill assets.
+
+pub mod model;
+
 use codex_utils_absolute_path::AbsolutePathBuf;
 use include_dir::Dir;
 use std::collections::hash_map::DefaultHasher;
@@ -8,6 +12,19 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use thiserror::Error;
+
+pub use model::SkillDependencies;
+pub use model::SkillError;
+pub use model::SkillInterface;
+pub use model::SkillLoadOutcome;
+pub use model::SkillManagedNetworkOverride;
+pub use model::SkillMetadata;
+pub use model::SkillPolicy;
+pub use model::SkillToolDependency;
+pub use model::filter_skill_load_outcome_for_product;
+pub use render::render_skills_section;
+
+mod render;
 
 const SYSTEM_SKILLS_DIR: Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/samples");
 

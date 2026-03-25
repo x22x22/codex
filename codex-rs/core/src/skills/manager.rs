@@ -311,8 +311,7 @@ fn finalize_skill_outcome(
     outcome.disabled_paths = disabled_paths;
     let (by_scripts_dir, by_doc_path) =
         build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
-    outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
-    outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
+    outcome.set_implicit_skill_indexes(by_scripts_dir, by_doc_path);
     outcome
 }
 

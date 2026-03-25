@@ -1451,6 +1451,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-sandboxing",
  "codex-shell-command",
+ "codex-skills",
  "codex-state",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -2577,8 +2578,10 @@ dependencies = [
 name = "codex-skills"
 version = "0.0.0"
 dependencies = [
+ "codex-protocol",
  "codex-utils-absolute-path",
  "include_dir",
+ "serde",
  "thiserror 2.0.18",
 ]
 
@@ -2661,6 +2664,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-shell-command",
+ "codex-skills",
  "codex-state",
  "codex-terminal-detection",
  "codex-tui-app-server",
@@ -2755,6 +2759,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-shell-command",
+ "codex-skills",
  "codex-state",
  "codex-terminal-detection",
  "codex-utils-absolute-path",
