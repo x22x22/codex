@@ -287,7 +287,7 @@ impl RolloutRecorder {
         )
         .await
         {
-            if db_page.items.is_empty() && !fs_page.items.is_empty() {
+            if search_term.is_none() && db_page.items.is_empty() && !fs_page.items.is_empty() {
                 tracing::warn!(
                     "state db discrepancy during list_threads_with_db_fallback: empty_db_page"
                 );
