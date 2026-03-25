@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 
 #[derive(Clone)]
 pub(crate) struct TrackEventsContext {
@@ -48,6 +49,15 @@ pub(crate) struct SkillInvocation {
 pub(crate) enum InvocationType {
     Explicit,
     Implicit,
+}
+
+impl InvocationType {
+    fn tag_value(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::Implicit => "implicit",
+        }
+    }
 }
 
 pub(crate) struct AppInvocation {
@@ -110,9 +120,14 @@ impl AnalyticsEventsQueue {
     }
 
     fn try_send(&self, job: TrackEventsJob) {
-        if self.sender.try_send(job).is_err() {
-            //TODO: add a metric for this
-            tracing::warn!("dropping analytics events: queue is full");
+        if let Err(err) = self.sender.try_send(job) {
+            let (reason, job) = match &err {
+                TrySendError::Full(job) => ("queue_full", job),
+                TrySendError::Closed(job) => ("queue_closed", job),
+            };
+            let job_type = job.job_type();
+            emit_analytics_events_failure_metric(reason, job_type, job.invoke_type_tag(), &[]);
+            tracing::warn!("dropping analytics events job: reason={reason} job_type={job_type}");
         }
     }
 
@@ -243,6 +258,56 @@ enum TrackEventsJob {
     PluginUninstalled(TrackPluginManagementJob),
     PluginEnabled(TrackPluginManagementJob),
     PluginDisabled(TrackPluginManagementJob),
+}
+
+impl TrackEventsJob {
+    fn job_type(&self) -> &'static str {
+        match self {
+            Self::SkillInvocations(_) => "skill_invocations",
+            Self::AppMentioned(_) => "app_mentioned",
+            Self::AppUsed(_) => "app_used",
+            Self::PluginUsed(_) => "plugin_used",
+            Self::PluginInstalled(_) => "plugin_installed",
+            Self::PluginUninstalled(_) => "plugin_uninstalled",
+            Self::PluginEnabled(_) => "plugin_enabled",
+            Self::PluginDisabled(_) => "plugin_disabled",
+        }
+    }
+
+    fn invoke_type_tag(&self) -> Option<&'static str> {
+        match self {
+            Self::SkillInvocations(job) => job
+                .invocations
+                .first()
+                .map(|invocation| invocation.invocation_type.tag_value()),
+            Self::AppMentioned(job) => job
+                .mentions
+                .first()
+                .and_then(|mention| mention.invocation_type.map(InvocationType::tag_value)),
+            Self::AppUsed(job) => job.app.invocation_type.map(InvocationType::tag_value),
+            Self::PluginUsed(_)
+            | Self::PluginInstalled(_)
+            | Self::PluginUninstalled(_)
+            | Self::PluginEnabled(_)
+            | Self::PluginDisabled(_) => None,
+        }
+    }
+}
+
+fn emit_analytics_events_failure_metric<'a>(
+    reason: &'static str,
+    job_type: &'static str,
+    invoke_type: Option<&'static str>,
+    extra_tags: &[(&'a str, &'a str)],
+) {
+    if let Some(metrics) = codex_otel::metrics::global() {
+        let mut tags = vec![("reason", reason), ("job_type", job_type)];
+        if let Some(invoke_type) = invoke_type {
+            tags.push(("invoke_type", invoke_type));
+        }
+        tags.extend(extra_tags.iter().copied());
+        let _ = metrics.counter("codex.analytics_events.emit.failure", /*inc*/ 1, &tags);
+    }
 }
 
 struct TrackSkillInvocationsJob {
@@ -678,17 +743,52 @@ async fn send_track_events(
     if events.is_empty() {
         return;
     }
+    let (job_type, invoke_type) = match events.first() {
+        Some(TrackEventRequest::SkillInvocation(event)) => (
+            "skill_invocations",
+            event
+                .event_params
+                .invoke_type
+                .map(InvocationType::tag_value),
+        ),
+        Some(TrackEventRequest::AppMentioned(event)) => (
+            "app_mentioned",
+            event
+                .event_params
+                .invoke_type
+                .map(InvocationType::tag_value),
+        ),
+        Some(TrackEventRequest::AppUsed(event)) => (
+            "app_used",
+            event
+                .event_params
+                .invoke_type
+                .map(InvocationType::tag_value),
+        ),
+        Some(TrackEventRequest::PluginUsed(_)) => ("plugin_used", None),
+        Some(TrackEventRequest::PluginInstalled(_)) => ("plugin_installed", None),
+        Some(TrackEventRequest::PluginUninstalled(_)) => ("plugin_uninstalled", None),
+        Some(TrackEventRequest::PluginEnabled(_)) => ("plugin_enabled", None),
+        Some(TrackEventRequest::PluginDisabled(_)) => ("plugin_disabled", None),
+        None => unreachable!("events should be non-empty"),
+    };
     let Some(auth) = auth_manager.auth().await else {
+        emit_analytics_events_failure_metric("auth_missing", job_type, invoke_type, &[]);
         return;
     };
     if !auth.is_chatgpt_auth() {
+        emit_analytics_events_failure_metric("non_chatgpt_auth", job_type, invoke_type, &[]);
         return;
     }
     let access_token = match auth.get_token() {
         Ok(token) => token,
-        Err(_) => return,
+        Err(_) => {
+            emit_analytics_events_failure_metric("token_error", job_type, invoke_type, &[]);
+            return;
+        }
     };
     let Some(account_id) = auth.get_account_id() else {
+        emit_analytics_events_failure_metric("account_id_missing", job_type, invoke_type, &[]);
         return;
     };
 
@@ -710,10 +810,17 @@ async fn send_track_events(
         Ok(response) if response.status().is_success() => {}
         Ok(response) => {
             let status = response.status();
+            emit_analytics_events_failure_metric(
+                "http_status",
+                job_type,
+                invoke_type,
+                &[("status_code", status.as_str())],
+            );
             let body = response.text().await.unwrap_or_default();
             tracing::warn!("events failed with status {status}: {body}");
         }
         Err(err) => {
+            emit_analytics_events_failure_metric("request_error", job_type, invoke_type, &[]);
             tracing::warn!("failed to send events request: {err}");
         }
     }
@@ -725,6 +832,13 @@ pub(crate) fn skill_id_for_local_skill(
     skill_path: &Path,
     skill_name: &str,
 ) -> String {
+    tracing::info!(
+        ?repo_url,
+        ?repo_root,
+        skill_path = %skill_path.display(),
+        skill_name,
+        "building analytics skill id for local skill"
+    );
     let path = normalize_path_for_skill_id(repo_url, repo_root, skill_path);
     let prefix = if let Some(url) = repo_url {
         format!("repo_{url}")
@@ -734,7 +848,15 @@ pub(crate) fn skill_id_for_local_skill(
     let raw_id = format!("{prefix}_{path}_{skill_name}");
     let mut hasher = Sha1::new();
     hasher.update(raw_id.as_bytes());
-    format!("{:x}", hasher.finalize())
+    let skill_id = format!("{:x}", hasher.finalize());
+    tracing::info!(
+        normalized_path = path,
+        prefix,
+        raw_id,
+        skill_id,
+        "built analytics skill id for local skill"
+    );
+    skill_id
 }
 
 /// Returns a normalized path for skill ID construction.

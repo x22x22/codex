@@ -5,12 +5,19 @@ use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
 use super::InvocationType;
+use super::TrackAppMentionedJob;
+use super::TrackAppUsedJob;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
+use super::TrackEventsJob;
+use super::TrackPluginManagementJob;
+use super::TrackPluginUsedJob;
+use super::TrackSkillInvocationsJob;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
 use super::normalize_path_for_skill_id;
+use crate::config::ConfigBuilder;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::PluginId;
@@ -21,6 +28,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use tempfile::TempDir;
 use tokio::sync::mpsc;
 
 fn expected_absolute_path(path: &PathBuf) -> String {
@@ -271,6 +279,152 @@ fn plugin_used_dedupe_is_keyed_by_turn_and_plugin() {
     assert_eq!(queue.should_enqueue_plugin_used(&turn_2, &plugin), true);
 }
 
+#[test]
+fn track_events_job_type_uses_expected_tag_values() {
+    let codex_home = TempDir::new().expect("tempdir should create");
+    let config = Arc::new(load_test_config(codex_home.path()));
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+    let cases = vec![
+        (
+            TrackEventsJob::SkillInvocations(TrackSkillInvocationsJob {
+                config: Arc::clone(&config),
+                tracking: tracking.clone(),
+                invocations: Vec::new(),
+            }),
+            "skill_invocations",
+        ),
+        (
+            TrackEventsJob::AppMentioned(TrackAppMentionedJob {
+                config: Arc::clone(&config),
+                tracking: tracking.clone(),
+                mentions: Vec::new(),
+            }),
+            "app_mentioned",
+        ),
+        (
+            TrackEventsJob::AppUsed(TrackAppUsedJob {
+                config: Arc::clone(&config),
+                tracking: tracking.clone(),
+                app: AppInvocation {
+                    connector_id: None,
+                    app_name: None,
+                    invocation_type: None,
+                },
+            }),
+            "app_used",
+        ),
+        (
+            TrackEventsJob::PluginUsed(TrackPluginUsedJob {
+                config: Arc::clone(&config),
+                tracking: tracking.clone(),
+                plugin: sample_plugin_metadata(),
+            }),
+            "plugin_used",
+        ),
+        (
+            TrackEventsJob::PluginInstalled(TrackPluginManagementJob {
+                config: Arc::clone(&config),
+                plugin: sample_plugin_metadata(),
+            }),
+            "plugin_installed",
+        ),
+        (
+            TrackEventsJob::PluginUninstalled(TrackPluginManagementJob {
+                config: Arc::clone(&config),
+                plugin: sample_plugin_metadata(),
+            }),
+            "plugin_uninstalled",
+        ),
+        (
+            TrackEventsJob::PluginEnabled(TrackPluginManagementJob {
+                config: Arc::clone(&config),
+                plugin: sample_plugin_metadata(),
+            }),
+            "plugin_enabled",
+        ),
+        (
+            TrackEventsJob::PluginDisabled(TrackPluginManagementJob {
+                config,
+                plugin: sample_plugin_metadata(),
+            }),
+            "plugin_disabled",
+        ),
+    ];
+
+    for (job, expected) in cases {
+        assert_eq!(job.job_type(), expected);
+    }
+}
+
+#[test]
+fn track_events_job_invoke_type_tag_uses_first_available_value() {
+    let codex_home = TempDir::new().expect("tempdir should create");
+    let config = Arc::new(load_test_config(codex_home.path()));
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+    let explicit_skill_job = TrackEventsJob::SkillInvocations(TrackSkillInvocationsJob {
+        config: Arc::clone(&config),
+        tracking: tracking.clone(),
+        invocations: vec![super::SkillInvocation {
+            skill_name: "doc".to_string(),
+            skill_scope: codex_protocol::protocol::SkillScope::Repo,
+            skill_path: codex_home.path().join("SKILL.md"),
+            invocation_type: InvocationType::Explicit,
+        }],
+    });
+    let implicit_app_job = TrackEventsJob::AppUsed(TrackAppUsedJob {
+        config: Arc::clone(&config),
+        tracking: tracking.clone(),
+        app: AppInvocation {
+            connector_id: Some("drive".to_string()),
+            app_name: Some("Google Drive".to_string()),
+            invocation_type: Some(InvocationType::Implicit),
+        },
+    });
+    let first_value_app_mentioned_job = TrackEventsJob::AppMentioned(TrackAppMentionedJob {
+        config: Arc::clone(&config),
+        tracking: tracking.clone(),
+        mentions: vec![
+            AppInvocation {
+                connector_id: Some("drive".to_string()),
+                app_name: Some("Google Drive".to_string()),
+                invocation_type: Some(InvocationType::Explicit),
+            },
+            AppInvocation {
+                connector_id: Some("calendar".to_string()),
+                app_name: Some("Calendar".to_string()),
+                invocation_type: Some(InvocationType::Implicit),
+            },
+        ],
+    });
+    let empty_skill_job = TrackEventsJob::SkillInvocations(TrackSkillInvocationsJob {
+        config: Arc::clone(&config),
+        tracking: tracking.clone(),
+        invocations: Vec::new(),
+    });
+    let no_invoke_type_job = TrackEventsJob::PluginUsed(TrackPluginUsedJob {
+        config,
+        tracking,
+        plugin: sample_plugin_metadata(),
+    });
+
+    assert_eq!(explicit_skill_job.invoke_type_tag(), Some("explicit"));
+    assert_eq!(implicit_app_job.invoke_type_tag(), Some("implicit"));
+    assert_eq!(
+        first_value_app_mentioned_job.invoke_type_tag(),
+        Some("explicit")
+    );
+    assert_eq!(empty_skill_job.invoke_type_tag(), None);
+    assert_eq!(no_invoke_type_job.invoke_type_tag(), None);
+}
+
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
         plugin_id: PluginId::parse("sample@test").expect("valid plugin id"),
@@ -286,4 +440,18 @@ fn sample_plugin_metadata() -> PluginTelemetryMetadata {
             ],
         }),
     }
+}
+
+fn load_test_config(codex_home: &std::path::Path) -> crate::config::Config {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime should build")
+        .block_on(
+            ConfigBuilder::default()
+                .codex_home(codex_home.to_path_buf())
+                .fallback_cwd(Some(codex_home.to_path_buf()))
+                .build(),
+        )
+        .expect("config should load")
 }
