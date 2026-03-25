@@ -32,6 +32,8 @@ class CreateSessionActivity : Activity() {
         private const val EXTRA_LOCK_TARGET = "lockTarget"
         private const val EXTRA_INITIAL_MODEL = "initialModel"
         private const val EXTRA_INITIAL_REASONING_EFFORT = "initialReasoningEffort"
+        private const val DEFAULT_MODEL = "gpt-5.3-codex-spark"
+        private const val DEFAULT_REASONING_EFFORT = "low"
 
         fun externalCreateSessionIntent(initialPrompt: String): Intent {
             return Intent(ACTION_CREATE_SESSION).apply {
@@ -90,7 +92,10 @@ class CreateSessionActivity : Activity() {
 
     private var selectedReasoningOptions = emptyList<AgentReasoningEffortOption>()
     private lateinit var effortLabelAdapter: ArrayAdapter<String>
-    private var initialSettings = SessionExecutionSettings.default
+    private var initialSettings = SessionExecutionSettings(
+        model = DEFAULT_MODEL,
+        reasoningEffort = DEFAULT_REASONING_EFFORT,
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -181,8 +186,9 @@ class CreateSessionActivity : Activity() {
 
         existingSessionId = intent.getStringExtra(EXTRA_EXISTING_SESSION_ID)?.trim()?.ifEmpty { null }
         initialSettings = SessionExecutionSettings(
-            model = intent.getStringExtra(EXTRA_INITIAL_MODEL)?.trim()?.ifEmpty { null },
-            reasoningEffort = intent.getStringExtra(EXTRA_INITIAL_REASONING_EFFORT)?.trim()?.ifEmpty { null },
+            model = intent.getStringExtra(EXTRA_INITIAL_MODEL)?.trim()?.ifEmpty { null } ?: DEFAULT_MODEL,
+            reasoningEffort = intent.getStringExtra(EXTRA_INITIAL_REASONING_EFFORT)?.trim()?.ifEmpty { null }
+                ?: DEFAULT_REASONING_EFFORT,
         )
         promptInput.setText(intent.getStringExtra(EXTRA_INITIAL_PROMPT).orEmpty())
         promptInput.setSelection(promptInput.text.length)
@@ -547,9 +553,9 @@ class CreateSessionActivity : Activity() {
     private fun fallbackModels(): List<AgentModelOption> {
         return listOf(
             AgentModelOption(
-                id = initialSettings.model ?: "default",
-                model = initialSettings.model ?: "gpt-5.3-codex",
-                displayName = initialSettings.model ?: "Default model",
+                id = initialSettings.model ?: DEFAULT_MODEL,
+                model = initialSettings.model ?: DEFAULT_MODEL,
+                displayName = initialSettings.model ?: DEFAULT_MODEL,
                 description = "Current Agent runtime default",
                 supportedReasoningEfforts = listOf(
                     AgentReasoningEffortOption("minimal", "Fastest"),
@@ -558,7 +564,7 @@ class CreateSessionActivity : Activity() {
                     AgentReasoningEffortOption("high", "Deep"),
                     AgentReasoningEffortOption("xhigh", "Max"),
                 ),
-                defaultReasoningEffort = initialSettings.reasoningEffort ?: "medium",
+                defaultReasoningEffort = initialSettings.reasoningEffort ?: DEFAULT_REASONING_EFFORT,
                 isDefault = true,
             ),
         )
