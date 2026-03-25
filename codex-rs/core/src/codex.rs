@@ -350,7 +350,8 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
-use codex_analytics::CodexThreadInitializedEvent;
+use codex_analytics::CodexThreadContext;
+use codex_analytics::CodexThreadInitializedInput;
 use codex_analytics::InitializationMode;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
@@ -670,23 +671,25 @@ impl Codex {
         session
             .services
             .analytics_events_client
-            .track_thread_initialized(CodexThreadInitializedEvent {
+            .track_thread_initialized(CodexThreadInitializedInput {
                 thread_id: thread_id.to_string(),
                 model: thread_initialized_configuration
                     .collaboration_mode
                     .model()
                     .to_string(),
-                ephemeral: thread_initialized_configuration
-                    .original_config_do_not_use
-                    .ephemeral,
-                initialization_mode,
-                subagent_source: session_source_subagent_source(&thread_session_source),
-                parent_thread_id: session_source_parent_thread_id(&thread_session_source),
-                session_source: thread_session_source,
                 created_at: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
+                thread_context: CodexThreadContext {
+                    ephemeral: thread_initialized_configuration
+                        .original_config_do_not_use
+                        .ephemeral,
+                    session_source: thread_session_source,
+                    initialization_mode,
+                    subagent_source: session_source_subagent_source(&thread_session_source),
+                    parent_thread_id: session_source_parent_thread_id(&thread_session_source),
+                },
             });
 
         // This task will run until Op::Shutdown is received.

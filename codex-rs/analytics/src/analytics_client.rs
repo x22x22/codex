@@ -38,6 +38,23 @@ pub struct CodexThreadInitializedEvent {
     pub created_at: u64,
 }
 
+#[derive(Clone)]
+pub struct CodexThreadInitializedInput {
+    pub thread_id: String,
+    pub model: String,
+    pub created_at: u64,
+    pub thread_context: CodexThreadContext,
+}
+
+#[derive(Clone)]
+pub struct CodexThreadContext {
+    pub ephemeral: bool,
+    pub session_source: SessionSource,
+    pub initialization_mode: InitializationMode,
+    pub subagent_source: Option<SubAgentSource>,
+    pub parent_thread_id: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InitializationMode {
@@ -80,16 +97,12 @@ pub struct AppInvocation {
 }
 
 pub enum AnalyticsInput {
-    ThreadInitialized(ThreadInitializedInput),
+    ThreadInitialized(CodexThreadInitializedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
     PluginUsed(PluginUsedInput),
     PluginStateChanged(PluginStateChangedInput),
-}
-
-pub struct ThreadInitializedInput {
-    pub thread_event: CodexThreadInitializedEvent,
 }
 
 pub struct SkillInvokedInput {
@@ -228,10 +241,8 @@ impl AnalyticsEventsClient {
         }));
     }
 
-    pub fn track_thread_initialized(&self, thread_event: CodexThreadInitializedEvent) {
-        self.record(AnalyticsInput::ThreadInitialized(ThreadInitializedInput {
-            thread_event,
-        }));
+    pub fn track_thread_initialized(&self, input: CodexThreadInitializedInput) {
+        self.record(AnalyticsInput::ThreadInitialized(input));
     }
 
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
@@ -446,19 +457,29 @@ impl AnalyticsReducer {
 
     fn ingest_thread_initialized(
         &mut self,
-        input: ThreadInitializedInput,
+        input: CodexThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
+        let event = CodexThreadInitializedEvent {
+            thread_id: input.thread_id,
+            model: input.model,
+            ephemeral: input.thread_context.ephemeral,
+            session_source: input.thread_context.session_source,
+            initialization_mode: input.thread_context.initialization_mode,
+            subagent_source: input.thread_context.subagent_source,
+            parent_thread_id: input.thread_context.parent_thread_id,
+            created_at: input.created_at,
+        };
         self.threads.insert(
-            input.thread_event.thread_id.clone(),
+            event.thread_id.clone(),
             ThreadState {
-                _initialized_event: input.thread_event.clone(),
+                _initialized_event: event.clone(),
             },
         );
         out.push(TrackEventRequest::ThreadInitialized(
             CodexThreadInitializedEventRequest {
                 event_type: "codex_thread_initialized",
-                event_params: codex_thread_initialized_event_params(input.thread_event),
+                event_params: codex_thread_initialized_event_params(event),
             },
         ));
     }
