@@ -258,7 +258,9 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
+use crate::plugins::ExplicitPluginInstructionsContext;
 use crate::plugins::PluginsManager;
+use crate::plugins::build_explicit_plugin_instructions_context;
 use crate::plugins::build_plugin_developer_sections;
 use crate::plugins::render_plugins_section;
 use crate::project_doc::get_user_instructions;
@@ -2570,12 +2572,14 @@ impl Session {
         .await
     }
 
-    /// `user_input` is only consulted for explicit plugin mentions on this turn.
+    /// `explicit_plugin_instructions` carries the already-resolved turn-local plugin mention
+    /// context from the current user input so this builder can render that guidance without
+    /// re-listing MCP tools.
     async fn build_settings_update_items(
         &self,
         reference_context_item: Option<&TurnContextItem>,
         current_context: &TurnContext,
-        user_input: &[UserInput],
+        explicit_plugin_instructions: &ExplicitPluginInstructionsContext,
     ) -> Vec<ResponseItem> {
         // TODO: Make context updates a pure diff of persisted previous/current TurnContextItem
         // state so replay/backtracking is deterministic. Runtime inputs that affect model-visible
@@ -2587,9 +2591,6 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        let additional_developer_sections = self
-            .build_explicit_plugin_developer_sections(current_context, user_input)
-            .await;
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
             previous_turn_settings.as_ref(),
@@ -2597,46 +2598,8 @@ impl Session {
             shell.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
-            additional_developer_sections,
+            explicit_plugin_instructions,
         )
-    }
-
-    async fn build_explicit_plugin_developer_sections(
-        &self,
-        turn_context: &TurnContext,
-        user_input: &[UserInput],
-    ) -> Vec<String> {
-        if user_input.is_empty() {
-            return Vec::new();
-        }
-
-        let loaded_plugins = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config);
-        let mentioned_plugins =
-            collect_explicit_plugin_mentions(user_input, loaded_plugins.capability_summaries());
-        if mentioned_plugins.is_empty() {
-            return Vec::new();
-        }
-
-        let mcp_tools = self
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .list_all_tools()
-            .await;
-        let available_connectors = if turn_context.apps_enabled() {
-            let connectors = connectors::merge_plugin_apps_with_accessible(
-                loaded_plugins.effective_apps(),
-                connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-            );
-            connectors::with_app_enabled_state(connectors, &turn_context.config)
-        } else {
-            Vec::new()
-        };
-        build_plugin_developer_sections(&mentioned_plugins, &mcp_tools, &available_connectors)
     }
 
     /// Persist the event to rollout and send it to clients.
@@ -3475,13 +3438,14 @@ impl Session {
         }
     }
 
-    /// `maybe_user_input` is only consulted for explicit plugin mentions on this turn.
-    /// Pass `None` when no raw current-turn user input is available, such as compaction callers
-    /// that are rebuilding prompt context from flattened history alone.
+    /// `explicit_plugin_instructions` is optional because compaction/rebuild callers do not have
+    /// the raw current-turn user input needed to resolve explicit plugin mentions. When present,
+    /// it carries the already-resolved plugin/tool/app context for turn-local plugin guidance in
+    /// the canonical developer envelope.
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
-        maybe_user_input: Option<&[UserInput]>,
+        explicit_plugin_instructions: Option<&ExplicitPluginInstructionsContext>,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
@@ -3602,11 +3566,10 @@ impl Session {
         {
             developer_sections.push(plugin_section);
         }
-        if let Some(user_input) = maybe_user_input {
-            developer_sections.extend(
-                self.build_explicit_plugin_developer_sections(turn_context, user_input)
-                    .await,
-            );
+        if let Some(explicit_plugin_instructions) = explicit_plugin_instructions {
+            developer_sections.extend(build_plugin_developer_sections(
+                explicit_plugin_instructions,
+            ));
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(
@@ -3696,26 +3659,27 @@ impl Session {
     /// reinjects full initial context into replacement history. Other non-regular tasks
     /// intentionally do not update the baseline.
     ///
-    /// `user_input` is only used to derive explicit plugin-mention guidance for the canonical
-    /// developer envelope on this turn.
+    /// `explicit_plugin_instructions` carries the current turn's already-resolved explicit
+    /// plugin-mention context so whichever canonical builder path runs can render that guidance
+    /// exactly once without re-listing MCP tools.
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
-        user_input: &[UserInput],
+        explicit_plugin_instructions: &ExplicitPluginInstructionsContext,
     ) {
         let reference_context_item = {
             let state = self.state.lock().await;
             state.reference_context_item()
         };
         let context_items = if reference_context_item.is_none() {
-            self.build_initial_context(turn_context, Some(user_input))
+            self.build_initial_context(turn_context, Some(explicit_plugin_instructions))
                 .await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
             self.build_settings_update_items(
                 reference_context_item.as_ref(),
                 turn_context,
-                user_input,
+                explicit_plugin_instructions,
             )
             .await
         };
@@ -5595,8 +5559,9 @@ pub(crate) async fn run_turn(
         .plugins_manager
         .plugins_for_config(&turn_context.config);
     // Structured plugin:// mentions are resolved from the current session's
-    // enabled plugins here for telemetry/tool selection; the canonical context
-    // builders derive any explicit plugin guidance from this turn's user input.
+    // enabled plugins here for telemetry/tool selection. The canonical context
+    // builders then render explicit plugin guidance from the already-resolved
+    // per-turn plugin context built below.
     let mentioned_plugins =
         collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
     let mcp_tools = if turn_context.apps_enabled() || !mentioned_plugins.is_empty() {
@@ -5686,9 +5651,17 @@ pub(crate) async fn run_turn(
         .iter()
         .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
         .collect::<Vec<_>>();
+    let explicit_plugin_instructions = build_explicit_plugin_instructions_context(
+        &mentioned_plugins,
+        &mcp_tools,
+        &available_connectors,
+    );
 
-    sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref(), &input)
-        .await;
+    sess.record_context_updates_and_set_reference_context_item(
+        turn_context.as_ref(),
+        &explicit_plugin_instructions,
+    )
+    .await;
 
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(

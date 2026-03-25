@@ -7,6 +7,6 @@ Scenario: Explicit plugin mention request layout
 ## Plugin Mention Request
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] Capabilities from the `sample` plugin:\n- Skills from this plugin are prefixed with `sample:`.\n- Apps from this plugin available in this session: `Google Calendar`.\nUse these plugin-associated capabilities to help solv...
+    [02] <EXPLICIT_PLUGIN_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:help me inspect the sample plugin

@@ -125,7 +125,7 @@ fn truncates_rollout_from_start_applies_thread_rollback_markers() {
 async fn ignores_session_prefix_messages_when_truncating_rollout_from_start() {
     let (session, turn_context) = make_session_and_context().await;
     let mut items = session
-        .build_initial_context(&turn_context, /*maybe_user_input*/ None)
+        .build_initial_context(&turn_context, /*explicit_plugin_instructions*/ None)
         .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));

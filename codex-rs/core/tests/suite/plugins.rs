@@ -8,6 +8,7 @@ use std::time::Instant;
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_features::Feature;
+use codex_protocol::protocol::EXPLICIT_PLUGIN_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -325,14 +326,14 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     assert!(
         developer_messages
             .iter()
-            .any(|text| text.contains("Capabilities from the `sample` plugin:")),
+            .any(|text| text.contains(EXPLICIT_PLUGIN_INSTRUCTIONS_OPEN_TAG)),
         "expected plugin mention guidance in developer messages: {developer_messages:?}"
     );
     let user_messages = request.message_input_texts("user");
     assert!(
         user_messages
             .iter()
-            .all(|text| !text.contains("Capabilities from the `sample` plugin:")),
+            .all(|text| !text.contains(EXPLICIT_PLUGIN_INSTRUCTIONS_OPEN_TAG)),
         "expected plugin mention guidance to stay out of user messages: {user_messages:?}"
     );
     assert!(

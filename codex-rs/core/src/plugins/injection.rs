@@ -7,20 +7,34 @@ use crate::mcp_connection_manager::ToolInfo;
 use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::render_explicit_plugin_instructions;
 
-pub(crate) fn build_plugin_developer_sections(
+/// Turn-local data needed to render explicit plugin-mention guidance inside the
+/// canonical pre-user developer envelope.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ExplicitPluginInstructionsContext {
+    entries: Vec<ExplicitPluginInstructionsEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExplicitPluginInstructionsEntry {
+    plugin: PluginCapabilitySummary,
+    available_mcp_servers: Vec<String>,
+    available_apps: Vec<String>,
+}
+
+/// Capture the turn-local plugin/tool/app ingredients needed to render explicit plugin guidance
+/// later in the canonical context builders, without re-listing MCP tools.
+pub(crate) fn build_explicit_plugin_instructions_context(
     mentioned_plugins: &[PluginCapabilitySummary],
     mcp_tools: &HashMap<String, ToolInfo>,
     available_connectors: &[connectors::AppInfo],
-) -> Vec<String> {
+) -> ExplicitPluginInstructionsContext {
     if mentioned_plugins.is_empty() {
-        return Vec::new();
+        return ExplicitPluginInstructionsContext::default();
     }
 
-    // Turn each explicit plugin mention into developer-message sections that
-    // can be folded into the canonical pre-user developer envelope for this turn.
-    mentioned_plugins
+    let entries = mentioned_plugins
         .iter()
-        .filter_map(|plugin| {
+        .map(|plugin| {
             let available_mcp_servers = mcp_tools
                 .values()
                 .filter(|tool| {
@@ -47,7 +61,36 @@ pub(crate) fn build_plugin_developer_sections(
                 .collect::<BTreeSet<String>>()
                 .into_iter()
                 .collect::<Vec<_>>();
-            render_explicit_plugin_instructions(plugin, &available_mcp_servers, &available_apps)
+
+            ExplicitPluginInstructionsEntry {
+                plugin: plugin.clone(),
+                available_mcp_servers,
+                available_apps,
+            }
+        })
+        .collect();
+
+    ExplicitPluginInstructionsContext { entries }
+}
+
+/// Render explicit plugin-mention guidance from the already-resolved per-turn plugin context.
+///
+/// The live turn path builds `ExplicitPluginInstructionsContext` once from the current turn's
+/// plugin/tool/app inventory, then whichever canonical context builder runs uses this renderer.
+pub(crate) fn build_plugin_developer_sections(
+    explicit_plugin_instructions: &ExplicitPluginInstructionsContext,
+) -> Vec<String> {
+    // Turn each explicit plugin mention into developer-message sections that
+    // can be folded into the canonical pre-user developer envelope for this turn.
+    explicit_plugin_instructions
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            render_explicit_plugin_instructions(
+                &entry.plugin,
+                &entry.available_mcp_servers,
+                &entry.available_apps,
+            )
         })
         .collect()
 }

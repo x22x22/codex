@@ -1,4 +1,6 @@
 use crate::plugins::PluginCapabilitySummary;
+use codex_protocol::protocol::EXPLICIT_PLUGIN_INSTRUCTIONS_CLOSE_TAG;
+use codex_protocol::protocol::EXPLICIT_PLUGIN_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 
@@ -84,7 +86,10 @@ pub(crate) fn render_explicit_plugin_instructions(
 
     lines.push("Use these plugin-associated capabilities to help solve the task.".to_string());
 
-    Some(lines.join("\n"))
+    let body = lines.join("\n");
+    Some(format!(
+        "{EXPLICIT_PLUGIN_INSTRUCTIONS_OPEN_TAG}\n{body}\n{EXPLICIT_PLUGIN_INSTRUCTIONS_CLOSE_TAG}"
+    ))
 }
 
 #[cfg(test)]

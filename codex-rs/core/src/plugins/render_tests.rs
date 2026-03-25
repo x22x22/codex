@@ -21,3 +21,22 @@ fn render_plugins_section_includes_descriptions_and_skill_naming_guidance() {
 
     assert_eq!(rendered, expected);
 }
+
+#[test]
+fn render_explicit_plugin_instructions_wraps_turn_local_guidance_in_stable_tag() {
+    let rendered = render_explicit_plugin_instructions(
+        &PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "sample".to_string(),
+            has_skills: true,
+            ..PluginCapabilitySummary::default()
+        },
+        &[],
+        &["Google Calendar".to_string()],
+    )
+    .expect("explicit plugin instructions should render");
+
+    let expected = "<explicit_plugin_instructions>\nCapabilities from the `sample` plugin:\n- Skills from this plugin are prefixed with `sample:`.\n- Apps from this plugin available in this session: `Google Calendar`.\nUse these plugin-associated capabilities to help solve the task.\n</explicit_plugin_instructions>";
+
+    assert_eq!(rendered, expected);
+}
