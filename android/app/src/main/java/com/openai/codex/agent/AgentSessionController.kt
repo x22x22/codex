@@ -19,7 +19,6 @@ class AgentSessionController(context: Context) {
         private const val BRIDGE_RESPONSE_PREFIX = "__codex_bridge_result__ "
         private const val DIAGNOSTIC_NOT_LOADED = "Diagnostics not loaded."
         private const val MAX_TIMELINE_EVENTS = 12
-        private const val MAX_EVENT_MESSAGE_CHARS = 240
         private const val PREFERRED_GENIE_PACKAGE = "com.openai.codex.genie"
         private const val QUESTION_ANSWER_RETRY_COUNT = 10
         private const val QUESTION_ANSWER_RETRY_DELAY_MS = 50L
@@ -603,7 +602,7 @@ class AgentSessionController(context: Context) {
         for (index in events.indices.reversed()) {
             val event = events[index]
             if (event.type == type && event.message != null) {
-                return summarizeEventMessage(event.message)
+                return normalizeEventMessage(event.message)
             }
         }
         return null
@@ -625,11 +624,11 @@ class AgentSessionController(context: Context) {
             return "No framework events yet."
         }
         return events.takeLast(MAX_TIMELINE_EVENTS).joinToString("\n") { event ->
-            "${eventTypeToString(event.type)}: ${summarizeEventMessage(event.message).orEmpty()}"
+            "${eventTypeToString(event.type)}: ${normalizeEventMessage(event.message).orEmpty()}"
         }
     }
 
-    private fun summarizeEventMessage(message: String?): String? {
+    private fun normalizeEventMessage(message: String?): String? {
         val trimmed = message?.trim()?.takeIf(String::isNotEmpty) ?: return null
         if (trimmed.startsWith(BRIDGE_REQUEST_PREFIX)) {
             return summarizeBridgeRequest(trimmed)
@@ -637,11 +636,7 @@ class AgentSessionController(context: Context) {
         if (trimmed.startsWith(BRIDGE_RESPONSE_PREFIX)) {
             return summarizeBridgeResponse(trimmed)
         }
-        return if (trimmed.length <= MAX_EVENT_MESSAGE_CHARS) {
-            trimmed
-        } else {
-            trimmed.take(MAX_EVENT_MESSAGE_CHARS) + "…"
-        }
+        return trimmed
     }
 
     private fun summarizeBridgeRequest(message: String): String {
