@@ -11,6 +11,7 @@ use std::process::Stdio;
 
 use crate::allow::compute_allow_paths;
 use crate::allow::AllowDenyPaths;
+use crate::env::redirect_temp_env_to_codex_home;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
@@ -133,11 +134,13 @@ fn run_setup_refresh_inner(
     ) {
         return Ok(());
     }
+    let mut effective_env_map = env_map.clone();
+    redirect_temp_env_to_codex_home(&mut effective_env_map, codex_home)?;
     let (read_roots, write_roots) = build_payload_roots(
         policy,
         policy_cwd,
         command_cwd,
-        env_map,
+        &effective_env_map,
         codex_home,
         read_roots_override,
         write_roots_override,
@@ -590,11 +593,13 @@ pub fn run_elevated_setup(
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
+    let mut effective_env_map = env_map.clone();
+    redirect_temp_env_to_codex_home(&mut effective_env_map, codex_home)?;
     let (read_roots, write_roots) = build_payload_roots(
         policy,
         policy_cwd,
         command_cwd,
-        env_map,
+        &effective_env_map,
         codex_home,
         read_roots_override,
         write_roots_override,
@@ -671,15 +676,18 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::build_payload_roots;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::profile_read_roots;
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
+    use crate::env::redirect_temp_env_to_codex_home;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
@@ -721,6 +729,54 @@ mod tests {
         let roots = profile_read_roots(&missing_profile);
 
         assert_eq!(vec![missing_profile], roots);
+    }
+
+    #[test]
+    fn build_payload_roots_uses_codex_managed_temp_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let original_temp = tmp.path().join("AppData").join("Local").join("Temp");
+        let codex_home = tmp.path().join("codex-home");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&original_temp).expect("create original temp");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::Full,
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let mut env_map = HashMap::from([
+            (
+                "TEMP".to_string(),
+                original_temp.to_string_lossy().to_string(),
+            ),
+            (
+                "TMP".to_string(),
+                original_temp.to_string_lossy().to_string(),
+            ),
+        ]);
+        let redirected_temp =
+            redirect_temp_env_to_codex_home(&mut env_map, &codex_home).expect("redirect temp");
+
+        let (_read_roots, write_roots) = build_payload_roots(
+            &policy,
+            &command_cwd,
+            &command_cwd,
+            &env_map,
+            &codex_home,
+            None,
+            None,
+        );
+
+        assert!(
+            write_roots.contains(&dunce::canonicalize(&command_cwd).expect("canonical workspace"))
+        );
+        assert!(write_roots
+            .contains(&dunce::canonicalize(&redirected_temp).expect("canonical redirected temp")));
+        assert!(!write_roots
+            .contains(&dunce::canonicalize(&original_temp).expect("canonical original temp")));
     }
 
     #[test]

@@ -184,6 +184,7 @@ mod windows_impl {
     use super::env::apply_no_network_to_env;
     use super::env::ensure_non_interactive_pager;
     use super::env::normalize_null_device_env;
+    use super::env::redirect_temp_env_to_codex_home;
     use super::logging::log_failure;
     use super::logging::log_start;
     use super::logging::log_success;
@@ -299,6 +300,7 @@ mod windows_impl {
         let apply_network_block = should_apply_network_block(&policy);
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
+        redirect_temp_env_to_codex_home(&mut env_map, codex_home)?;
         if apply_network_block {
             apply_no_network_to_env(&mut env_map)?;
         }

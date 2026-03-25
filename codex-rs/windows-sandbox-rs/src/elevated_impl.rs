@@ -6,6 +6,7 @@ mod windows_impl {
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
+    use crate::env::redirect_temp_env_to_codex_home;
     use crate::helper_materialization::resolve_helper_for_launch;
     use crate::helper_materialization::HelperExecutable;
     use crate::identity::require_logon_sandbox_creds;
@@ -216,6 +217,7 @@ mod windows_impl {
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         inherit_path_env(&mut env_map);
+        redirect_temp_env_to_codex_home(&mut env_map, codex_home)?;
         inject_git_safe_directory(&mut env_map, cwd, None);
         let current_dir = cwd.to_path_buf();
         // Use a temp-based log dir that the sandbox user can write.

@@ -18,6 +18,19 @@ pub fn normalize_null_device_env(env_map: &mut HashMap<String, String>) {
     }
 }
 
+pub fn redirect_temp_env_to_codex_home(
+    env_map: &mut HashMap<String, String>,
+    codex_home: &Path,
+) -> Result<PathBuf> {
+    let temp_dir = codex_home.join(".sandbox-tmp");
+    fs::create_dir_all(&temp_dir)?;
+    let temp_value = temp_dir.to_string_lossy().to_string();
+    env_map.insert("TEMP".into(), temp_value.clone());
+    env_map.insert("TMP".into(), temp_value.clone());
+    env_map.insert("TMPDIR".into(), temp_value);
+    Ok(temp_dir)
+}
+
 pub fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
     env_map
         .entry("GIT_PAGER".into())
@@ -171,4 +184,31 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     prepend_path(env_map, &base.to_string_lossy());
     reorder_pathext_for_stubs(env_map);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redirect_temp_env_to_codex_home;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    #[test]
+    fn redirects_temp_env_to_codex_home_managed_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let mut env_map = HashMap::from([
+            ("TEMP".to_string(), r"C:\Users\alice\AppData\Local\Temp".to_string()),
+            ("TMP".to_string(), r"C:\Users\alice\AppData\Local\Temp".to_string()),
+        ]);
+
+        let temp_dir =
+            redirect_temp_env_to_codex_home(&mut env_map, &codex_home).expect("redirect temp");
+        let temp_value = temp_dir.to_string_lossy().to_string();
+
+        assert_eq!(codex_home.join(".sandbox-tmp"), temp_dir);
+        assert_eq!(Some(&temp_value), env_map.get("TEMP"));
+        assert_eq!(Some(&temp_value), env_map.get("TMP"));
+        assert_eq!(Some(&temp_value), env_map.get("TMPDIR"));
+        assert!(temp_dir.is_dir(), "redirected temp dir should exist");
+    }
 }
