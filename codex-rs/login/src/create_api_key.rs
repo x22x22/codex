@@ -313,23 +313,29 @@ async fn wait_for_default_project(
     let deadline = std::time::Instant::now() + Duration::from_secs(timeout_seconds);
     loop {
         let organizations = list_organizations(client, api_base, session_key).await?;
-        let last_state = if let Some(organization) = select_active_organization(&organizations) {
-            let projects = list_projects(client, api_base, session_key, &organization.id).await?;
-            if let Some(project) = find_default_project(&projects) {
-                return Ok(ProvisioningTarget {
-                    organization_id: organization.id.clone(),
-                    organization_title: organization.title.clone(),
-                    project_id: project.id.clone(),
-                    project_title: project.title.clone(),
-                });
+        let last_state = if organizations.is_empty() {
+            "no organization found".to_string()
+        } else {
+            let ordered_organizations = organizations_by_preference(&organizations);
+            let mut project_count = 0;
+            for organization in ordered_organizations {
+                let projects =
+                    list_projects(client, api_base, session_key, &organization.id).await?;
+                project_count += projects.len();
+                if let Some(project) = find_default_project(&projects) {
+                    return Ok(ProvisioningTarget {
+                        organization_id: organization.id.clone(),
+                        organization_title: organization.title.clone(),
+                        project_id: project.id.clone(),
+                        project_title: project.title.clone(),
+                    });
+                }
             }
             format!(
-                "organization `{}` exists, but no default project is ready yet (saw {} projects).",
-                organization.id,
-                projects.len()
+                "checked {} organizations and {} projects, but no default project is ready yet.",
+                organizations.len(),
+                project_count
             )
-        } else {
-            "no organization found".to_string()
         };
 
         if std::time::Instant::now() >= deadline {
@@ -345,16 +351,22 @@ async fn wait_for_default_project(
     }
 }
 
-fn select_active_organization(organizations: &[Organization]) -> Option<&Organization> {
-    organizations
-        .iter()
-        .find(|organization| organization.is_default)
-        .or_else(|| {
-            organizations
-                .iter()
-                .find(|organization| organization.personal)
-        })
-        .or_else(|| organizations.first())
+fn organizations_by_preference(organizations: &[Organization]) -> Vec<&Organization> {
+    let mut ordered_organizations = organizations.iter().enumerate().collect::<Vec<_>>();
+    ordered_organizations.sort_by_key(|(index, organization)| {
+        let rank = if organization.is_default {
+            0
+        } else if organization.personal {
+            1
+        } else {
+            2
+        };
+        (rank, *index)
+    });
+    ordered_organizations
+        .into_iter()
+        .map(|(_, organization)| organization)
+        .collect()
 }
 
 fn find_default_project(projects: &[Project]) -> Option<&Project> {

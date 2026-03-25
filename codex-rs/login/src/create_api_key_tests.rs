@@ -11,7 +11,7 @@ use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
 #[test]
-fn select_active_organization_prefers_default_then_personal_then_first() {
+fn organizations_by_preference_orders_default_then_personal_then_input_order() {
     let organizations = vec![
         Organization {
             id: "org-first".to_string(),
@@ -33,9 +33,12 @@ fn select_active_organization_prefers_default_then_personal_then_first() {
         },
     ];
 
-    let selected = select_active_organization(&organizations);
+    let selected = organizations_by_preference(&organizations);
 
-    assert_eq!(selected, organizations.get(2));
+    assert_eq!(
+        selected,
+        vec![&organizations[2], &organizations[1], &organizations[0]]
+    );
 }
 
 #[test]
@@ -97,6 +100,10 @@ async fn create_api_key_from_authorization_code_creates_api_key() {
                     "id": "org-default",
                     "title": "Default Org",
                     "is_default": true,
+                },
+                {
+                    "id": "org-secondary",
+                    "title": "Secondary Org",
                 }
             ]
         })))
@@ -104,6 +111,15 @@ async fn create_api_key_from_authorization_code_creates_api_key() {
         .await;
     Mock::given(method("GET"))
         .and(path("/dashboard/organizations/org-default/projects"))
+        .and(query_param("detail", "basic"))
+        .and(query_param("limit", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": []
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/dashboard/organizations/org-secondary/projects"))
         .and(query_param("detail", "basic"))
         .and(query_param("limit", "100"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -119,7 +135,7 @@ async fn create_api_key_from_authorization_code_creates_api_key() {
         .await;
     Mock::given(method("POST"))
         .and(path(
-            "/dashboard/organizations/org-default/projects/proj-default/api_keys",
+            "/dashboard/organizations/org-secondary/projects/proj-default/api_keys",
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "key": {
@@ -156,8 +172,8 @@ async fn create_api_key_from_authorization_code_creates_api_key() {
     assert_eq!(
         output,
         CreatedApiKey {
-            organization_id: "org-default".to_string(),
-            organization_title: Some("Default Org".to_string()),
+            organization_id: "org-secondary".to_string(),
+            organization_title: Some("Secondary Org".to_string()),
             default_project_id: "proj-default".to_string(),
             default_project_title: Some("Default Project".to_string()),
             project_api_key: "sk-proj-123".to_string(),

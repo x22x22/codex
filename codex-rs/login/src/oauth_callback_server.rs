@@ -385,16 +385,14 @@ fn process_authorization_code_request(
                 parsed_url.query_pairs().into_owned().collect();
 
             if params.get("state").map(String::as_str) != Some(expected_state) {
-                return HandledRequest::ResponseAndExit {
-                    status: StatusCode(400),
-                    headers: html_headers(),
-                    body: b"<h1>State mismatch</h1><p>Return to your terminal and try again.</p>"
-                        .to_vec(),
-                    result: Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "State mismatch in OAuth callback.",
-                    )),
-                };
+                let mut response = Response::from_string(
+                    "<h1>State mismatch</h1><p>Return to your terminal and try again.</p>",
+                )
+                .with_status_code(400);
+                if let Some(header) = html_headers().into_iter().next() {
+                    response = response.with_header(header);
+                }
+                return HandledRequest::Response(response);
             }
 
             if let Some(error_code) = params.get("error") {
@@ -450,4 +448,25 @@ fn authorization_code_error_message(error_code: &str, error_description: Option<
     }
 
     format!("Authentication failed: {error_code}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_authorization_code_request_keeps_server_running_on_state_mismatch() {
+        let response = process_authorization_code_request(
+            "/auth/callback?state=wrong-state&code=auth-code",
+            "/auth/callback",
+            "expected-state",
+        );
+
+        match response {
+            HandledRequest::Response(_) => {}
+            HandledRequest::RedirectWithHeader(_) | HandledRequest::ResponseAndExit { .. } => {
+                panic!("state mismatch should return a response without exiting")
+            }
+        }
+    }
 }
