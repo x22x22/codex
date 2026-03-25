@@ -1,9 +1,9 @@
-use crate::AuthManager;
-use crate::config::Config;
-use crate::default_client::create_client;
-use crate::plugins::PluginTelemetryMetadata;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
+use codex_login::AuthManager;
+use codex_login::default_client::create_client;
+use codex_login::default_client::originator;
+use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -28,60 +28,60 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
-pub(crate) struct TrackEventsContext {
-    pub(crate) model_slug: String,
-    pub(crate) thread_id: String,
-    pub(crate) turn_id: String,
+pub struct TrackEventsContext {
+    pub model_slug: String,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Clone)]
-pub(crate) struct CodexThreadInitializedEvent {
-    pub(crate) thread_id: String,
-    pub(crate) model: String,
-    pub(crate) model_provider: String,
-    pub(crate) reasoning_effort: Option<ReasoningEffort>,
-    pub(crate) reasoning_summary: Option<ReasoningSummary>,
-    pub(crate) service_tier: Option<ServiceTier>,
-    pub(crate) approval_policy: AskForApproval,
-    pub(crate) approvals_reviewer: ApprovalsReviewer,
-    pub(crate) sandbox_policy: SandboxPolicy,
-    pub(crate) sandbox_network_access: bool,
-    pub(crate) collaboration_mode: ModeKind,
-    pub(crate) personality: Option<Personality>,
-    pub(crate) ephemeral: bool,
-    pub(crate) session_source: SessionSource,
-    pub(crate) initialization_mode: InitializationMode,
-    pub(crate) subagent_source: Option<SubAgentSource>,
-    pub(crate) parent_thread_id: Option<String>,
-    pub(crate) created_at: u64,
+pub struct CodexThreadInitializedEvent {
+    pub thread_id: String,
+    pub model: String,
+    pub model_provider: String,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: Option<ReasoningSummary>,
+    pub service_tier: Option<ServiceTier>,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_policy: SandboxPolicy,
+    pub sandbox_network_access: bool,
+    pub collaboration_mode: ModeKind,
+    pub personality: Option<Personality>,
+    pub ephemeral: bool,
+    pub session_source: SessionSource,
+    pub initialization_mode: InitializationMode,
+    pub subagent_source: Option<SubAgentSource>,
+    pub parent_thread_id: Option<String>,
+    pub created_at: u64,
 }
 
 #[derive(Clone)]
-pub(crate) struct CodexTurnEvent {
-    pub(crate) submission_type: Option<SubmissionType>,
-    pub(crate) model_provider: String,
-    pub(crate) sandbox_policy: SandboxPolicy,
-    pub(crate) reasoning_effort: Option<ReasoningEffort>,
-    pub(crate) reasoning_summary: Option<ReasoningSummary>,
-    pub(crate) service_tier: Option<ServiceTier>,
-    pub(crate) approval_policy: AskForApproval,
-    pub(crate) approvals_reviewer: ApprovalsReviewer,
-    pub(crate) sandbox_network_access: bool,
-    pub(crate) collaboration_mode: ModeKind,
-    pub(crate) personality: Option<Personality>,
-    pub(crate) num_input_images: usize,
-    pub(crate) is_first_turn: bool,
+pub struct CodexTurnEvent {
+    pub submission_type: Option<SubmissionType>,
+    pub model_provider: String,
+    pub sandbox_policy: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: Option<ReasoningSummary>,
+    pub service_tier: Option<ServiceTier>,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_network_access: bool,
+    pub collaboration_mode: ModeKind,
+    pub personality: Option<Personality>,
+    pub num_input_images: usize,
+    pub is_first_turn: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum InitializationMode {
+pub enum InitializationMode {
     New,
     Forked,
     Resumed,
 }
 
-pub(crate) fn build_track_events_context(
+pub fn build_track_events_context(
     model_slug: String,
     thread_id: String,
     turn_id: String,
@@ -94,24 +94,24 @@ pub(crate) fn build_track_events_context(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SkillInvocation {
-    pub(crate) skill_name: String,
-    pub(crate) skill_scope: SkillScope,
-    pub(crate) skill_path: PathBuf,
-    pub(crate) invocation_type: InvocationType,
+pub struct SkillInvocation {
+    pub skill_name: String,
+    pub skill_scope: SkillScope,
+    pub skill_path: PathBuf,
+    pub invocation_type: InvocationType,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum InvocationType {
+pub enum InvocationType {
     Explicit,
     Implicit,
 }
 
-pub(crate) struct AppInvocation {
-    pub(crate) connector_id: Option<String>,
-    pub(crate) app_name: Option<String>,
-    pub(crate) invocation_type: Option<InvocationType>,
+pub struct AppInvocation {
+    pub connector_id: Option<String>,
+    pub app_name: Option<String>,
+    pub invocation_type: Option<InvocationType>,
 }
 
 #[derive(Clone)]
@@ -124,44 +124,44 @@ pub(crate) struct AnalyticsEventsQueue {
 #[derive(Clone)]
 pub struct AnalyticsEventsClient {
     queue: AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
 }
 
 impl AnalyticsEventsQueue {
-    pub(crate) fn new(auth_manager: Arc<AuthManager>) -> Self {
+    pub(crate) fn new(auth_manager: Arc<AuthManager>, base_url: String) -> Self {
         let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
         tokio::spawn(async move {
             while let Some(job) = receiver.recv().await {
                 match job {
                     TrackEventsJob::SkillInvocations(job) => {
-                        send_track_skill_invocations(&auth_manager, job).await;
+                        send_track_skill_invocations(&auth_manager, &base_url, job).await;
                     }
                     TrackEventsJob::ThreadInitialized(job) => {
                         send_track_thread_initialized(&auth_manager, job).await;
                     }
                     TrackEventsJob::AppMentioned(job) => {
-                        send_track_app_mentioned(&auth_manager, job).await;
+                        send_track_app_mentioned(&auth_manager, &base_url, job).await;
                     }
                     TrackEventsJob::AppUsed(job) => {
-                        send_track_app_used(&auth_manager, job).await;
+                        send_track_app_used(&auth_manager, &base_url, job).await;
                     }
                     TrackEventsJob::TurnEvent(job) => {
                         send_track_turn_event(&auth_manager, job).await;
                     }
                     TrackEventsJob::PluginUsed(job) => {
-                        send_track_plugin_used(&auth_manager, job).await;
+                        send_track_plugin_used(&auth_manager, &base_url, job).await;
                     }
                     TrackEventsJob::PluginInstalled(job) => {
-                        send_track_plugin_installed(&auth_manager, job).await;
+                        send_track_plugin_installed(&auth_manager, &base_url, job).await;
                     }
                     TrackEventsJob::PluginUninstalled(job) => {
-                        send_track_plugin_uninstalled(&auth_manager, job).await;
+                        send_track_plugin_uninstalled(&auth_manager, &base_url, job).await;
                     }
                     TrackEventsJob::PluginEnabled(job) => {
-                        send_track_plugin_enabled(&auth_manager, job).await;
+                        send_track_plugin_enabled(&auth_manager, &base_url, job).await;
                     }
                     TrackEventsJob::PluginDisabled(job) => {
-                        send_track_plugin_disabled(&auth_manager, job).await;
+                        send_track_plugin_disabled(&auth_manager, &base_url, job).await;
                     }
                 }
             }
@@ -211,58 +211,49 @@ impl AnalyticsEventsQueue {
 }
 
 impl AnalyticsEventsClient {
-    pub fn new(config: Arc<Config>, auth_manager: Arc<AuthManager>) -> Self {
+    pub fn new(
+        auth_manager: Arc<AuthManager>,
+        base_url: String,
+        analytics_enabled: Option<bool>,
+    ) -> Self {
         Self {
-            queue: AnalyticsEventsQueue::new(Arc::clone(&auth_manager)),
-            config,
+            queue: AnalyticsEventsQueue::new(Arc::clone(&auth_manager), base_url),
+            analytics_enabled,
         }
     }
 
-    pub(crate) fn track_skill_invocations(
+    pub fn track_skill_invocations(
         &self,
         tracking: TrackEventsContext,
         invocations: Vec<SkillInvocation>,
     ) {
         track_skill_invocations(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             Some(tracking),
             invocations,
         );
     }
 
-    pub(crate) fn track_thread_initialized(&self, thread_event: CodexThreadInitializedEvent) {
-        track_thread_initialized(&self.queue, Arc::clone(&self.config), thread_event);
+    pub fn track_thread_initialized(&self, thread_event: CodexThreadInitializedEvent) {
+        track_thread_initialized(&self.queue, self.analytics_enabled, thread_event);
     }
 
-    pub(crate) fn track_app_mentioned(
-        &self,
-        tracking: TrackEventsContext,
-        mentions: Vec<AppInvocation>,
-    ) {
+    pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
         track_app_mentioned(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             Some(tracking),
             mentions,
         );
     }
 
-    pub(crate) fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
-        track_app_used(&self.queue, Arc::clone(&self.config), Some(tracking), app);
+    pub fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
+        track_app_used(&self.queue, self.analytics_enabled, Some(tracking), app);
     }
 
-    pub(crate) fn track_plugin_used(
-        &self,
-        tracking: TrackEventsContext,
-        plugin: PluginTelemetryMetadata,
-    ) {
-        track_plugin_used(
-            &self.queue,
-            Arc::clone(&self.config),
-            Some(tracking),
-            plugin,
-        );
+    pub fn track_plugin_used(&self, tracking: TrackEventsContext, plugin: PluginTelemetryMetadata) {
+        track_plugin_used(&self.queue, self.analytics_enabled, Some(tracking), plugin);
     }
 
     pub(crate) fn track_turn_event(
@@ -272,7 +263,7 @@ impl AnalyticsEventsClient {
     ) {
         track_turn_event(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             Some(tracking),
             turn_event,
         );
@@ -281,7 +272,7 @@ impl AnalyticsEventsClient {
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             PluginManagementEventType::Installed,
             plugin,
         );
@@ -290,7 +281,7 @@ impl AnalyticsEventsClient {
     pub fn track_plugin_uninstalled(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             PluginManagementEventType::Uninstalled,
             plugin,
         );
@@ -299,7 +290,7 @@ impl AnalyticsEventsClient {
     pub fn track_plugin_enabled(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             PluginManagementEventType::Enabled,
             plugin,
         );
@@ -308,7 +299,7 @@ impl AnalyticsEventsClient {
     pub fn track_plugin_disabled(&self, plugin: PluginTelemetryMetadata) {
         track_plugin_management(
             &self.queue,
-            Arc::clone(&self.config),
+            self.analytics_enabled,
             PluginManagementEventType::Disabled,
             plugin,
         );
@@ -329,42 +320,42 @@ enum TrackEventsJob {
 }
 
 struct TrackSkillInvocationsJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: TrackEventsContext,
     invocations: Vec<SkillInvocation>,
 }
 
 struct TrackThreadInitializedJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     thread_event: CodexThreadInitializedEvent,
 }
 
 struct TrackAppMentionedJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: TrackEventsContext,
     mentions: Vec<AppInvocation>,
 }
 
 struct TrackAppUsedJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: TrackEventsContext,
     app: AppInvocation,
 }
 
 struct TrackTurnEventJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: TrackEventsContext,
     turn_event: CodexTurnEvent,
 }
 
 struct TrackPluginUsedJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: TrackEventsContext,
     plugin: PluginTelemetryMetadata,
 }
 
 struct TrackPluginManagementJob {
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     plugin: PluginTelemetryMetadata,
 }
 
@@ -531,11 +522,11 @@ struct CodexPluginUsedEventRequest {
 
 pub(crate) fn track_skill_invocations(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: Option<TrackEventsContext>,
     invocations: Vec<SkillInvocation>,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -545,7 +536,7 @@ pub(crate) fn track_skill_invocations(
         return;
     }
     let job = TrackEventsJob::SkillInvocations(TrackSkillInvocationsJob {
-        config,
+        analytics_enabled,
         tracking,
         invocations,
     });
@@ -554,14 +545,14 @@ pub(crate) fn track_skill_invocations(
 
 pub(crate) fn track_thread_initialized(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     thread_event: CodexThreadInitializedEvent,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let job = TrackEventsJob::ThreadInitialized(TrackThreadInitializedJob {
-        config,
+        analytics_enabled,
         thread_event,
     });
     queue.try_send(job);
@@ -569,11 +560,11 @@ pub(crate) fn track_thread_initialized(
 
 pub(crate) fn track_app_mentioned(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: Option<TrackEventsContext>,
     mentions: Vec<AppInvocation>,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -583,7 +574,7 @@ pub(crate) fn track_app_mentioned(
         return;
     }
     let job = TrackEventsJob::AppMentioned(TrackAppMentionedJob {
-        config,
+        analytics_enabled,
         tracking,
         mentions,
     });
@@ -592,11 +583,11 @@ pub(crate) fn track_app_mentioned(
 
 pub(crate) fn track_app_used(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: Option<TrackEventsContext>,
     app: AppInvocation,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -606,7 +597,7 @@ pub(crate) fn track_app_used(
         return;
     }
     let job = TrackEventsJob::AppUsed(TrackAppUsedJob {
-        config,
+        analytics_enabled,
         tracking,
         app,
     });
@@ -615,18 +606,18 @@ pub(crate) fn track_app_used(
 
 pub(crate) fn track_turn_event(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: Option<TrackEventsContext>,
     turn_event: CodexTurnEvent,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let Some(tracking) = tracking else {
         return;
     };
     let job = TrackEventsJob::TurnEvent(TrackTurnEventJob {
-        config,
+        analytics_enabled,
         tracking,
         turn_event,
     });
@@ -635,11 +626,11 @@ pub(crate) fn track_turn_event(
 
 pub(crate) fn track_plugin_used(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     tracking: Option<TrackEventsContext>,
     plugin: PluginTelemetryMetadata,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
     let Some(tracking) = tracking else {
@@ -649,7 +640,7 @@ pub(crate) fn track_plugin_used(
         return;
     }
     let job = TrackEventsJob::PluginUsed(TrackPluginUsedJob {
-        config,
+        analytics_enabled,
         tracking,
         plugin,
     });
@@ -658,14 +649,17 @@ pub(crate) fn track_plugin_used(
 
 fn track_plugin_management(
     queue: &AnalyticsEventsQueue,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
     event_type: PluginManagementEventType,
     plugin: PluginTelemetryMetadata,
 ) {
-    if config.analytics_enabled == Some(false) {
+    if analytics_enabled == Some(false) {
         return;
     }
-    let job = TrackPluginManagementJob { config, plugin };
+    let job = TrackPluginManagementJob {
+        analytics_enabled,
+        plugin,
+    };
     let job = match event_type {
         PluginManagementEventType::Installed => TrackEventsJob::PluginInstalled(job),
         PluginManagementEventType::Uninstalled => TrackEventsJob::PluginUninstalled(job),
@@ -675,9 +669,13 @@ fn track_plugin_management(
     queue.try_send(job);
 }
 
-async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkillInvocationsJob) {
+async fn send_track_skill_invocations(
+    auth_manager: &AuthManager,
+    base_url: &str,
+    job: TrackSkillInvocationsJob,
+) {
     let TrackSkillInvocationsJob {
-        config,
+        analytics_enabled,
         tracking,
         invocations,
     } = job;
@@ -712,7 +710,7 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkil
                     thread_id: Some(tracking.thread_id.clone()),
                     invoke_type: Some(invocation.invocation_type),
                     model_slug: Some(tracking.model_slug.clone()),
-                    product_client_id: Some(crate::default_client::originator().value),
+                    product_client_id: Some(originator().value),
                     repo_url,
                     skill_scope: Some(skill_scope.to_string()),
                 },
@@ -720,12 +718,16 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkil
         ));
     }
 
-    send_track_events(auth_manager, config, events).await;
+    send_track_events(auth_manager, analytics_enabled, base_url, events).await;
 }
 
-async fn send_track_thread_initialized(auth_manager: &AuthManager, job: TrackThreadInitializedJob) {
+async fn send_track_thread_initialized(
+    auth_manager: &AuthManager,
+    base_url: &str,
+    job: TrackThreadInitializedJob,
+) {
     let TrackThreadInitializedJob {
-        config,
+        analytics_enabled,
         thread_event,
     } = job;
     let events = vec![TrackEventRequest::ThreadInitialized(
@@ -735,12 +737,16 @@ async fn send_track_thread_initialized(auth_manager: &AuthManager, job: TrackThr
         },
     )];
 
-    send_track_events(auth_manager, config, events).await;
+    send_track_events(auth_manager, analytics_enabled, base_url, events).await;
 }
 
-async fn send_track_app_mentioned(auth_manager: &AuthManager, job: TrackAppMentionedJob) {
+async fn send_track_app_mentioned(
+    auth_manager: &AuthManager,
+    base_url: &str,
+    job: TrackAppMentionedJob,
+) {
     let TrackAppMentionedJob {
-        config,
+        analytics_enabled,
         tracking,
         mentions,
     } = job;
@@ -755,12 +761,12 @@ async fn send_track_app_mentioned(auth_manager: &AuthManager, job: TrackAppMenti
         })
         .collect::<Vec<_>>();
 
-    send_track_events(auth_manager, config, events).await;
+    send_track_events(auth_manager, analytics_enabled, base_url, events).await;
 }
 
-async fn send_track_app_used(auth_manager: &AuthManager, job: TrackAppUsedJob) {
+async fn send_track_app_used(auth_manager: &AuthManager, base_url: &str, job: TrackAppUsedJob) {
     let TrackAppUsedJob {
-        config,
+        analytics_enabled,
         tracking,
         app,
     } = job;
@@ -770,12 +776,12 @@ async fn send_track_app_used(auth_manager: &AuthManager, job: TrackAppUsedJob) {
         event_params,
     })];
 
-    send_track_events(auth_manager, config, events).await;
+    send_track_events(auth_manager, analytics_enabled, base_url, events).await;
 }
 
-async fn send_track_turn_event(auth_manager: &AuthManager, job: TrackTurnEventJob) {
+async fn send_track_turn_event(auth_manager: &AuthManager, base_url: &str, job: TrackTurnEventJob) {
     let TrackTurnEventJob {
-        config,
+        analytics_enabled,
         tracking,
         turn_event,
     } = job;
@@ -784,12 +790,16 @@ async fn send_track_turn_event(auth_manager: &AuthManager, job: TrackTurnEventJo
         event_params: codex_turn_event_params(&tracking, turn_event),
     })];
 
-    send_track_events(auth_manager, config, events).await;
+    send_track_events(auth_manager, analytics_enabled, base_url, events).await;
 }
 
-async fn send_track_plugin_used(auth_manager: &AuthManager, job: TrackPluginUsedJob) {
+async fn send_track_plugin_used(
+    auth_manager: &AuthManager,
+    base_url: &str,
+    job: TrackPluginUsedJob,
+) {
     let TrackPluginUsedJob {
-        config,
+        analytics_enabled,
         tracking,
         plugin,
     } = job;
@@ -798,31 +808,52 @@ async fn send_track_plugin_used(auth_manager: &AuthManager, job: TrackPluginUsed
         event_params: codex_plugin_used_metadata(&tracking, plugin),
     })];
 
-    send_track_events(auth_manager, config, events).await;
+    send_track_events(auth_manager, analytics_enabled, base_url, events).await;
 }
 
-async fn send_track_plugin_installed(auth_manager: &AuthManager, job: TrackPluginManagementJob) {
-    send_track_plugin_management_event(auth_manager, job, "codex_plugin_installed").await;
+async fn send_track_plugin_installed(
+    auth_manager: &AuthManager,
+    base_url: &str,
+    job: TrackPluginManagementJob,
+) {
+    send_track_plugin_management_event(auth_manager, base_url, job, "codex_plugin_installed").await;
 }
 
-async fn send_track_plugin_uninstalled(auth_manager: &AuthManager, job: TrackPluginManagementJob) {
-    send_track_plugin_management_event(auth_manager, job, "codex_plugin_uninstalled").await;
+async fn send_track_plugin_uninstalled(
+    auth_manager: &AuthManager,
+    base_url: &str,
+    job: TrackPluginManagementJob,
+) {
+    send_track_plugin_management_event(auth_manager, base_url, job, "codex_plugin_uninstalled")
+        .await;
 }
 
-async fn send_track_plugin_enabled(auth_manager: &AuthManager, job: TrackPluginManagementJob) {
-    send_track_plugin_management_event(auth_manager, job, "codex_plugin_enabled").await;
+async fn send_track_plugin_enabled(
+    auth_manager: &AuthManager,
+    base_url: &str,
+    job: TrackPluginManagementJob,
+) {
+    send_track_plugin_management_event(auth_manager, base_url, job, "codex_plugin_enabled").await;
 }
 
-async fn send_track_plugin_disabled(auth_manager: &AuthManager, job: TrackPluginManagementJob) {
-    send_track_plugin_management_event(auth_manager, job, "codex_plugin_disabled").await;
+async fn send_track_plugin_disabled(
+    auth_manager: &AuthManager,
+    base_url: &str,
+    job: TrackPluginManagementJob,
+) {
+    send_track_plugin_management_event(auth_manager, base_url, job, "codex_plugin_disabled").await;
 }
 
 async fn send_track_plugin_management_event(
     auth_manager: &AuthManager,
+    base_url: &str,
     job: TrackPluginManagementJob,
     event_type: &'static str,
 ) {
-    let TrackPluginManagementJob { config, plugin } = job;
+    let TrackPluginManagementJob {
+        analytics_enabled,
+        plugin,
+    } = job;
     let event_params = codex_plugin_metadata(plugin);
     let event = CodexPluginEventRequest {
         event_type,
@@ -836,7 +867,7 @@ async fn send_track_plugin_management_event(
         _ => unreachable!("unknown plugin management event type"),
     }];
 
-    send_track_events(auth_manager, config, events).await;
+    send_track_events(auth_manager, analytics_enabled, base_url, events).await;
 }
 
 fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> CodexAppMetadata {
@@ -845,7 +876,7 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         app_name: app.app_name,
-        product_client_id: Some(crate::default_client::originator().value),
+        product_client_id: Some(originator().value),
         invoke_type: app.invocation_type,
         model_slug: Some(tracking.model_slug.clone()),
     }
@@ -858,7 +889,7 @@ fn codex_turn_event_params(
     CodexTurnEventParams {
         thread_id: tracking.thread_id.clone(),
         turn_id: tracking.turn_id.clone(),
-        product_client_id: Some(crate::default_client::originator().value),
+        product_client_id: Some(originator().value),
         model: Some(tracking.model_slug.clone()),
         submission_type: turn_event.submission_type,
         model_provider: turn_event.model_provider,
@@ -914,7 +945,7 @@ fn codex_thread_initialized_event_params(
 ) -> CodexThreadInitializedEventParams {
     CodexThreadInitializedEventParams {
         thread_id: thread_event.thread_id,
-        product_client_id: crate::default_client::originator().value,
+        product_client_id: originator().value,
         model: thread_event.model,
         model_provider: thread_event.model_provider,
         reasoning_effort: thread_event.reasoning_effort.map(|value| value.to_string()),
@@ -959,7 +990,7 @@ fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata
                 .map(|connector_id| connector_id.0)
                 .collect()
         }),
-        product_client_id: Some(crate::default_client::originator().value),
+        product_client_id: Some(originator().value),
     }
 }
 
@@ -1013,9 +1044,13 @@ fn subagent_source_name(subagent_source: SubAgentSource) -> String {
 
 async fn send_track_events(
     auth_manager: &AuthManager,
-    config: Arc<Config>,
+    analytics_enabled: Option<bool>,
+    base_url: &str,
     events: Vec<TrackEventRequest>,
 ) {
+    if analytics_enabled == Some(false) {
+        return;
+    }
     if events.is_empty() {
         return;
     }
@@ -1033,7 +1068,7 @@ async fn send_track_events(
         return;
     };
 
-    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let base_url = base_url.trim_end_matches('/');
     let url = format!("{base_url}/codex/analytics-events/events");
     let payload = TrackEventsRequest { events };
 

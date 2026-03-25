@@ -19,10 +19,11 @@ use super::codex_plugin_used_metadata;
 use super::codex_thread_initialized_event_params;
 use super::codex_turn_event_params;
 use super::normalize_path_for_skill_id;
-use crate::plugins::AppConnectorId;
-use crate::plugins::PluginCapabilitySummary;
-use crate::plugins::PluginId;
-use crate::plugins::PluginTelemetryMetadata;
+use codex_login::default_client::originator;
+use codex_plugin::AppConnectorId;
+use codex_plugin::PluginCapabilitySummary;
+use codex_plugin::PluginId;
+use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -127,7 +128,7 @@ fn app_mentioned_event_serializes_expected_shape() {
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
                 "app_name": "Calendar",
-                "product_client_id": crate::default_client::originator().value,
+                "product_client_id": originator().value,
                 "invoke_type": "explicit",
                 "model_slug": "gpt-5"
             }
@@ -165,7 +166,7 @@ fn app_used_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "app_name": "Google Drive",
-                "product_client_id": crate::default_client::originator().value,
+                "product_client_id": originator().value,
                 "invoke_type": "implicit",
                 "model_slug": "gpt-5"
             }
@@ -241,7 +242,7 @@ fn turn_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
-                "product_client_id": crate::default_client::originator().value,
+                "product_client_id": originator().value,
                 "model": "gpt-5",
                 "submission_type": "prompt",
                 "model_provider": "openai",
@@ -295,7 +296,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_type": "codex_thread_initialized",
             "event_params": {
                 "thread_id": "thread-0",
-                "product_client_id": crate::default_client::originator().value,
+                "product_client_id": originator().value,
                 "model": "gpt-5",
                 "model_provider": "openai",
                 "reasoning_effort": "high",
@@ -408,7 +409,7 @@ fn plugin_used_event_serializes_expected_shape() {
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
-                "product_client_id": crate::default_client::originator().value,
+                "product_client_id": originator().value,
                 "thread_id": "thread-3",
                 "turn_id": "turn-3",
                 "model_slug": "gpt-5"
@@ -437,7 +438,7 @@ fn plugin_management_event_serializes_expected_shape() {
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
-                "product_client_id": crate::default_client::originator().value
+                "product_client_id": originator().value
             }
         })
     );
