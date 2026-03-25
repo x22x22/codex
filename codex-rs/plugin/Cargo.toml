@@ -1,0 +1,16 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-plugin"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_plugin"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
