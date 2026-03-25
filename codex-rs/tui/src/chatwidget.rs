@@ -7139,11 +7139,12 @@ impl ChatWidget {
                 .clone()
                 .or_else(|| guardian_disabled_reason(false));
             let requires_confirmation = preset.id == "full-access"
-                && !self
-                    .config
-                    .notices
-                    .hide_full_access_warning
-                    .unwrap_or(false);
+                && (self.config.require_full_access_justification
+                    || !self
+                        .config
+                        .notices
+                        .hide_full_access_warning
+                        .unwrap_or(false));
             let default_actions: Vec<SelectionAction> = if requires_confirmation {
                 let preset_clone = preset.clone();
                 vec![Box::new(move |tx| {
@@ -7502,10 +7503,6 @@ impl ChatWidget {
             /*persist_warning_acknowledged*/ false,
         );
 
-        let accept_and_remember_actions = self.full_access_preset_actions(
-            preset, /*acknowledge_warning*/ true, /*persist_warning_acknowledged*/ true,
-        );
-
         let deny_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             if return_to_permissions {
                 tx.send(AppEvent::OpenPermissionsPopup);
@@ -7514,29 +7511,33 @@ impl ChatWidget {
             }
         })];
 
-        let items = vec![
-            SelectionItem {
-                name: "Yes, continue anyway".to_string(),
-                description: Some("Apply full access for this session".to_string()),
-                actions: accept_actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
+        let mut items = vec![SelectionItem {
+            name: "Yes, continue anyway".to_string(),
+            description: Some("Apply full access for this session".to_string()),
+            actions: accept_actions,
+            dismiss_on_select: true,
+            ..Default::default()
+        }];
+        if !self.config.require_full_access_justification {
+            let accept_and_remember_actions = self.full_access_preset_actions(
+                preset, /*acknowledge_warning*/ true,
+                /*persist_warning_acknowledged*/ true,
+            );
+            items.push(SelectionItem {
                 name: "Yes, and don't ask again".to_string(),
                 description: Some("Enable full access and remember this choice".to_string()),
                 actions: accept_and_remember_actions,
                 dismiss_on_select: true,
                 ..Default::default()
-            },
-            SelectionItem {
-                name: "Cancel".to_string(),
-                description: Some("Go back without enabling full access".to_string()),
-                actions: deny_actions,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
+            });
+        }
+        items.push(SelectionItem {
+            name: "Cancel".to_string(),
+            description: Some("Go back without enabling full access".to_string()),
+            actions: deny_actions,
+            dismiss_on_select: true,
+            ..Default::default()
+        });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             footer_hint: Some(standard_popup_hint_line()),

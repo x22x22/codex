@@ -183,11 +183,13 @@ use toml::Value as TomlValue;
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     let codex_home = std::env::temp_dir();
-    ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(codex_home.clone())
         .build()
         .await
-        .expect("config")
+        .expect("config");
+    config.require_full_access_justification = false;
+    config
 }
 
 fn invalid_value(candidate: impl Into<String>, allowed: impl Into<String>) -> ConstraintError {
@@ -10513,7 +10515,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
 }
 
 #[tokio::test]
-async fn permissions_full_access_requires_justification_when_warning_hidden() {
+async fn permissions_full_access_still_confirms_when_warning_hidden_but_justification_required() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
     {
@@ -10533,8 +10535,8 @@ async fn permissions_full_access_requires_justification_when_warning_hidden() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, AppEvent::OpenFullAccessJustificationPrompt { .. })),
-        "expected full access selection to request a justification prompt: {events:?}"
+            .any(|event| matches!(event, AppEvent::OpenFullAccessConfirmation { .. })),
+        "expected full access selection to request a confirmation popup: {events:?}"
     );
     assert!(
         !events
