@@ -8,6 +8,7 @@
 mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
+mod approval_review;
 mod apps;
 mod arc_monitor;
 pub use codex_login as auth;

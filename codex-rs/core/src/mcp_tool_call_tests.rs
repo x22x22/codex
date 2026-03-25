@@ -1,4 +1,5 @@
 use super::*;
+use crate::approval_review::APPROVAL_REVIEW_TIMEOUT_MESSAGE;
 use crate::codex::make_session_and_context;
 use crate::config::ApprovalsReviewer;
 use crate::config::ConfigToml;
@@ -6,7 +7,6 @@ use crate::config::types::AppConfig;
 use crate::config::types::AppToolConfig;
 use crate::config::types::AppToolsConfig;
 use crate::config::types::AppsConfigToml;
-use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
 use crate::guardian::GuardianApprovalDecision;
 use codex_config::CONFIG_TOML_FILE;
 use core_test_support::responses::ev_assistant_message;
@@ -708,7 +708,7 @@ fn guardian_review_decision_maps_to_mcp_tool_decision() {
     );
     assert_eq!(
         mcp_tool_approval_decision_from_guardian(GuardianApprovalDecision::TimedOut),
-        McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
+        McpToolApprovalDecision::TimedOut(APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string())
     );
 }
 
@@ -863,7 +863,7 @@ fn synthetic_timeout_request_user_input_response_stays_timed_out() {
 
     assert_eq!(
         response,
-        McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
+        McpToolApprovalDecision::TimedOut(APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string())
     );
 }
 

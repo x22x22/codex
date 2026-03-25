@@ -1,6 +1,6 @@
+use crate::approval_review::APPROVAL_REVIEW_TIMEOUT_MESSAGE;
 use crate::codex::Session;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
-use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
 use crate::guardian::GuardianApprovalDecision;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
@@ -393,7 +393,7 @@ impl NetworkApprovalService {
                         self.record_call_outcome(
                             &owner_call.registration_id,
                             NetworkApprovalOutcome::TimedOutByReviewer(
-                                GUARDIAN_TIMEOUT_MESSAGE.to_string(),
+                                APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string(),
                             ),
                         )
                         .await;
@@ -520,7 +520,7 @@ impl NetworkApprovalService {
                         self.record_call_outcome(
                             &owner_call.registration_id,
                             NetworkApprovalOutcome::TimedOutByReviewer(
-                                GUARDIAN_TIMEOUT_MESSAGE.to_string(),
+                                APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string(),
                             ),
                         )
                         .await;

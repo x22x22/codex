@@ -6,11 +6,11 @@ simple sequence for any ToolRuntime: approval → select sandbox → attempt →
 retry with an escalated sandbox strategy on denial (no re‑approval thanks to
 caching).
 */
+use crate::approval_review::APPROVAL_REVIEW_TIMEOUT_MESSAGE;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
-use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -163,7 +163,9 @@ impl ToolOrchestrator {
 
                 match approval_outcome {
                     ApprovalOutcome::TimedOut => {
-                        return Err(ToolError::Message(GUARDIAN_TIMEOUT_MESSAGE.to_string()));
+                        return Err(ToolError::Message(
+                            APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string(),
+                        ));
                     }
                     ApprovalOutcome::Decision {
                         decision: ReviewDecision::Denied | ReviewDecision::Abort,
@@ -322,7 +324,9 @@ impl ToolOrchestrator {
 
                     match approval_outcome {
                         ApprovalOutcome::TimedOut => {
-                            return Err(ToolError::Message(GUARDIAN_TIMEOUT_MESSAGE.to_string()));
+                            return Err(ToolError::Message(
+                                APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string(),
+                            ));
                         }
                         ApprovalOutcome::Decision {
                             decision: ReviewDecision::Denied | ReviewDecision::Abort,

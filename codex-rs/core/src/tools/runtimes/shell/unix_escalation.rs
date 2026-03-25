@@ -1,11 +1,11 @@
 use super::ShellRequest;
+use crate::approval_review::APPROVAL_REVIEW_TIMEOUT_MESSAGE;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::is_likely_sandbox_denied;
-use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -551,9 +551,9 @@ impl CoreShellActionProvider {
                         )
                         .await?
                     {
-                        ApprovalOutcome::TimedOut => {
-                            EscalationDecision::deny(Some(GUARDIAN_TIMEOUT_MESSAGE.to_string()))
-                        }
+                        ApprovalOutcome::TimedOut => EscalationDecision::deny(Some(
+                            APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string(),
+                        )),
                         ApprovalOutcome::Decision {
                             decision:
                                 ReviewDecision::Approved

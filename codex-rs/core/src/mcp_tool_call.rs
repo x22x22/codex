@@ -11,6 +11,7 @@ use tracing::error;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
+use crate::approval_review::APPROVAL_REVIEW_TIMEOUT_MESSAGE;
 use crate::arc_monitor::ArcMonitorOutcome;
 use crate::arc_monitor::monitor_action;
 use crate::codex::Session;
@@ -19,7 +20,6 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppToolApproval;
 use crate::connectors;
-use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
 use crate::guardian::GuardianApprovalDecision;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
@@ -768,7 +768,7 @@ fn mcp_tool_approval_decision_from_guardian(
             McpToolApprovalDecision::Decline
         }
         GuardianApprovalDecision::TimedOut => {
-            McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
+            McpToolApprovalDecision::TimedOut(APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string())
         }
     }
 }
@@ -1200,7 +1200,7 @@ fn parse_mcp_tool_approval_response(
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_TIMED_OUT_SYNTHETIC)
     {
-        McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
+        McpToolApprovalDecision::TimedOut(APPROVAL_REVIEW_TIMEOUT_MESSAGE.to_string())
     } else if answers
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
