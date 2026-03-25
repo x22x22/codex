@@ -90,7 +90,7 @@ impl SkillsManager {
         outcome
     }
 
-    pub(crate) fn skill_roots_for_config(
+    pub fn skill_roots_for_config(
         &self,
         cwd: &Path,
         effective_skill_roots: &[PathBuf],
@@ -221,7 +221,7 @@ struct ConfigSkillsCacheKey {
     skill_config_rules: SkillConfigRules,
 }
 
-pub(crate) fn bundled_skills_enabled_from_stack(
+pub fn bundled_skills_enabled_from_stack(
     config_layer_stack: &codex_config::ConfigLayerStack,
 ) -> bool {
     let effective_config = config_layer_stack.effective_config();

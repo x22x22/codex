@@ -202,6 +202,8 @@ use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::config_loader::LoaderOverrides;
+use codex_core::config_loader::load_config_layers_state;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::error::CodexErr;
 use codex_core::error::Result as CodexResult;
@@ -281,6 +283,7 @@ use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_json_to_toml::json_to_toml;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use std::collections::HashMap;
@@ -5479,15 +5482,31 @@ impl CodexMessageProcessor {
             }
         };
         let skills_manager = self.thread_manager.skills_manager();
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let cli_overrides = self.cli_overrides.as_slice();
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
+            let cwd_abs = match AbsolutePathBuf::try_from(cwd.as_path()) {
+                Ok(path) => path,
+                Err(err) => {
+                    data.push(codex_app_server_protocol::SkillsListEntry {
+                        cwd,
+                        skills: Vec::new(),
+                        errors: errors_to_info(&[codex_core::skills::SkillError {
+                            path: cwd.clone(),
+                            message: err.to_string(),
+                        }]),
+                    });
+                    continue;
+                }
+            };
             let config_layer_stack = match load_config_layers_state(
                 &self.codex_home,
                 Some(cwd_abs),
-                &cli_overrides,
+                cli_overrides,
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
             )
@@ -5495,16 +5514,21 @@ impl CodexMessageProcessor {
             {
                 Ok(config_layer_stack) => config_layer_stack,
                 Err(err) => {
-                    return SkillLoadOutcome {
-                        errors: vec![crate::skills::model::SkillError {
-                            path: cwd.to_path_buf(),
+                    data.push(codex_app_server_protocol::SkillsListEntry {
+                        cwd,
+                        skills: Vec::new(),
+                        errors: errors_to_info(&[codex_core::skills::SkillError {
+                            path: cwd.clone(),
                             message: err.to_string(),
-                        }],
-                        ..Default::default()
-                    };
+                        }]),
+                    });
+                    continue;
                 }
             };
-            let effective_skill_roots = skills_manager.effective_skill_roots(&config_layer_stack);
+            let effective_skill_roots = plugins_manager.effective_skill_roots_for_layer_stack(
+                &config_layer_stack,
+                config.features.enabled(Feature::Plugins),
+            );
             let outcome = skills_manager
                 .skills_for_cwd_with_extra_user_roots(
                     &cwd,

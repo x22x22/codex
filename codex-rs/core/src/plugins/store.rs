@@ -1,7 +1,6 @@
 use super::load_plugin_manifest;
 use codex_plugin::PLUGIN_MANIFEST_PATH;
 use codex_plugin::PluginId;
-use codex_plugin::PluginIdError;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;

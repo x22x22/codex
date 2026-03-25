@@ -471,7 +471,14 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_skills = skills_manager.skills_for_config(&config);
+        let plugin_outcome = plugins_manager.plugins_for_config(&config);
+        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let loaded_skills = skills_manager.skills_for_config(
+            config.cwd.as_path(),
+            &effective_skill_roots,
+            &config.config_layer_stack,
+            config.bundled_skills_enabled(),
+        );
 
         for err in &loaded_skills.errors {
             error!(
@@ -2440,10 +2447,20 @@ impl Session {
                 &per_turn_config,
             )
             .await;
+        let plugin_outcome = self
+            .services
+            .plugins_manager
+            .plugins_for_config(&per_turn_config);
+        let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config(&per_turn_config),
+                .skills_for_config(
+                    per_turn_config.cwd.as_path(),
+                    &effective_skill_roots,
+                    &per_turn_config.config_layer_stack,
+                    per_turn_config.bundled_skills_enabled(),
+                ),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.conversation_id,
@@ -4500,6 +4517,12 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::config_loader::CloudRequirementsLoader;
+    use crate::config_loader::LoaderOverrides;
+    use crate::config_loader::load_config_layers_state;
+    use crate::skills::SkillError;
+    use codex_features::Feature;
+    use codex_utils_absolute_path::AbsolutePathBuf;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -4935,13 +4958,32 @@ mod handlers {
         };
 
         let skills_manager = &sess.services.skills_manager;
+        let plugins_manager = &sess.services.plugins_manager;
         let config = sess.get_config().await;
+        let codex_home = sess.codex_home().await;
         let mut skills = Vec::new();
+        let empty_cli_overrides: &[(String, toml::Value)] = &[];
         for cwd in cwds {
+            let cwd_abs = match AbsolutePathBuf::try_from(cwd.as_path()) {
+                Ok(path) => path,
+                Err(err) => {
+                    let message = err.to_string();
+                    let cwd_for_entry = cwd.clone();
+                    skills.push(SkillsListEntry {
+                        cwd: cwd_for_entry.clone(),
+                        skills: Vec::new(),
+                        errors: super::errors_to_info(&[SkillError {
+                            path: cwd_for_entry,
+                            message,
+                        }]),
+                    });
+                    continue;
+                }
+            };
             let config_layer_stack = match load_config_layers_state(
-                &self.codex_home,
+                &codex_home,
                 Some(cwd_abs),
-                &cli_overrides,
+                empty_cli_overrides,
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
             )
@@ -4949,16 +4991,23 @@ mod handlers {
             {
                 Ok(config_layer_stack) => config_layer_stack,
                 Err(err) => {
-                    return SkillLoadOutcome {
-                        errors: vec![crate::skills::model::SkillError {
-                            path: cwd.to_path_buf(),
-                            message: err.to_string(),
-                        }],
-                        ..Default::default()
-                    };
+                    let message = err.to_string();
+                    let cwd_for_entry = cwd.clone();
+                    skills.push(SkillsListEntry {
+                        cwd: cwd_for_entry.clone(),
+                        skills: Vec::new(),
+                        errors: super::errors_to_info(&[SkillError {
+                            path: cwd_for_entry,
+                            message,
+                        }]),
+                    });
+                    continue;
                 }
             };
-            let effective_skill_roots = skills_manager.effective_skill_roots(&config_layer_stack);
+            let effective_skill_roots = plugins_manager.effective_skill_roots_for_layer_stack(
+                &config_layer_stack,
+                config.features.enabled(Feature::Plugins),
+            );
             let outcome = skills_manager
                 .skills_for_cwd(
                     &cwd,

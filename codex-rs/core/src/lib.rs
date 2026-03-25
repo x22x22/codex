@@ -68,12 +68,11 @@ pub use utils::path_utils;
 pub mod personality_migration;
 pub mod plugins;
 pub(crate) mod mentions {
-    pub use crate::plugins::CollectedToolMentions;
-    pub use crate::plugins::build_connector_slug_counts;
-    pub use crate::plugins::build_skill_name_counts;
-    pub use crate::plugins::collect_explicit_app_ids;
-    pub use crate::plugins::collect_explicit_plugin_mentions;
-    pub use crate::plugins::collect_tool_mentions_from_messages;
+    pub(crate) use crate::plugins::build_connector_slug_counts;
+    pub(crate) use crate::plugins::build_skill_name_counts;
+    pub(crate) use crate::plugins::collect_explicit_app_ids;
+    pub(crate) use crate::plugins::collect_explicit_plugin_mentions;
+    pub(crate) use crate::plugins::collect_tool_mentions_from_messages;
 }
 mod sandbox_tags;
 pub mod sandboxing;

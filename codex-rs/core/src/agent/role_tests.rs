@@ -629,8 +629,15 @@ enabled = false
         .expect("custom role should apply");
 
     let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
-    let skills_manager = SkillsManager::new(home.path().to_path_buf(), plugins_manager, true);
-    let outcome = skills_manager.skills_for_config(&config);
+    let skills_manager = SkillsManager::new(home.path().to_path_buf(), true);
+    let plugin_outcome = plugins_manager.plugins_for_config(&config);
+    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let outcome = skills_manager.skills_for_config(
+        config.cwd.as_path(),
+        &effective_skill_roots,
+        &config.config_layer_stack,
+        config.bundled_skills_enabled(),
+    );
     let skill = outcome
         .skills
         .iter()

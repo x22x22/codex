@@ -2506,11 +2506,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
-        Arc::clone(&plugins_manager),
-        true,
-    ));
+    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -2611,11 +2607,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let state = SessionState::new(session_configuration.clone());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
-        Arc::clone(&plugins_manager),
-        true,
-    ));
+    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(None)
@@ -2683,7 +2675,14 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         config.js_repl_node_module_dirs.clone(),
     ));
 
-    let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
+    let plugin_outcome = services.plugins_manager.plugins_for_config(&per_turn_config);
+    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let skills_outcome = Arc::new(services.skills_manager.skills_for_config(
+        per_turn_config.cwd.as_path(),
+        &effective_skill_roots,
+        &per_turn_config.config_layer_stack,
+        per_turn_config.bundled_skills_enabled(),
+    ));
     let turn_context = Session::make_turn_context(
         conversation_id,
         Some(Arc::clone(&auth_manager)),
@@ -3447,11 +3446,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let state = SessionState::new(session_configuration.clone());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
-        Arc::clone(&plugins_manager),
-        true,
-    ));
+    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(None)
@@ -3519,7 +3514,14 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         config.js_repl_node_module_dirs.clone(),
     ));
 
-    let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
+    let plugin_outcome = services.plugins_manager.plugins_for_config(&per_turn_config);
+    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let skills_outcome = Arc::new(services.skills_manager.skills_for_config(
+        per_turn_config.cwd.as_path(),
+        &effective_skill_roots,
+        &per_turn_config.config_layer_stack,
+        per_turn_config.bundled_skills_enabled(),
+    ));
     let turn_context = Arc::new(Session::make_turn_context(
         conversation_id,
         Some(Arc::clone(&auth_manager)),

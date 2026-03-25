@@ -486,27 +486,13 @@ impl CoreShellActionProvider {
     /// any skills.
     async fn find_skill(&self, program: &AbsolutePathBuf) -> Option<SkillMetadata> {
         let force_reload = false;
-        let config_layer_stack = match load_config_layers_state(
-            &self.codex_home,
-            Some(cwd_abs),
-            &cli_overrides,
-            LoaderOverrides::default(),
-            CloudRequirementsLoader::default(),
-        )
-        .await
-        {
-            Ok(config_layer_stack) => config_layer_stack,
-            Err(err) => {
-                return SkillLoadOutcome {
-                    errors: vec![crate::skills::model::SkillError {
-                        path: cwd.to_path_buf(),
-                        message: err.to_string(),
-                    }],
-                    ..Default::default()
-                };
-            }
-        };
-        let effective_skill_roots = skills_manager.effective_skill_roots(&config_layer_stack);
+        let turn_config = self.turn.config.as_ref();
+        let plugin_outcome = self
+            .session
+            .services
+            .plugins_manager
+            .plugins_for_config(turn_config);
+        let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_outcome = self
             .session
             .services
@@ -515,7 +501,7 @@ impl CoreShellActionProvider {
                 &self.turn.cwd,
                 &effective_skill_roots,
                 force_reload,
-                &config_layer_stack,
+                &turn_config.config_layer_stack,
             )
             .await;
 

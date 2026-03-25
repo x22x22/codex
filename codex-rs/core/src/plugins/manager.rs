@@ -405,6 +405,23 @@ impl PluginsManager {
         *cached_enabled_outcome = None;
     }
 
+    /// Resolve plugin skill roots for a config layer stack without touching the plugins cache.
+    pub fn effective_skill_roots_for_layer_stack(
+        &self,
+        config_layer_stack: &ConfigLayerStack,
+        plugins_feature_enabled: bool,
+    ) -> Vec<PathBuf> {
+        if !plugins_feature_enabled {
+            return Vec::new();
+        }
+        load_plugins_from_layer_stack(
+            config_layer_stack,
+            &self.store,
+            self.restriction_product,
+        )
+        .effective_skill_roots()
+    }
+
     fn cached_enabled_outcome(&self) -> Option<PluginLoadOutcome> {
         match self.cached_enabled_outcome.read() {
             Ok(cache) => cache.clone(),
@@ -1171,7 +1188,7 @@ impl PluginUninstallError {
 
 fn log_plugin_load_errors(outcome: &PluginLoadOutcome) {
     for plugin in outcome
-        .plugins
+        .plugins()
         .iter()
         .filter(|plugin| plugin.error.is_some())
     {

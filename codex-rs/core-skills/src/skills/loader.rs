@@ -173,12 +173,12 @@ impl fmt::Display for SkillParseError {
 
 impl Error for SkillParseError {}
 
-pub(crate) struct SkillRoot {
-    pub(crate) path: PathBuf,
-    pub(crate) scope: SkillScope,
+pub struct SkillRoot {
+    pub path: PathBuf,
+    pub scope: SkillScope,
 }
 
-pub(crate) fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
+pub fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
 where
     I: IntoIterator<Item = SkillRoot>,
 {
