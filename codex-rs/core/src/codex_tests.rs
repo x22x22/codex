@@ -1173,24 +1173,34 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     // The parent rollout writer drains asynchronously after turn completion.
-    // Wait until the persisted JSONL includes the source user turn before forking from it.
+    // Wait until the persisted JSONL includes the completed source turn before
+    // forking from it; otherwise `fork_thread(usize::MAX, ...)` correctly
+    // treats the source rollout as mid-turn and drops that active suffix.
     let mut source_history_persisted = false;
     for _ in 0..100 {
         let history = RolloutRecorder::get_rollout_history(&rollout_path).await;
         source_history_persisted = history.ok().is_some_and(|history| {
-            history.get_rollout_items().into_iter().any(|item| {
+            let rollout_items = history.get_rollout_items();
+            let source_turn_recorded = rollout_items.iter().any(|item| {
                 matches!(
-                        item,
-                        RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
-                            if role == "user"
-                                && content.iter().any(|content_item| {
-                                    matches!(
-                                        content_item,
-                                        ContentItem::InputText { text } if text == "fork seed"
-                                    )
-                                })
+                    item,
+                    RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
+                        if role == "user"
+                            && content.iter().any(|content_item| {
+                                matches!(
+                                    content_item,
+                                    ContentItem::InputText { text } if text == "fork seed"
+                                )
+                            })
                 )
-            })
+            });
+            let source_turn_completed = rollout_items.iter().any(|item| {
+                matches!(
+                    item,
+                    RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+                )
+            });
+            source_turn_recorded && source_turn_completed
         });
         if source_history_persisted {
             break;
@@ -1199,7 +1209,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     }
     assert!(
         source_history_persisted,
-        "source rollout should contain the completed pre-fork user turn before forking"
+        "source rollout should contain the committed pre-fork turn before forking"
     );
 
     let mut fork_config = initial.config.clone();
