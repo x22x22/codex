@@ -363,7 +363,9 @@ impl SessionTelemetry {
         remember_choice: bool,
     ) {
         let justification_to_log = match justification {
-            Some(justification) if self.metadata.log_user_prompts => justification,
+            Some(justification) if justification_required || self.metadata.log_user_prompts => {
+                justification
+            }
             Some(_) => "[REDACTED]",
             None => "",
         };
