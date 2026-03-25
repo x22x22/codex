@@ -64,6 +64,8 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time;
+use tracing::Instrument;
+use tracing::field::Empty;
 use tracing::info;
 use tracing::warn;
 
@@ -1052,41 +1054,93 @@ impl RmcpClient {
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
         let service = self.service().await?;
-        match Self::run_service_operation_once(Arc::clone(&service), label, timeout, &operation)
-            .await
+        match Self::run_service_operation_once(
+            Arc::clone(&service),
+            label,
+            timeout,
+            self.service_operation_span(label),
+            &operation,
+        )
+        .await
         {
             Ok(result) => Ok(result),
             Err(error) if Self::is_session_expired_404(&error) => {
                 self.reinitialize_after_session_expiry(&service).await?;
                 let recovered_service = self.service().await?;
-                Self::run_service_operation_once(recovered_service, label, timeout, &operation)
-                    .await
-                    .map_err(Into::into)
+                Self::run_service_operation_once(
+                    recovered_service,
+                    label,
+                    timeout,
+                    self.service_operation_span(label),
+                    &operation,
+                )
+                .await
+                .map_err(Into::into)
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    fn service_operation_span(&self, label: &str) -> tracing::Span {
+        let span = tracing::info_span!(
+            "mcp.client.operation",
+            otel.kind = "client",
+            rpc.system = "jsonrpc",
+            rpc.method = label,
+            mcp.transport = Empty,
+            mcp.server.name = Empty,
+            server.address = Empty,
+            server.port = Empty,
+        );
+
+        match &self.transport_recipe {
+            TransportRecipe::Stdio { .. } => {
+                span.record("mcp.transport", "stdio");
+            }
+            TransportRecipe::StreamableHttp {
+                server_name, url, ..
+            } => {
+                span.record("mcp.transport", "streamable_http");
+                span.record("mcp.server.name", server_name.as_str());
+                if let Ok(parsed_url) = reqwest::Url::parse(url) {
+                    if let Some(host) = parsed_url.host_str() {
+                        span.record("server.address", host);
+                    }
+                    if let Some(port) = parsed_url.port_or_known_default() {
+                        span.record("server.port", port as i64);
+                    }
+                }
+            }
+        }
+
+        span
     }
 
     async fn run_service_operation_once<T, F, Fut>(
         service: Arc<RunningService<RoleClient, LoggingClientHandler>>,
         label: &str,
         timeout: Option<Duration>,
+        operation_span: tracing::Span,
         operation: &F,
     ) -> std::result::Result<T, ClientOperationError>
     where
         F: Fn(Arc<RunningService<RoleClient, LoggingClientHandler>>) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
-        match timeout {
-            Some(duration) => time::timeout(duration, operation(service))
-                .await
-                .map_err(|_| ClientOperationError::Timeout {
-                    label: label.to_string(),
-                    duration,
-                })?
-                .map_err(ClientOperationError::from),
-            None => operation(service).await.map_err(ClientOperationError::from),
+        async move {
+            match timeout {
+                Some(duration) => time::timeout(duration, operation(service))
+                    .await
+                    .map_err(|_| ClientOperationError::Timeout {
+                        label: label.to_string(),
+                        duration,
+                    })?
+                    .map_err(ClientOperationError::from),
+                None => operation(service).await.map_err(ClientOperationError::from),
+            }
         }
+        .instrument(operation_span)
+        .await
     }
 
     fn is_session_expired_404(error: &ClientOperationError) -> bool {
