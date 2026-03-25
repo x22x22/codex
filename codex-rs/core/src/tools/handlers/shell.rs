@@ -291,7 +291,7 @@ impl ToolHandler for ShellCommandHandler {
         let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
-            &turn_skills.outcome,
+            turn.as_ref(),
             &params.command,
             &workdir,
         )

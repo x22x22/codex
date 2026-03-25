@@ -148,7 +148,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
-                    &context.turn_skills.outcome,
+                    context.turn.as_ref(),
                     &args.cmd,
                     &workdir,
                 )
