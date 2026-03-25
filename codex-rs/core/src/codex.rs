@@ -678,26 +678,6 @@ impl Codex {
                     .collaboration_mode
                     .model()
                     .to_string(),
-                model_provider: thread_initialized_configuration
-                    .original_config_do_not_use
-                    .model_provider_id
-                    .clone(),
-                reasoning_effort: thread_initialized_configuration
-                    .collaboration_mode
-                    .reasoning_effort(),
-                reasoning_summary: thread_initialized_configuration.model_reasoning_summary,
-                service_tier: thread_initialized_configuration.service_tier,
-                approval_policy: thread_initialized_configuration.approval_policy.value(),
-                approvals_reviewer: thread_initialized_configuration.approvals_reviewer,
-                sandbox_policy: thread_initialized_configuration
-                    .sandbox_policy
-                    .get()
-                    .clone(),
-                sandbox_network_access: thread_initialized_configuration
-                    .network_sandbox_policy
-                    .is_enabled(),
-                collaboration_mode: thread_initialized_configuration.collaboration_mode.mode,
-                personality: thread_initialized_configuration.personality,
                 ephemeral: thread_initialized_configuration
                     .original_config_do_not_use
                     .ephemeral,
