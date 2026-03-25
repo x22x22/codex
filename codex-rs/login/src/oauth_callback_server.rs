@@ -97,7 +97,13 @@ where
 
     let (server, actual_port, rx) = bind_server_with_request_channel(port)?;
     let redirect_uri = format!("http://localhost:{actual_port}{callback_path}");
-    let auth_url = auth_url_builder(&redirect_uri, &pkce, &state)?;
+    let auth_url = match auth_url_builder(&redirect_uri, &pkce, &state) {
+        Ok(auth_url) => auth_url,
+        Err(err) => {
+            server.unblock();
+            return Err(err);
+        }
+    };
     let (server_handle, shutdown_handle) = spawn_callback_server_loop(
         server,
         rx,
