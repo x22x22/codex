@@ -77,8 +77,8 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::state_db;
 use codex_core::state_db::StateDbHandle;
-use codex_core::state_db::init;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::mpsc;
@@ -327,7 +327,7 @@ impl InProcessClientHandle {
 /// the runtime is shut down and an `InvalidData` error is returned.
 pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
     let initialize = args.initialize.clone();
-    let state_db = init(args.config.as_ref()).await;
+    let state_db = state_db::init(args.config.as_ref()).await;
     if state_db.is_none() {
         warn!(
             "sqlite state db unavailable at startup for {}; continuing without sqlite-backed app-server state",
