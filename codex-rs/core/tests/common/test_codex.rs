@@ -661,11 +661,11 @@ impl TestCodex {
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
-        self.submit_turn_with_policies(
+        Box::pin(self.submit_turn_with_policies(
             prompt,
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
-        )
+        ))
         .await
     }
 
@@ -674,7 +674,7 @@ impl TestCodex {
         prompt: &str,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
-        self.submit_turn_with_policies(prompt, AskForApproval::Never, sandbox_policy)
+        Box::pin(self.submit_turn_with_policies(prompt, AskForApproval::Never, sandbox_policy))
             .await
     }
 
@@ -683,12 +683,12 @@ impl TestCodex {
         prompt: &str,
         service_tier: Option<ServiceTier>,
     ) -> Result<()> {
-        self.submit_turn_with_context(
+        Box::pin(self.submit_turn_with_context(
             prompt,
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
             Some(service_tier),
-        )
+        ))
         .await
     }
 
@@ -698,12 +698,12 @@ impl TestCodex {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
-        self.submit_turn_with_context(
+        Box::pin(self.submit_turn_with_context(
             prompt,
             approval_policy,
             sandbox_policy,
             /*service_tier*/ None,
-        )
+        ))
         .await
     }
 
@@ -756,16 +756,16 @@ pub struct TestCodexHarness {
 
 impl TestCodexHarness {
     pub async fn new() -> Result<Self> {
-        Self::with_builder(test_codex()).await
+        Box::pin(Self::with_builder(test_codex())).await
     }
 
     pub async fn with_config(mutator: impl FnOnce(&mut Config) + Send + 'static) -> Result<Self> {
-        Self::with_builder(test_codex().with_config(mutator)).await
+        Box::pin(Self::with_builder(test_codex().with_config(mutator))).await
     }
 
     pub async fn with_builder(mut builder: TestCodexBuilder) -> Result<Self> {
         let server = start_mock_server().await;
-        let test = builder.build(&server).await?;
+        let test = Box::pin(builder.build(&server)).await?;
         Ok(Self { server, test })
     }
 
@@ -786,7 +786,7 @@ impl TestCodexHarness {
     }
 
     pub async fn submit(&self, prompt: &str) -> Result<()> {
-        self.test.submit_turn(prompt).await
+        Box::pin(self.test.submit_turn(prompt)).await
     }
 
     pub async fn submit_with_policy(
@@ -794,9 +794,7 @@ impl TestCodexHarness {
         prompt: &str,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
-        self.test
-            .submit_turn_with_policy(prompt, sandbox_policy)
-            .await
+        Box::pin(self.test.submit_turn_with_policy(prompt, sandbox_policy)).await
     }
 
     pub async fn request_bodies(&self) -> Vec<Value> {
@@ -815,12 +813,12 @@ impl TestCodexHarness {
     }
 
     pub async fn function_call_output_value(&self, call_id: &str) -> Value {
-        let bodies = self.request_bodies().await;
+        let bodies = Box::pin(self.request_bodies()).await;
         function_call_output(&bodies, call_id).clone()
     }
 
     pub async fn function_call_stdout(&self, call_id: &str) -> String {
-        self.function_call_output_value(call_id)
+        Box::pin(self.function_call_output_value(call_id))
             .await
             .get("output")
             .and_then(Value::as_str)
@@ -829,7 +827,7 @@ impl TestCodexHarness {
     }
 
     pub async fn custom_tool_call_output(&self, call_id: &str) -> String {
-        let bodies = self.request_bodies().await;
+        let bodies = Box::pin(self.request_bodies()).await;
         custom_tool_call_output_text(&bodies, call_id)
     }
 
@@ -839,12 +837,14 @@ impl TestCodexHarness {
         output_type: ApplyPatchModelOutput,
     ) -> String {
         match output_type {
-            ApplyPatchModelOutput::Freeform => self.custom_tool_call_output(call_id).await,
+            ApplyPatchModelOutput::Freeform => {
+                Box::pin(self.custom_tool_call_output(call_id)).await
+            }
             ApplyPatchModelOutput::Function
             | ApplyPatchModelOutput::Shell
             | ApplyPatchModelOutput::ShellViaHeredoc
             | ApplyPatchModelOutput::ShellCommandViaHeredoc => {
-                self.function_call_stdout(call_id).await
+                Box::pin(self.function_call_stdout(call_id)).await
             }
         }
     }
