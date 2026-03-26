@@ -125,7 +125,7 @@ pub enum TurnSteerRejectionReason {
 
 #[derive(Clone)]
 pub struct CodexTurnSteerEvent {
-    pub expected_turn_id: String,
+    pub expected_turn_id: Option<String>,
     pub accepted_turn_id: Option<String>,
     pub num_input_images: usize,
     pub result: TurnSteerResult,
@@ -570,7 +570,7 @@ struct CodexTurnEventRequest {
 #[derive(Serialize)]
 struct CodexTurnSteerEventParams {
     thread_id: String,
-    expected_turn_id: String,
+    expected_turn_id: Option<String>,
     accepted_turn_id: Option<String>,
     product_client_id: Option<String>,
     num_input_images: usize,

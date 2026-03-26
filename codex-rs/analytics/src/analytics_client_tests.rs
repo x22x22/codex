@@ -18,6 +18,7 @@ use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::TurnCompletedInput;
 use super::TurnStartedInput;
+use super::TurnSteerRejectionReason;
 use super::TurnSteerResult;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
@@ -319,7 +320,7 @@ fn turn_steer_event_serializes_expected_shape() {
         event_params: codex_turn_steer_event_params(
             &tracking,
             CodexTurnSteerEvent {
-                expected_turn_id: "turn-2".to_string(),
+                expected_turn_id: Some("turn-2".to_string()),
                 accepted_turn_id: Some("turn-2".to_string()),
                 num_input_images: 2,
                 result: TurnSteerResult::Accepted,
@@ -344,6 +345,48 @@ fn turn_steer_event_serializes_expected_shape() {
                 "result": "accepted",
                 "rejection_reason": null,
                 "created_at": 1_716_000_123
+            }
+        })
+    );
+}
+
+#[test]
+fn rejected_turn_steer_event_serializes_expected_shape() {
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-3".to_string(),
+        turn_id: "turn-3".to_string(),
+    };
+    let event = TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
+        event_type: "codex_turn_steer_event",
+        event_params: codex_turn_steer_event_params(
+            &tracking,
+            CodexTurnSteerEvent {
+                expected_turn_id: Some("turn-expected".to_string()),
+                accepted_turn_id: None,
+                num_input_images: 1,
+                result: TurnSteerResult::Rejected,
+                rejection_reason: Some(TurnSteerRejectionReason::ExpectedTurnMismatch),
+                created_at: 1_716_000_124,
+            },
+        ),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize rejected turn steer event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_turn_steer_event",
+            "event_params": {
+                "thread_id": "thread-3",
+                "expected_turn_id": "turn-expected",
+                "accepted_turn_id": null,
+                "product_client_id": originator().value,
+                "num_input_images": 1,
+                "result": "rejected",
+                "rejection_reason": "expected_turn_mismatch",
+                "created_at": 1_716_000_124
             }
         })
     );
