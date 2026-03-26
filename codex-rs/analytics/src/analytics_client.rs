@@ -19,7 +19,6 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
-use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -91,7 +90,7 @@ pub enum TurnStatus {
 }
 
 #[derive(Clone)]
-pub struct ThreadInitializeInput {
+pub struct ThreadInitializedInput {
     pub connection_id: u64,
     pub thread_id: String,
     pub model: String,
@@ -163,7 +162,7 @@ pub enum AnalyticsFact {
 pub enum CustomAnalyticsFact {
     // This remains custom on this branch because app-server-protocol does not
     // yet expose a generic client response enum we can reduce over directly.
-    ThreadInitialized(ThreadInitializeInput),
+    ThreadInitialized(ThreadInitializedInput),
     TurnStarted(Box<TurnStartedInput>),
     TurnCompleted(TurnCompletedInput),
     SkillInvoked(SkillInvokedInput),
@@ -332,7 +331,7 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_thread_initialized(&self, input: ThreadInitializeInput) {
+    pub fn track_thread_initialized(&self, input: ThreadInitializedInput) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::ThreadInitialized(input),
         ));
@@ -644,7 +643,7 @@ impl AnalyticsReducer {
 
     fn ingest_thread_initialized(
         &mut self,
-        input: ThreadInitializeInput,
+        input: ThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
         let Some(client_state) = self.clients.get(&input.connection_id) else {
@@ -878,7 +877,7 @@ fn personality_mode(personality: Option<Personality>) -> Option<String> {
 
 fn codex_thread_initialized_event_request(
     product_client_id: String,
-    input: ThreadInitializeInput,
+    input: ThreadInitializedInput,
 ) -> CodexThreadInitializedEvent {
     CodexThreadInitializedEvent {
         event_type: "codex_thread_initialized",
@@ -888,7 +887,7 @@ fn codex_thread_initialized_event_request(
 
 fn codex_thread_initialized_event_params(
     product_client_id: String,
-    input: ThreadInitializeInput,
+    input: ThreadInitializedInput,
 ) -> CodexThreadInitializedEventParams {
     CodexThreadInitializedEventParams {
         thread_id: input.thread_id,
@@ -897,9 +896,8 @@ fn codex_thread_initialized_event_params(
         ephemeral: input.ephemeral,
         session_source: session_source_name(&input.session_source),
         initialization_mode: input.initialization_mode,
-        subagent_source: session_source_subagent_source(&input.session_source)
-            .map(subagent_source_name),
-        parent_thread_id: session_source_parent_thread_id(&input.session_source),
+        subagent_source: None,
+        parent_thread_id: None,
         created_at: now_unix_timestamp_secs(),
     }
 }
@@ -942,34 +940,10 @@ fn codex_plugin_used_metadata(
 fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
     match session_source {
         SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
-        SessionSource::SubAgent(_) => Some("subagent"),
-        SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
-    }
-}
-
-fn subagent_source_name(subagent_source: SubAgentSource) -> String {
-    match subagent_source {
-        SubAgentSource::Review => "review".to_string(),
-        SubAgentSource::Compact => "compact".to_string(),
-        SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
-        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
-        SubAgentSource::Other(other) => other,
-    }
-}
-
-fn session_source_subagent_source(session_source: &SessionSource) -> Option<SubAgentSource> {
-    match session_source {
-        SessionSource::SubAgent(subagent_source) => Some(subagent_source.clone()),
-        _ => None,
-    }
-}
-
-fn session_source_parent_thread_id(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) => Some(parent_thread_id.to_string()),
-        _ => None,
+        SessionSource::SubAgent(_)
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
     }
 }
 
