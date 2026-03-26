@@ -291,27 +291,6 @@ impl TrackEventsJob {
     }
 }
 
-fn job_type_for_event(event: &TrackEventRequest) -> &'static str {
-    match event {
-        TrackEventRequest::SkillInvocation(_) => SKILL_INVOCATIONS_JOB_TYPE,
-        TrackEventRequest::AppMentioned(_) => APP_MENTIONED_JOB_TYPE,
-        TrackEventRequest::AppUsed(_) => APP_USED_JOB_TYPE,
-        TrackEventRequest::PluginUsed(_) => PLUGIN_USED_JOB_TYPE,
-        TrackEventRequest::PluginInstalled(_) => PLUGIN_INSTALLED_JOB_TYPE,
-        TrackEventRequest::PluginUninstalled(_) => PLUGIN_UNINSTALLED_JOB_TYPE,
-        TrackEventRequest::PluginEnabled(_) => PLUGIN_ENABLED_JOB_TYPE,
-        TrackEventRequest::PluginDisabled(_) => PLUGIN_DISABLED_JOB_TYPE,
-    }
-}
-
-fn event_counts_by_job_type(events: &[TrackEventRequest]) -> BTreeMap<&'static str, usize> {
-    let mut counts = BTreeMap::new();
-    for event in events {
-        *counts.entry(job_type_for_event(event)).or_insert(0) += 1;
-    }
-    counts
-}
-
 fn emit_analytics_events_failure_counters(
     reason: &'static str,
     job_type: &'static str,
@@ -337,7 +316,22 @@ fn emit_analytics_events_failure_counters_for_events(
     events: &[TrackEventRequest],
     extra_tags: &[(&str, &str)],
 ) {
-    for (job_type, event_count) in event_counts_by_job_type(events) {
+    let mut counts = BTreeMap::new();
+    for event in events {
+        let job_type = match event {
+            TrackEventRequest::SkillInvocation(_) => SKILL_INVOCATIONS_JOB_TYPE,
+            TrackEventRequest::AppMentioned(_) => APP_MENTIONED_JOB_TYPE,
+            TrackEventRequest::AppUsed(_) => APP_USED_JOB_TYPE,
+            TrackEventRequest::PluginUsed(_) => PLUGIN_USED_JOB_TYPE,
+            TrackEventRequest::PluginInstalled(_) => PLUGIN_INSTALLED_JOB_TYPE,
+            TrackEventRequest::PluginUninstalled(_) => PLUGIN_UNINSTALLED_JOB_TYPE,
+            TrackEventRequest::PluginEnabled(_) => PLUGIN_ENABLED_JOB_TYPE,
+            TrackEventRequest::PluginDisabled(_) => PLUGIN_DISABLED_JOB_TYPE,
+        };
+        *counts.entry(job_type).or_insert(0) += 1;
+    }
+
+    for (job_type, event_count) in counts {
         emit_analytics_events_failure_counters(reason, job_type, event_count, extra_tags);
     }
 }

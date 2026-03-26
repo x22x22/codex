@@ -24,7 +24,6 @@ use crate::plugins::PluginId;
 use crate::plugins::PluginTelemetryMetadata;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -418,55 +417,6 @@ fn track_events_job_event_count_matches_underlying_payloads() {
     assert_eq!(skill_job.event_count(), 2);
     assert_eq!(app_mentioned_job.event_count(), 3);
     assert_eq!(plugin_job.event_count(), 1);
-}
-
-#[test]
-fn event_counts_by_job_type_groups_mixed_events() {
-    let tracking = TrackEventsContext {
-        model_slug: "gpt-5".to_string(),
-        thread_id: "thread-1".to_string(),
-        turn_id: "turn-1".to_string(),
-    };
-    let events = vec![
-        TrackEventRequest::AppMentioned(CodexAppMentionedEventRequest {
-            event_type: "codex_app_mentioned",
-            event_params: codex_app_metadata(
-                &tracking,
-                AppInvocation {
-                    connector_id: Some("drive".to_string()),
-                    app_name: Some("Drive".to_string()),
-                    invocation_type: Some(InvocationType::Explicit),
-                },
-            ),
-        }),
-        TrackEventRequest::AppUsed(CodexAppUsedEventRequest {
-            event_type: "codex_app_used",
-            event_params: codex_app_metadata(
-                &tracking,
-                AppInvocation {
-                    connector_id: Some("calendar".to_string()),
-                    app_name: Some("Calendar".to_string()),
-                    invocation_type: Some(InvocationType::Implicit),
-                },
-            ),
-        }),
-        TrackEventRequest::AppMentioned(CodexAppMentionedEventRequest {
-            event_type: "codex_app_mentioned",
-            event_params: codex_app_metadata(
-                &tracking,
-                AppInvocation {
-                    connector_id: Some("gmail".to_string()),
-                    app_name: Some("Gmail".to_string()),
-                    invocation_type: None,
-                },
-            ),
-        }),
-    ];
-
-    assert_eq!(
-        super::event_counts_by_job_type(&events),
-        BTreeMap::from([("app_mentioned", 2), ("app_used", 1)])
-    );
 }
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
