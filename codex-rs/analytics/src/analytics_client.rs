@@ -176,8 +176,9 @@ pub struct AppInvocation {
 
 pub enum AnalyticsInput {
     CodexThreadInitialized(CodexThreadInitializedInput),
-    TurnEvent(TurnEventInput),
     TurnSteer(TurnSteerInput),
+    TurnStarted(TurnStartedInput),
+    TurnCompleted(TurnCompletedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
@@ -185,7 +186,7 @@ pub enum AnalyticsInput {
     PluginStateChanged(PluginStateChangedInput),
 }
 
-pub struct TurnEventInput {
+pub struct TurnStartedInput {
     pub tracking: TrackEventsContext,
     pub turn_event: CodexTurnEvent,
 }
@@ -193,6 +194,10 @@ pub struct TurnEventInput {
 pub struct TurnSteerInput {
     pub tracking: TrackEventsContext,
     pub turn_steer: CodexTurnSteerEvent,
+}
+
+pub struct TurnCompletedInput {
+    pub turn_id: String,
 }
 
 pub struct SkillInvokedInput {
@@ -231,10 +236,15 @@ pub enum PluginState {
 #[derive(Default)]
 pub struct AnalyticsReducer {
     threads: HashMap<String, ThreadState>,
+    turns: HashMap<String, TurnState>,
 }
 
 struct ThreadState {
     _initialized_input: CodexThreadInitializedInput,
+}
+
+struct TurnState {
+    started_input: TurnStartedInput,
 }
 
 #[derive(Clone)]
@@ -362,8 +372,8 @@ impl AnalyticsEventsClient {
         }));
     }
 
-    pub fn track_turn_event(&self, tracking: TrackEventsContext, turn_event: CodexTurnEvent) {
-        self.record(AnalyticsInput::TurnEvent(TurnEventInput {
+    pub fn track_turn_started(&self, tracking: TrackEventsContext, turn_event: CodexTurnEvent) {
+        self.record(AnalyticsInput::TurnStarted(TurnStartedInput {
             tracking,
             turn_event,
         }));
@@ -373,6 +383,12 @@ impl AnalyticsEventsClient {
         self.record(AnalyticsInput::TurnSteer(TurnSteerInput {
             tracking,
             turn_steer,
+        }));
+    }
+
+    pub fn track_turn_completed(&self, turn_id: String) {
+        self.record(AnalyticsInput::TurnCompleted(TurnCompletedInput {
+            turn_id,
         }));
     }
 
@@ -607,8 +623,11 @@ impl AnalyticsReducer {
             AnalyticsInput::CodexThreadInitialized(input) => {
                 self.ingest_thread_initialized(input, out);
             }
-            AnalyticsInput::TurnEvent(input) => {
-                self.ingest_turn_event(input, out);
+            AnalyticsInput::TurnStarted(input) => {
+                self.ingest_turn_started(input);
+            }
+            AnalyticsInput::TurnCompleted(input) => {
+                self.ingest_turn_completed(input, out);
             }
             AnalyticsInput::TurnSteer(input) => {
                 self.ingest_turn_steer(input, out);
@@ -647,26 +666,33 @@ impl AnalyticsReducer {
         ));
     }
 
-    fn ingest_turn_event(&mut self, input: TurnEventInput, out: &mut Vec<TrackEventRequest>) {
-        let TurnEventInput {
-            tracking,
-            turn_event,
-        } = input;
-        out.push(TrackEventRequest::TurnEvent(CodexTurnEventRequest {
-            event_type: "codex_turn_event",
-            event_params: codex_turn_event_params(&tracking, turn_event),
-        }));
+    fn ingest_turn_started(&mut self, input: TurnStartedInput) {
+        self.turns.insert(
+            input.tracking.turn_id.clone(),
+            TurnState {
+                started_input: input,
+            },
+        );
     }
 
-    fn ingest_turn_steer(&mut self, input: TurnSteerInput, out: &mut Vec<TrackEventRequest>) {
-        let TurnSteerInput {
+    fn ingest_turn_completed(
+        &mut self,
+        input: TurnCompletedInput,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(TurnState { started_input }) = self.turns.remove(&input.turn_id) else {
+            return;
+        };
+        let TurnStartedInput {
             tracking,
-            turn_steer,
-        } = input;
-        out.push(TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
-            event_type: "codex_turn_steer_event",
-            event_params: codex_turn_steer_event_params(&tracking, turn_steer),
-        }));
+            turn_event,
+        } = started_input;
+        out.push(TrackEventRequest::TurnEvent(Box::new(
+            CodexTurnEventRequest {
+                event_type: "codex_turn_event",
+                event_params: codex_turn_event_params(&tracking, turn_event),
+            },
+        )));
     }
 
     fn ingest_turn_steer(&mut self, input: TurnSteerInput, out: &mut Vec<TrackEventRequest>) {

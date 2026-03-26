@@ -18,6 +18,8 @@ pub use analytics_client::PluginUsedInput;
 pub use analytics_client::SkillInvocation;
 pub use analytics_client::SkillInvokedInput;
 pub use analytics_client::TrackEventsContext;
+pub use analytics_client::TurnCompletedInput;
+pub use analytics_client::TurnStartedInput;
 pub use analytics_client::TurnStatus;
 pub use analytics_client::TurnSteerRejectionReason;
 pub use analytics_client::TurnSteerResult;
