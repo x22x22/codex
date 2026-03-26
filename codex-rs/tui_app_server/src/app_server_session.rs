@@ -430,7 +430,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("turn/start failed in app-server TUI")
+            .wrap_err("turn/start failed in TUI")
     }
 
     pub(crate) async fn turn_interrupt(
@@ -449,7 +449,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("turn/interrupt failed in app-server TUI")?;
+            .wrap_err("turn/interrupt failed in TUI")?;
         Ok(())
     }
 
@@ -488,7 +488,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/name/set failed in app-server TUI")?;
+            .wrap_err("thread/name/set failed in TUI")?;
         Ok(())
     }
 
@@ -503,7 +503,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/unsubscribe failed in app-server TUI")?;
+            .wrap_err("thread/unsubscribe failed in TUI")?;
         Ok(())
     }
 
@@ -518,7 +518,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/compact/start failed in app-server TUI")?;
+            .wrap_err("thread/compact/start failed in TUI")?;
         Ok(())
     }
 
@@ -538,7 +538,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/shellCommand failed in app-server TUI")?;
+            .wrap_err("thread/shellCommand failed in TUI")?;
         Ok(())
     }
 
@@ -556,7 +556,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/backgroundTerminals/clean failed in app-server TUI")?;
+            .wrap_err("thread/backgroundTerminals/clean failed in TUI")?;
         Ok(())
     }
 
@@ -575,7 +575,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/rollback failed in app-server TUI")
+            .wrap_err("thread/rollback failed in TUI")
     }
 
     pub(crate) async fn review_start(
@@ -594,7 +594,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("review/start failed in app-server TUI")
+            .wrap_err("review/start failed in TUI")
     }
 
     pub(crate) async fn skills_list(
@@ -605,7 +605,7 @@ impl AppServerSession {
         self.client
             .request_typed(ClientRequest::SkillsList { request_id, params })
             .await
-            .wrap_err("skills/list failed in app-server TUI")
+            .wrap_err("skills/list failed in TUI")
     }
 
     pub(crate) async fn reload_user_config(&mut self) -> Result<()> {
@@ -622,7 +622,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("config/batchWrite failed while reloading user config in app-server TUI")?;
+            .wrap_err("config/batchWrite failed while reloading user config in TUI")?;
         Ok(())
     }
 
@@ -643,7 +643,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/realtime/start failed in app-server TUI")?;
+            .wrap_err("thread/realtime/start failed in TUI")?;
         Ok(())
     }
 
@@ -663,7 +663,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/realtime/appendAudio failed in app-server TUI")?;
+            .wrap_err("thread/realtime/appendAudio failed in TUI")?;
         Ok(())
     }
 
@@ -683,7 +683,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/realtime/appendText failed in app-server TUI")?;
+            .wrap_err("thread/realtime/appendText failed in TUI")?;
         Ok(())
     }
 
@@ -698,7 +698,7 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("thread/realtime/stop failed in app-server TUI")?;
+            .wrap_err("thread/realtime/stop failed in TUI")?;
         Ok(())
     }
 
