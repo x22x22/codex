@@ -220,6 +220,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             network.apply_to_env(&mut env);
         }
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
+            if !ctx.turn.environment.exec_capabilities().zsh_fork {
+                return Err(ToolError::Rejected(
+                    "unified_exec zsh-fork is not supported by the configured exec backend"
+                        .to_string(),
+                ));
+            }
             let command =
                 build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
                     .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
@@ -240,17 +246,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
-                    if ctx.turn.environment.exec_server_url().is_some() {
-                        return Err(ToolError::Rejected(
-                            "unified_exec zsh-fork is not supported when exec_server_url is configured".to_string(),
-                        ));
-                    }
                     return self
                         .manager
                         .open_session_with_exec_env(
                             req.process_id,
                             &prepared.exec_request,
                             req.tty,
+                            codex_exec_server::ExecLaunch::ZshFork,
                             prepared.spawn_lifecycle,
                             ctx.turn.environment.as_ref(),
                         )
@@ -287,6 +289,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 req.process_id,
                 &exec_env,
                 req.tty,
+                codex_exec_server::ExecLaunch::Direct,
                 Box::new(NoopSpawnLifecycle),
                 ctx.turn.environment.as_ref(),
             )
