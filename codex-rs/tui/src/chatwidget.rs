@@ -292,7 +292,6 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod create_api_key;
-mod dotenv_api_key;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;

@@ -15,10 +15,9 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 
 use super::ChatWidget;
-use super::dotenv_api_key::upsert_dotenv_api_key;
-use super::dotenv_api_key::validate_dotenv_target;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::clipboard_text;
 use crate::history_cell;
 use crate::history_cell::PlainHistoryCell;
 
@@ -28,7 +27,6 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             self.auth_manager.clone(),
             self.config.codex_home.clone(),
-            self.status_line_cwd().to_path_buf(),
             self.config.forced_login_method,
         ) {
             Ok(start_message) => {
@@ -46,20 +44,11 @@ fn start_create_api_key_command(
     app_event_tx: AppEventSender,
     auth_manager: Arc<AuthManager>,
     codex_home: PathBuf,
-    cwd: PathBuf,
     forced_login_method: Option<ForcedLoginMethod>,
 ) -> Result<PlainHistoryCell, String> {
     if read_openai_api_key_from_env().is_some() {
         return Ok(existing_shell_api_key_message());
     }
-
-    let dotenv_path = cwd.join(".env.local");
-    validate_dotenv_target(&dotenv_path).map_err(|err| {
-        format!(
-            "Unable to prepare {} for {OPENAI_API_KEY_ENV_VAR}: {err}",
-            dotenv_path.display(),
-        )
-    })?;
 
     let session = start_create_api_key_flow()
         .map_err(|err| format!("Failed to start API key creation: {err}"))?;
@@ -67,21 +56,12 @@ fn start_create_api_key_command(
     let start_message = continue_in_browser_message(
         session.auth_url(),
         session.callback_port(),
-        &dotenv_path,
         browser_opened,
     );
 
     let app_event_tx_for_task = app_event_tx;
-    let dotenv_path_for_task = dotenv_path;
     tokio::spawn(async move {
-        let cell = complete_command(
-            session,
-            dotenv_path_for_task,
-            codex_home,
-            forced_login_method,
-            auth_manager,
-        )
-        .await;
+        let cell = complete_command(session, codex_home, forced_login_method, auth_manager).await;
         app_event_tx_for_task.send(AppEvent::InsertHistoryCell(Box::new(cell)));
     });
 
@@ -94,7 +74,7 @@ fn existing_shell_api_key_message() -> PlainHistoryCell {
             "{OPENAI_API_KEY_ENV_VAR} is already set in this Codex session; skipping API key creation."
         ),
         Some(format!(
-            "This Codex session already inherited {OPENAI_API_KEY_ENV_VAR} from its shell environment. Unset it and run /create-api-key again if you want Codex to create and save a different key."
+            "This Codex session already inherited {OPENAI_API_KEY_ENV_VAR} from its shell environment. Unset it and run /create-api-key again if you want Codex to create a different key."
         )),
     )
 }
@@ -102,7 +82,6 @@ fn existing_shell_api_key_message() -> PlainHistoryCell {
 fn continue_in_browser_message(
     auth_url: &str,
     callback_port: u16,
-    dotenv_path: &Path,
     browser_opened: bool,
 ) -> PlainHistoryCell {
     let mut lines = vec![
@@ -136,10 +115,7 @@ fn continue_in_browser_message(
     ]));
     lines.push("".into());
     lines.push(
-        format!(
-            "  Codex will save {OPENAI_API_KEY_ENV_VAR} to {} and hot-apply it here when allowed.",
-            dotenv_path.display()
-        )
+        format!("  Codex will display the new {OPENAI_API_KEY_ENV_VAR} here and copy it to your clipboard.")
         .dark_gray()
         .into(),
     );
@@ -157,7 +133,6 @@ fn continue_in_browser_message(
 
 async fn complete_command(
     session: PendingCreateApiKey,
-    dotenv_path: PathBuf,
     codex_home: PathBuf,
     forced_login_method: Option<ForcedLoginMethod>,
     auth_manager: Arc<AuthManager>,
@@ -168,17 +143,11 @@ async fn complete_command(
             return history_cell::new_error_event(format!("API key creation failed: {err}"));
         }
     };
-
-    if let Err(err) = upsert_dotenv_api_key(&dotenv_path, &provisioned.project_api_key) {
-        return history_cell::new_error_event(format!(
-            "API key creation completed, but Codex could not update {}: {err}",
-            dotenv_path.display()
-        ));
-    }
+    let copy_result = clipboard_text::copy_text_to_clipboard(&provisioned.project_api_key);
 
     success_cell(
         &provisioned,
-        &dotenv_path,
+        copy_result,
         live_apply_api_key(
             forced_login_method,
             &codex_home,
@@ -196,7 +165,7 @@ fn live_apply_api_key(
 ) -> LiveApplyOutcome {
     if matches!(forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
         return LiveApplyOutcome::Skipped(format!(
-            "Saved {OPENAI_API_KEY_ENV_VAR} to .env.local, but left this session unchanged because ChatGPT login is required here."
+            "Created {OPENAI_API_KEY_ENV_VAR}, but left this session unchanged because ChatGPT login is required here."
         ));
     }
 
@@ -211,7 +180,7 @@ fn live_apply_api_key(
 
 fn success_cell(
     provisioned: &CreatedApiKey,
-    dotenv_path: &Path,
+    copy_result: Result<(), String>,
     live_apply_outcome: LiveApplyOutcome,
 ) -> PlainHistoryCell {
     let organization = provisioned
@@ -222,24 +191,46 @@ fn success_cell(
         .default_project_title
         .clone()
         .unwrap_or_else(|| provisioned.default_project_id.clone());
-    let hint = match live_apply_outcome {
+    let masked_api_key = mask_api_key(&provisioned.project_api_key);
+    let copy_status = match copy_result {
+        Ok(()) => "Copied the full key to your clipboard.".to_string(),
+        Err(err) => format!("Could not copy the key to your clipboard: {err}"),
+    };
+    let live_apply_status = match live_apply_outcome {
         LiveApplyOutcome::Applied => Some(
             "Updated this session to use the newly created API key without touching auth.json."
                 .to_string(),
         ),
         LiveApplyOutcome::Skipped(reason) => Some(reason),
         LiveApplyOutcome::Failed(err) => Some(format!(
-            "Saved {OPENAI_API_KEY_ENV_VAR} to {}, but could not hot-apply it in this session: {err}",
-            dotenv_path.display(),
+            "Created {OPENAI_API_KEY_ENV_VAR}, but could not hot-apply it in this session: {err}",
         )),
     };
+    let hint = Some(match live_apply_status {
+        Some(live_apply_status) => format!("{copy_status} {live_apply_status}"),
+        None => copy_status,
+    });
 
     history_cell::new_info_event(
         format!(
-            "Created an API key for {organization} / {project} and saved {OPENAI_API_KEY_ENV_VAR} to {}.",
-            dotenv_path.display()
+            "Created an API key for {organization} / {project}: {masked_api_key}"
         ),
         hint,
+    )
+}
+
+fn mask_api_key(api_key: &str) -> String {
+    const UNMASKED_PREFIX_LEN: usize = 8;
+    const UNMASKED_SUFFIX_LEN: usize = 4;
+
+    if api_key.len() <= UNMASKED_PREFIX_LEN + UNMASKED_SUFFIX_LEN {
+        return api_key.to_string();
+    }
+
+    format!(
+        "{}...{}",
+        &api_key[..UNMASKED_PREFIX_LEN],
+        &api_key[api_key.len() - UNMASKED_SUFFIX_LEN..]
     )
 }
 
@@ -265,7 +256,7 @@ mod tests {
                 default_project_title: Some("Default Project".to_string()),
                 project_api_key: "sk-proj-123".to_string(),
             },
-            Path::new("/tmp/workspace/.env.local"),
+            Ok(()),
             LiveApplyOutcome::Applied,
         );
 
@@ -282,9 +273,9 @@ mod tests {
                 default_project_title: None,
                 project_api_key: "sk-proj-123".to_string(),
             },
-            Path::new("/tmp/workspace/.env.local"),
+            Err("clipboard unavailable".to_string()),
             LiveApplyOutcome::Skipped(
-                "Saved OPENAI_API_KEY to .env.local, but left this session unchanged because ChatGPT login is required here."
+                "Created OPENAI_API_KEY, but left this session unchanged because ChatGPT login is required here."
                     .to_string(),
             ),
         );
@@ -297,7 +288,6 @@ mod tests {
         let cell = continue_in_browser_message(
             "https://auth.openai.com/oauth/authorize?client_id=abc",
             /*callback_port*/ 5000,
-            Path::new("/tmp/workspace/.env.local"),
             /*browser_opened*/ false,
         );
 
@@ -310,7 +300,7 @@ mod tests {
 
         assert_eq!(
             render_cell(&cell),
-            "• OPENAI_API_KEY is already set in this Codex session; skipping API key creation. This Codex session already inherited OPENAI_API_KEY from its shell environment. Unset it and run /create-api-key again if you want Codex to create and save a different key."
+            "• OPENAI_API_KEY is already set in this Codex session; skipping API key creation. This Codex session already inherited OPENAI_API_KEY from its shell environment. Unset it and run /create-api-key again if you want Codex to create a different key."
         );
     }
 
@@ -319,11 +309,15 @@ mod tests {
         let cell = continue_in_browser_message(
             "https://auth.example.com/oauth/authorize?state=abc",
             5000,
-            Path::new("/tmp/workspace/.env.local"),
             /*browser_opened*/ false,
         );
 
         assert!(render_cell(&cell).contains("https://auth.example.com/oauth/authorize?state=abc"));
+    }
+
+    #[test]
+    fn mask_api_key_preserves_prefix_and_suffix() {
+        assert_eq!(mask_api_key("sk-proj-1234567890"), "sk-proj-...7890");
     }
 
     fn render_cell(cell: &PlainHistoryCell) -> String {
