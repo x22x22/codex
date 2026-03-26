@@ -133,6 +133,7 @@ pub(crate) fn thread_initialized_event(payload: &Value) -> Result<&Value> {
 pub(crate) fn assert_basic_thread_initialized_event(
     event: &Value,
     thread_id: &str,
+    expected_model: &str,
     initialization_mode: &str,
 ) {
     assert_eq!(event["event_params"]["thread_id"], thread_id);
@@ -140,7 +141,7 @@ pub(crate) fn assert_basic_thread_initialized_event(
         event["event_params"]["product_client_id"],
         DEFAULT_CLIENT_NAME
     );
-    assert_eq!(event["event_params"]["model"], "mock-model");
+    assert_eq!(event["event_params"]["model"], expected_model);
     assert_eq!(event["event_params"]["ephemeral"], false);
     assert_eq!(event["event_params"]["session_source"], "user");
     assert_eq!(
