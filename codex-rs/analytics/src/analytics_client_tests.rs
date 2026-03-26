@@ -5,7 +5,6 @@ use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
 use super::CodexThreadInitializedEvent;
-use super::CodexThreadInitializedEventRequest;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
 use super::CodexTurnSteerEvent;
@@ -17,7 +16,7 @@ use super::TrackEventsContext;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
-use super::codex_thread_initialized_event_params;
+use super::codex_thread_initialized_event_request;
 use super::codex_turn_event_params;
 use super::codex_turn_steer_event_params;
 use super::normalize_path_for_skill_id;
@@ -292,29 +291,19 @@ fn turn_steer_event_serializes_expected_shape() {
 
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
-    let event = TrackEventRequest::ThreadInitialized(CodexThreadInitializedEventRequest {
-        event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
+    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
+        originator().value,
+        CodexThreadInitializedEvent {
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
-            model_provider: "openai".to_string(),
-            reasoning_effort: Some(ReasoningEffort::High),
-            reasoning_summary: Some(ReasoningSummary::Detailed),
-            service_tier: Some(ServiceTier::Flex),
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            sandbox_network_access: false,
-            collaboration_mode: ModeKind::Plan,
-            personality: Some(Personality::Friendly),
             ephemeral: true,
             session_source: SessionSource::Exec,
             initialization_mode: InitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
             created_at: 1_716_000_000,
-        }),
-    });
+        },
+    ));
 
     let payload = serde_json::to_value(&event).expect("serialize thread initialized event");
 
@@ -326,16 +315,6 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "thread_id": "thread-0",
                 "product_client_id": originator().value,
                 "model": "gpt-5",
-                "model_provider": "openai",
-                "reasoning_effort": "high",
-                "reasoning_summary": "detailed",
-                "service_tier": "flex",
-                "approval_policy": "on-request",
-                "approvals_reviewer": "guardian_subagent",
-                "sandbox_policy": "read_only",
-                "sandbox_network_access": false,
-                "collaboration_mode": "plan",
-                "personality": "friendly",
                 "ephemeral": true,
                 "session_source": "user",
                 "initialization_mode": "new",
@@ -349,29 +328,19 @@ fn thread_initialized_event_serializes_expected_shape() {
 
 #[test]
 fn thread_initialized_event_serializes_subagent_source() {
-    let event = TrackEventRequest::ThreadInitialized(CodexThreadInitializedEventRequest {
-        event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
+    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
+        originator().value,
+        CodexThreadInitializedEvent {
             thread_id: "thread-1".to_string(),
             model: "gpt-5".to_string(),
-            model_provider: "openai".to_string(),
-            reasoning_effort: None,
-            reasoning_summary: None,
-            service_tier: None,
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            sandbox_network_access: false,
-            collaboration_mode: ModeKind::Default,
-            personality: None,
             ephemeral: false,
             session_source: SessionSource::SubAgent(SubAgentSource::Review),
             initialization_mode: InitializationMode::New,
             subagent_source: Some(SubAgentSource::Review),
             parent_thread_id: None,
             created_at: 1,
-        }),
-    });
+        },
+    ));
 
     let payload =
         serde_json::to_value(&event).expect("serialize subagent thread initialized event");
@@ -381,29 +350,19 @@ fn thread_initialized_event_serializes_subagent_source() {
 
 #[test]
 fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
-    let event = TrackEventRequest::ThreadInitialized(CodexThreadInitializedEventRequest {
-        event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
+    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
+        originator().value,
+        CodexThreadInitializedEvent {
             thread_id: "thread-2".to_string(),
             model: "gpt-5".to_string(),
-            model_provider: "openai".to_string(),
-            reasoning_effort: None,
-            reasoning_summary: None,
-            service_tier: None,
-            approval_policy: AskForApproval::OnRequest,
-            approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            sandbox_network_access: false,
-            collaboration_mode: ModeKind::Default,
-            personality: None,
             ephemeral: false,
             session_source: SessionSource::Mcp,
             initialization_mode: InitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
             created_at: 1,
-        }),
-    });
+        },
+    ));
 
     let payload = serde_json::to_value(&event).expect("serialize mcp thread initialized event");
     assert_eq!(
