@@ -40,6 +40,59 @@ WHERE id = ?
             .transpose()
     }
 
+    pub async fn get_threads_by_ids(
+        &self,
+        ids: &[ThreadId],
+    ) -> anyhow::Result<std::collections::HashMap<ThreadId, crate::ThreadMetadata>> {
+        if ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            r#"
+SELECT
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    agent_nickname,
+    agent_role,
+    agent_path,
+    model_provider,
+    model,
+    reasoning_effort,
+    cwd,
+    cli_version,
+    title,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    first_user_message,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url,
+    metadata_json
+FROM threads
+WHERE id IN (
+            "#,
+        );
+        let mut separated = builder.separated(", ");
+        for id in ids {
+            separated.push_bind(id.to_string());
+        }
+        separated.push_unseparated(")");
+
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
+        rows.into_iter()
+            .map(|row| {
+                let metadata = ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from)?;
+                Ok((metadata.id, metadata))
+            })
+            .collect()
+    }
+
     pub async fn get_thread_memory_mode(&self, id: ThreadId) -> anyhow::Result<Option<String>> {
         let row = sqlx::query("SELECT memory_mode FROM threads WHERE id = ?")
             .bind(id.to_string())
