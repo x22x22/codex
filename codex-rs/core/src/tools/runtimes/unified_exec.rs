@@ -19,7 +19,6 @@ use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
-use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::command_can_use_shell_snapshot;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;

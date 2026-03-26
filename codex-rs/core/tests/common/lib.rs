@@ -4,6 +4,7 @@ use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::ensure;
 use codex_arg0::Arg0PathEntryGuard;
+#[cfg(target_os = "linux")]
 use codex_utils_cargo_bin::CargoBinError;
 use ctor::ctor;
 use std::process::Command;
@@ -14,6 +15,7 @@ use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::config_loader::LoaderOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
 use std::path::Path;
@@ -185,8 +187,15 @@ pub fn fetch_dotslash_file(
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
+    let loader_overrides = LoaderOverrides {
+        managed_config_path: Some(codex_home.path().join("missing_managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
+    };
     ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(loader_overrides)
         .harness_overrides(default_test_overrides())
         .build()
         .await

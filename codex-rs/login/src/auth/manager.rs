@@ -1316,7 +1316,6 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
         if should_route_via_openai_socket_proxy() {
             return Ok(());
         }

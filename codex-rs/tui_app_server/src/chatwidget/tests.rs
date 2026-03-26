@@ -75,6 +75,7 @@ use codex_core::config_loader::AppsRequirementsToml;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::RequirementSource;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
@@ -188,10 +189,20 @@ use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
 async fn test_config() -> Config {
-    // Use base defaults to avoid depending on host state.
-    let codex_home = std::env::temp_dir();
+    // Use a dedicated temp Codex home and disable managed config injection so
+    // chatwidget tests stay hermetic on machines with system-wide config.
+    let codex_home = tempdir().expect("tempdir");
+    let codex_home_path = codex_home.path().to_path_buf();
+    std::mem::forget(codex_home);
+    let loader_overrides = LoaderOverrides {
+        managed_config_path: Some(codex_home_path.join("missing_managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
+    };
     ConfigBuilder::default()
-        .codex_home(codex_home.clone())
+        .codex_home(codex_home_path)
+        .loader_overrides(loader_overrides)
         .build()
         .await
         .expect("config")

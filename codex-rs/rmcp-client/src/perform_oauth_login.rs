@@ -81,6 +81,61 @@ pub async fn perform_oauth_login(
     callback_port: Option<u16>,
     callback_url: Option<&str>,
 ) -> Result<()> {
+    perform_oauth_login_with_browser_output(
+        server_name,
+        server_url,
+        store_mode,
+        http_headers,
+        env_http_headers,
+        scopes,
+        oauth_resource,
+        callback_port,
+        callback_url,
+        /*emit_browser_url*/ true,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn perform_oauth_login_silent(
+    server_name: &str,
+    server_url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+    scopes: &[String],
+    oauth_resource: Option<&str>,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+) -> Result<()> {
+    perform_oauth_login_with_browser_output(
+        server_name,
+        server_url,
+        store_mode,
+        http_headers,
+        env_http_headers,
+        scopes,
+        oauth_resource,
+        callback_port,
+        callback_url,
+        /*emit_browser_url*/ false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn perform_oauth_login_with_browser_output(
+    server_name: &str,
+    server_url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+    scopes: &[String],
+    oauth_resource: Option<&str>,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+    emit_browser_url: bool,
+) -> Result<()> {
     let headers = OauthHeaders {
         http_headers,
         env_http_headers,
@@ -92,13 +147,12 @@ pub async fn perform_oauth_login(
         headers,
         scopes,
         oauth_resource,
-        /*launch_browser*/ true,
         callback_port,
         callback_url,
         /*timeout_secs*/ None,
     )
     .await?
-    .finish()
+    .finish(emit_browser_url)
     .await
 }
 
@@ -126,7 +180,6 @@ pub async fn perform_oauth_login_return_url(
         headers,
         scopes,
         oauth_resource,
-        /*launch_browser*/ false,
         callback_port,
         callback_url,
         timeout_secs,
@@ -280,7 +333,6 @@ struct OauthLoginFlow {
     server_name: String,
     server_url: String,
     store_mode: OAuthCredentialsStoreMode,
-    launch_browser: bool,
     timeout: Duration,
 }
 
@@ -353,7 +405,6 @@ impl OauthLoginFlow {
         headers: OauthHeaders,
         scopes: &[String],
         oauth_resource: Option<&str>,
-        launch_browser: bool,
         callback_port: Option<u16>,
         callback_url: Option<&str>,
         timeout_secs: Option<i64>,
@@ -406,7 +457,6 @@ impl OauthLoginFlow {
             server_name: server_name.to_string(),
             server_url: server_url.to_string(),
             store_mode,
-            launch_browser,
             timeout,
         })
     }
@@ -415,8 +465,8 @@ impl OauthLoginFlow {
         self.auth_url.clone()
     }
 
-    async fn finish(mut self) -> Result<()> {
-        if self.launch_browser {
+    async fn finish(mut self, emit_browser_url: bool) -> Result<()> {
+        if emit_browser_url {
             let server_name = &self.server_name;
             let auth_url = &self.auth_url;
             println!(
@@ -486,7 +536,7 @@ impl OauthLoginFlow {
         let (tx, rx) = oneshot::channel();
 
         tokio::spawn(async move {
-            let result = self.finish().await;
+            let result = self.finish(true).await;
 
             if let Err(err) = &result {
                 eprintln!(

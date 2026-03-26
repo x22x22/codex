@@ -1147,11 +1147,6 @@ fn prepend_config_flags(
         .splice(0..0, cli_config_overrides.raw_overrides);
 }
 
-fn reject_remote_mode_for_subcommand(
-    remote: Option<&str>,
-    remote_auth_token_env: Option<&str>,
-    subcommand: &str,
-) -> anyhow::Result<()> {
 fn append_trailing_config_flags(
     subcommand_config_overrides: &mut CliConfigOverrides,
     raw_args: &[OsString],
@@ -1196,6 +1191,12 @@ fn config_flags_after_subcommand(raw_args: &[OsString], subcommand_names: &[&str
 
     overrides
 }
+
+fn reject_remote_mode_for_subcommand(
+    remote: Option<&str>,
+    remote_auth_token_env: Option<&str>,
+    subcommand: &str,
+) -> anyhow::Result<()> {
     if let Some(remote) = remote {
         anyhow::bail!(
             "`--remote {remote}` is only supported for interactive TUI commands, not `codex {subcommand}`"

@@ -45,7 +45,6 @@ mod git_info_tests;
 mod guardian;
 mod hook_runtime;
 pub mod http_transport;
-mod hook_runtime;
 pub mod instructions;
 pub mod landlock;
 pub mod mcp;
@@ -67,9 +66,6 @@ mod model_provider_info;
 pub mod utils;
 pub use utils::path_utils;
 pub mod openai_socket;
-pub mod path_utils;
-pub mod utils;
-pub use utils::path_utils;
 pub mod personality_migration;
 pub mod plugins;
 pub(crate) mod mentions {

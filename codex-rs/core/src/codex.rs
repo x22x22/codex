@@ -523,6 +523,15 @@ impl Codex {
             let _ = config.features.disable(Feature::CodeMode);
             config.startup_warnings.push(message);
         }
+        #[cfg(target_os = "android")]
+        if config.features.enabled(Feature::CodeMode) {
+            let message =
+                "Disabled `exec` for this session because code mode is unavailable on Android"
+                    .to_string();
+            warn!("{message}");
+            let _ = config.features.disable(Feature::CodeMode);
+            config.startup_warnings.push(message);
+        }
 
         let user_instructions = get_user_instructions(&config).await;
 

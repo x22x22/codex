@@ -5762,9 +5762,16 @@ fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
 async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -> std::io::Result<()>
 {
     let codex_home = TempDir::new()?;
+    let loader_overrides = LoaderOverrides {
+        managed_config_path: Some(codex_home.path().join("missing_managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
+    };
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(loader_overrides)
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
@@ -5777,6 +5784,12 @@ async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -
 async fn approvals_reviewer_stays_manual_only_when_guardian_feature_is_enabled()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
+    let loader_overrides = LoaderOverrides {
+        managed_config_path: Some(codex_home.path().join("missing_managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
+    };
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
@@ -5786,6 +5799,7 @@ guardian_approval = true
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(loader_overrides)
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
@@ -5798,6 +5812,12 @@ guardian_approval = true
 async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> std::io::Result<()>
 {
     let codex_home = TempDir::new()?;
+    let loader_overrides = LoaderOverrides {
+        managed_config_path: Some(codex_home.path().join("missing_managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
+    };
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"approvals_reviewer = "user"
@@ -5806,6 +5826,7 @@ async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> 
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(loader_overrides)
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
@@ -5843,6 +5864,12 @@ approvals_reviewer = "guardian_subagent"
 #[tokio::test]
 async fn smart_approvals_alias_is_ignored() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
+    let loader_overrides = LoaderOverrides {
+        managed_config_path: Some(codex_home.path().join("missing_managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
+    };
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
@@ -5852,6 +5879,7 @@ smart_approvals = true
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(loader_overrides)
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
@@ -5870,6 +5898,12 @@ smart_approvals = true
 #[tokio::test]
 async fn smart_approvals_alias_is_ignored_in_profiles() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
+    let loader_overrides = LoaderOverrides {
+        managed_config_path: Some(codex_home.path().join("missing_managed_config.toml")),
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
+    };
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"profile = "guardian"
@@ -5881,6 +5915,7 @@ smart_approvals = true
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(loader_overrides)
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;

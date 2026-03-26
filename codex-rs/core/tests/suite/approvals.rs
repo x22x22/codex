@@ -2254,14 +2254,14 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
         "expected child file to be removed before parent rerun"
     );
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "parent reruns child command",
         approval_policy,
         sandbox_policy,
     )
     .await?;
-    wait_for_completion_without_approval(&test).await;
+    wait_for_completion_without_approval(&test, "parent reruns child command", &turn_id).await;
 
     Ok(())
 }

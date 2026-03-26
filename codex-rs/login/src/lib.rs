@@ -2,6 +2,7 @@ pub mod auth;
 pub mod token_data;
 
 mod device_code_auth;
+mod openai_socket;
 mod pkce;
 mod server;
 

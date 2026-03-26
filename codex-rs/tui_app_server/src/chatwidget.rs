@@ -6037,6 +6037,7 @@ impl ChatWidget {
             }
             ServerRequest::DynamicToolCall { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }
+            | ServerRequest::ResponseSend { .. }
             | ServerRequest::ApplyPatchApproval { .. }
             | ServerRequest::ExecCommandApproval { .. } => {
                 if replay_kind.is_none() {

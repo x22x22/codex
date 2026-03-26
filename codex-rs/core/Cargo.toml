@@ -36,6 +36,7 @@ codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-code-mode = { workspace = true }
+codex-client = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
 codex-core-skills = { workspace = true }

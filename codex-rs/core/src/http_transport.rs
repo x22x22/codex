@@ -148,9 +148,11 @@ impl AppServerResponsesBridgeTransport {
 
         let request_future = self.bridge.send_responses_request(request_body);
         if let Some(timeout) = timeout {
-            tokio::time::timeout(timeout, request_future)
-                .await
-                .map_err(|_| TransportError::Timeout)?
+            let response: Result<ResponsesBridgeHttpResponse, TransportError> =
+                tokio::time::timeout(timeout, request_future)
+                    .await
+                    .map_err(|_| TransportError::Timeout)?;
+            response
         } else {
             request_future.await
         }
