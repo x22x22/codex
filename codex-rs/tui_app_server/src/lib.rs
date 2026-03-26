@@ -1669,6 +1669,7 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
+    use codex_core::test_support::set_thread_manager_test_mode;
     use codex_features::Feature;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
@@ -1679,6 +1680,23 @@ mod tests {
     use codex_protocol::protocol::TurnContextItem;
     use serial_test::serial;
     use tempfile::TempDir;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    struct ThreadManagerTestModeGuard;
+
+    impl ThreadManagerTestModeGuard {
+        fn enable() -> Self {
+            set_thread_manager_test_mode(/*enabled*/ true);
+            Self
+        }
+    }
+
+    impl Drop for ThreadManagerTestModeGuard {
+        fn drop(&mut self) {
+            set_thread_manager_test_mode(/*enabled*/ false);
+        }
+    }
 
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
@@ -1846,23 +1864,35 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn embedded_app_server_supports_thread_start_rpc() -> color_eyre::Result<()> {
+        let _thread_manager_test_mode = ThreadManagerTestModeGuard::enable();
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
-        let app_server = start_test_embedded_app_server(config).await?;
-        let response: ThreadStartResponse = app_server
-            .request_typed(ClientRequest::ThreadStart {
+        let app_server = timeout(
+            Duration::from_secs(10),
+            start_test_embedded_app_server(config),
+        )
+        .await
+        .expect("embedded app-server startup should not hang")?;
+        let response: ThreadStartResponse = timeout(
+            Duration::from_secs(10),
+            app_server.request_typed(ClientRequest::ThreadStart {
                 request_id: RequestId::Integer(1),
                 params: ThreadStartParams {
                     ephemeral: Some(true),
                     ..ThreadStartParams::default()
                 },
-            })
-            .await
-            .expect("thread/start should succeed");
+            }),
+        )
+        .await
+        .expect("thread/start should not hang")
+        .expect("thread/start should succeed");
         assert!(!response.thread.id.is_empty());
 
-        app_server.shutdown().await?;
+        timeout(Duration::from_secs(10), app_server.shutdown())
+            .await
+            .expect("embedded app-server shutdown should not hang")?;
         Ok(())
     }
 
