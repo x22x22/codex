@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/create_api_key.rs
+assertion_line: 249
+expression: render_cell(&cell)
+---
+• Created an API key for org-default / proj-default: sk-proj-123 Could not copy the key to your clipboard: clipboard unavailable Could not set OPENAI_API_KEY in this Codex session: dependency env unavailable

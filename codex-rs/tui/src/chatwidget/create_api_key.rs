@@ -30,9 +30,7 @@ impl ChatWidget {
     }
 }
 
-fn start_create_api_key_command(
-    app_event_tx: AppEventSender,
-) -> Result<PlainHistoryCell, String> {
+fn start_create_api_key_command(app_event_tx: AppEventSender) -> Result<PlainHistoryCell, String> {
     if read_openai_api_key_from_env().is_some() {
         return Ok(existing_shell_api_key_message());
     }
@@ -40,11 +38,8 @@ fn start_create_api_key_command(
     let session = start_create_api_key_flow()
         .map_err(|err| format!("Failed to start API key creation: {err}"))?;
     let browser_opened = session.open_browser();
-    let start_message = continue_in_browser_message(
-        session.auth_url(),
-        session.callback_port(),
-        browser_opened,
-    );
+    let start_message =
+        continue_in_browser_message(session.auth_url(), session.callback_port(), browser_opened);
 
     let app_event_tx_for_task = app_event_tx;
     tokio::spawn(async move {
@@ -129,11 +124,8 @@ async fn complete_command(
         }
     };
     let copy_result = clipboard_text::copy_text_to_clipboard(&provisioned.project_api_key);
-    let session_env_result = apply_api_key_to_current_session(
-        &provisioned.project_api_key,
-        app_event_tx,
-    )
-    .await;
+    let session_env_result =
+        apply_api_key_to_current_session(&provisioned.project_api_key, app_event_tx).await;
 
     success_cell(&provisioned, copy_result, session_env_result)
 }
@@ -197,9 +189,7 @@ fn success_cell(
     let hint = Some(format!("{copy_status} {session_env_status}"));
 
     history_cell::new_info_event(
-        format!(
-            "Created an API key for {organization} / {project}: {masked_api_key}"
-        ),
+        format!("Created an API key for {organization} / {project}: {masked_api_key}"),
         hint,
     )
 }

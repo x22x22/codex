@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/create_api_key.rs
+assertion_line: 232
 expression: render_cell(&cell)
 ---
-• Created an API key for Default Org / Default Project and saved OPENAI_API_KEY to /tmp/workspace/.env.local. Updated this session to use the newly created API key without touching auth.json.
+• Created an API key for Default Org / Default Project: sk-proj-123 Copied the full key to your clipboard. Set OPENAI_API_KEY in this Codex session for spawned commands.
