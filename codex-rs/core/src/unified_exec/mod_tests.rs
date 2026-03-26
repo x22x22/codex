@@ -81,7 +81,9 @@ async fn exec_command_with_tty(
     let process_id = manager.allocate_process_id().await;
     let cwd = workdir.unwrap_or_else(|| turn.cwd.clone().to_path_buf());
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
-    let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
+    let mut env = shell_env();
+    env.extend(session.dependency_env().await);
+    let request = test_exec_request(turn, command.clone(), cwd.clone(), env);
 
     let process = Arc::new(
         manager
