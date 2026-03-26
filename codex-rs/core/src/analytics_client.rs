@@ -117,8 +117,8 @@ impl AnalyticsEventsQueue {
                 TrySendError::Full(job) => ("queue_full", job),
                 TrySendError::Closed(job) => ("queue_closed", job),
             };
-            emit_analytics_events_failure_counter(reason, &[]);
-            emit_analytics_events_failure_events_counter(
+            emit_analytics_events_failure_count(reason, &[]);
+            emit_analytics_events_failed_events_count(
                 reason,
                 job.job_type(),
                 job.event_count(),
@@ -297,7 +297,7 @@ impl TrackEventsJob {
     }
 }
 
-fn emit_analytics_events_failure_counter(reason: &'static str, extra_tags: &[(&str, &str)]) {
+fn emit_analytics_events_failure_count(reason: &'static str, extra_tags: &[(&str, &str)]) {
     if let Some(metrics) = codex_otel::metrics::global() {
         let mut tags = Vec::with_capacity(1 + extra_tags.len());
         tags.push(("reason", reason));
@@ -307,7 +307,7 @@ fn emit_analytics_events_failure_counter(reason: &'static str, extra_tags: &[(&s
     }
 }
 
-fn emit_analytics_events_failure_events_counter(
+fn emit_analytics_events_failed_events_count(
     reason: &'static str,
     job_type: &'static str,
     event_count: usize,
@@ -332,7 +332,7 @@ fn emit_analytics_events_request_failure_counts(
     events: &[TrackEventRequest],
     extra_tags: &[(&str, &str)],
 ) {
-    emit_analytics_events_failure_counter(reason, extra_tags);
+    emit_analytics_events_failure_count(reason, extra_tags);
 
     let mut counts = BTreeMap::new();
     for event in events {
@@ -350,7 +350,7 @@ fn emit_analytics_events_request_failure_counts(
     }
 
     for (job_type, event_count) in counts {
-        emit_analytics_events_failure_events_counter(reason, job_type, event_count, extra_tags);
+        emit_analytics_events_failed_events_count(reason, job_type, event_count, extra_tags);
     }
 }
 
