@@ -261,7 +261,7 @@ async fn run_command_under_sandbox(
                 PathBuf::from("/usr/bin/sandbox-exec"),
                 args,
                 /*arg0*/ None,
-                cwd,
+                cwd.to_path_buf(),
                 network_policy,
                 env,
                 |env_map| {
@@ -295,7 +295,7 @@ async fn run_command_under_sandbox(
                 codex_linux_sandbox_exe,
                 args,
                 Some("codex-linux-sandbox"),
-                cwd,
+                cwd.to_path_buf(),
                 network_policy,
                 env,
                 |env_map| {

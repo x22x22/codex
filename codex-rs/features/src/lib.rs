@@ -142,6 +142,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Enable the tool_search tool for apps.
+    ToolSearch,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
     /// Enable plugins.
@@ -718,6 +720,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::ToolSearch,
+        key: "tool_search",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ToolSuggest,
         key: "tool_suggest",
         stage: Stage::Stable,
@@ -814,12 +822,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TuiAppServer,
         key: "tui_app_server",
-        stage: Stage::Experimental {
-            name: "App-server TUI",
-            menu_description: "Use the app-server-backed TUI implementation.",
-            announcement: "",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::PreventIdleSleep,

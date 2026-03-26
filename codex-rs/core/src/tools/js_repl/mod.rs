@@ -1046,12 +1046,12 @@ impl JsReplManager {
             has_managed_network_requirements,
         );
         let command = SandboxCommand {
-            program: node_path.to_string_lossy().to_string(),
+            program: node_path.into_os_string(),
             args: vec![
                 "--experimental-vm-modules".to_string(),
                 kernel_path.to_string_lossy().to_string(),
             ],
-            cwd: turn.cwd.clone(),
+            cwd: turn.cwd.to_path_buf(),
             env,
             additional_permissions: None,
         };
