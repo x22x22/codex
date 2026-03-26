@@ -1703,7 +1703,6 @@ mod tests {
                     read: Some(vec![absolute_path("/tmp/allowed")]),
                     write: None,
                 }),
-                macos: None,
             }),
             skill_metadata: None,
             proposed_execpolicy_amendment: None,

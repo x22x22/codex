@@ -802,7 +802,6 @@ mod tests {
                                         write: None,
                                     },
                                 ),
-                                macos: None,
                             },
                         ),
                         skill_metadata: Some(CommandExecutionRequestApprovalSkillMetadata {
@@ -869,7 +868,6 @@ mod tests {
                                         write: None,
                                     },
                                 ),
-                                macos: None,
                             },
                         ),
                         skill_metadata: Some(CommandExecutionRequestApprovalSkillMetadata {
@@ -899,7 +897,6 @@ mod tests {
                     "read": [allowed_path],
                     "write": null,
                 },
-                "macos": null,
             })
         );
         assert_eq!(
