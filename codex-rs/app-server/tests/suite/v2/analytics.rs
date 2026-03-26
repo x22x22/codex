@@ -117,16 +117,17 @@ pub(crate) async fn wait_for_analytics_payload(
         }
     })
     .await?;
-    Ok(serde_json::from_slice(&body).expect("analytics payload"))
+    serde_json::from_slice(&body).map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))
 }
 
-pub(crate) fn thread_initialized_event(payload: &Value) -> &Value {
-    payload["events"]
+pub(crate) fn thread_initialized_event(payload: &Value) -> Result<&Value> {
+    let events = payload["events"]
         .as_array()
-        .expect("events array")
+        .ok_or_else(|| anyhow::anyhow!("analytics payload missing events array"))?;
+    events
         .iter()
         .find(|event| event["event_type"] == "codex_thread_initialized")
-        .expect("codex_thread_initialized event should be present")
+        .ok_or_else(|| anyhow::anyhow!("codex_thread_initialized event should be present"))
 }
 
 pub(crate) fn assert_basic_thread_initialized_event(
