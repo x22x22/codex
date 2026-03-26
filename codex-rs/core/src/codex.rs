@@ -3498,7 +3498,9 @@ impl Session {
             )
             .into_text(),
         );
-        if matches!(session_source, SessionSource::Cli) {
+        if matches!(session_source, SessionSource::Cli)
+            && !turn_context.features.enabled(Feature::TuiAppServer)
+        {
             developer_sections.push(CLI_CREATE_API_KEY_INSTRUCTION.to_string());
         }
         let separate_guardian_developer_message =
