@@ -786,7 +786,7 @@ impl TestCodexHarness {
     }
 
     pub async fn submit(&self, prompt: &str) -> Result<()> {
-        self.test.submit_turn(prompt).await
+        Box::pin(self.test.submit_turn(prompt)).await
     }
 
     pub async fn submit_with_policy(
@@ -839,12 +839,14 @@ impl TestCodexHarness {
         output_type: ApplyPatchModelOutput,
     ) -> String {
         match output_type {
-            ApplyPatchModelOutput::Freeform => self.custom_tool_call_output(call_id).await,
+            ApplyPatchModelOutput::Freeform => {
+                Box::pin(self.custom_tool_call_output(call_id)).await
+            }
             ApplyPatchModelOutput::Function
             | ApplyPatchModelOutput::Shell
             | ApplyPatchModelOutput::ShellViaHeredoc
             | ApplyPatchModelOutput::ShellCommandViaHeredoc => {
-                self.function_call_stdout(call_id).await
+                Box::pin(self.function_call_stdout(call_id)).await
             }
         }
     }
