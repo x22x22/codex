@@ -55,6 +55,7 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
+use codex_core::InitializeInput;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -158,6 +159,7 @@ pub(crate) struct MessageProcessor {
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
     auth_manager: Arc<AuthManager>,
+    analytics_events_client: AnalyticsEventsClient,
     fs_watch_manager: FsWatchManager,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
@@ -238,6 +240,7 @@ impl MessageProcessor {
             auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),
             outgoing: outgoing.clone(),
+            analytics_events_client: analytics_events_client.clone(),
             arg0_paths,
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
@@ -258,7 +261,7 @@ impl MessageProcessor {
             loader_overrides,
             cloud_requirements,
             thread_manager,
-            analytics_events_client,
+            analytics_events_client.clone(),
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
         let fs_api = FsApi::default();
@@ -271,6 +274,7 @@ impl MessageProcessor {
             external_agent_config_api,
             fs_api,
             auth_manager,
+            analytics_events_client,
             fs_watch_manager,
             config,
             config_warnings: Arc::new(config_warnings),
@@ -570,7 +574,7 @@ impl MessageProcessor {
                 } else {
                     name.clone()
                 };
-                if let Err(error) = set_default_originator(originator) {
+                if let Err(error) = set_default_originator(originator.clone()) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
                             let error = JSONRPCErrorError {
@@ -593,6 +597,11 @@ impl MessageProcessor {
                         }
                     }
                 }
+                self.analytics_events_client
+                    .track_initialize(InitializeInput {
+                        connection_id: connection_id.0,
+                        product_client_id: originator.clone(),
+                    });
                 set_default_client_residency_requirement(self.config.enforce_residency.value());
                 let user_agent_suffix = format!("{name}; {version}");
                 if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
