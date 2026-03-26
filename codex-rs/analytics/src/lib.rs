@@ -7,7 +7,6 @@ pub use analytics_client::AppInvocation;
 pub use analytics_client::AppMentionedInput;
 pub use analytics_client::AppUsedInput;
 pub use analytics_client::CodexThreadContext;
-pub use analytics_client::CodexThreadInitializedEvent;
 pub use analytics_client::CodexThreadInitializedInput;
 pub use analytics_client::CodexTurnEvent;
 pub use analytics_client::InitializationMode;

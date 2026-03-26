@@ -641,6 +641,8 @@ impl Codex {
 
         let initialization_mode = initialization_mode(&conversation_history);
         let thread_session_source = session_configuration.session_source.clone();
+        let subagent_source = session_source_subagent_source(&thread_session_source);
+        let parent_thread_id = session_source_parent_thread_id(&thread_session_source);
         let thread_initialized_configuration = session_configuration.clone();
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -690,8 +692,8 @@ impl Codex {
                         .ephemeral,
                     session_source: thread_session_source,
                     initialization_mode,
-                    subagent_source: session_source_subagent_source(&thread_session_source),
-                    parent_thread_id: session_source_parent_thread_id(&thread_session_source),
+                    subagent_source,
+                    parent_thread_id,
                 },
             });
 
