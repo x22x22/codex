@@ -688,11 +688,10 @@ fn build_payload_roots(
         gather_write_roots(policy, policy_cwd, command_cwd, env_map)
     };
     let write_roots = filter_sensitive_write_roots(write_roots, codex_home);
-    let mut read_roots = if let Some(roots) = read_roots_override {
-        canonical_existing(&roots)
-    } else {
-        gather_read_roots(command_cwd, policy, codex_home)
-    };
+    let mut read_roots = gather_read_roots(command_cwd, policy, codex_home);
+    if let Some(roots) = read_roots_override {
+        read_roots.extend(canonical_existing(&roots));
+    }
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
@@ -915,6 +914,46 @@ mod tests {
         assert!(canonical_windows_platform_default_roots()
             .into_iter()
             .all(|path| !read_roots.contains(&path)));
+    }
+
+    #[test]
+    fn build_payload_roots_preserves_helper_roots_when_read_override_is_provided() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let policy_cwd = tmp.path().join("policy-cwd");
+        let command_cwd = tmp.path().join("workspace");
+        let readable_root = tmp.path().join("docs");
+        fs::create_dir_all(&policy_cwd).expect("create policy cwd");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&readable_root).expect("create readable root");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        };
+
+        let (read_roots, write_roots) = build_payload_roots(
+            &policy,
+            &policy_cwd,
+            &command_cwd,
+            &HashMap::new(),
+            &codex_home,
+            Some(vec![readable_root.clone()]),
+            None,
+        );
+        let expected_helper =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+        let expected_readable =
+            dunce::canonicalize(&readable_root).expect("canonical readable root");
+
+        assert_eq!(write_roots, Vec::<PathBuf>::new());
+        assert!(read_roots.contains(&expected_helper));
+        assert!(read_roots.contains(&expected_readable));
+        assert!(canonical_windows_platform_default_roots()
+            .into_iter()
+            .all(|path| read_roots.contains(&path)));
     }
 
     #[test]
