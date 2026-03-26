@@ -11,6 +11,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
@@ -36,6 +37,7 @@ pub struct TrackEventsContext {
 
 #[derive(Clone)]
 pub struct CodexTurnEvent {
+    pub submission_type: Option<TurnSubmissionType>,
     pub model_provider: String,
     pub sandbox_policy: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -48,6 +50,40 @@ pub struct CodexTurnEvent {
     pub personality: Option<Personality>,
     pub num_input_images: usize,
     pub is_first_turn: bool,
+    pub status: Option<TurnStatus>,
+    pub turn_error: Option<CodexErrorInfo>,
+    pub steer_count: Option<usize>,
+    pub total_tool_call_count: Option<usize>,
+    pub shell_command_count: Option<usize>,
+    pub file_change_count: Option<usize>,
+    pub mcp_tool_call_count: Option<usize>,
+    pub dynamic_tool_call_count: Option<usize>,
+    pub subagent_tool_call_count: Option<usize>,
+    pub web_search_count: Option<usize>,
+    pub image_generation_count: Option<usize>,
+    pub input_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub reasoning_output_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
+    pub duration_ms: Option<u64>,
+    pub started_at: Option<u64>,
+    pub completed_at: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSubmissionType {
+    Default,
+    Queued,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnStatus {
+    Completed,
+    Failed,
+    Interrupted,
 }
 
 #[derive(Clone)]
@@ -474,6 +510,7 @@ struct CodexTurnEventParams {
     thread_id: String,
     turn_id: String,
     product_client_id: Option<String>,
+    submission_type: Option<TurnSubmissionType>,
     model: Option<String>,
     model_provider: String,
     sandbox_policy: Option<&'static str>,
@@ -487,6 +524,25 @@ struct CodexTurnEventParams {
     personality: Option<String>,
     num_input_images: usize,
     is_first_turn: bool,
+    status: Option<TurnStatus>,
+    turn_error: Option<CodexErrorInfo>,
+    steer_count: Option<usize>,
+    total_tool_call_count: Option<usize>,
+    shell_command_count: Option<usize>,
+    file_change_count: Option<usize>,
+    mcp_tool_call_count: Option<usize>,
+    dynamic_tool_call_count: Option<usize>,
+    subagent_tool_call_count: Option<usize>,
+    web_search_count: Option<usize>,
+    image_generation_count: Option<usize>,
+    input_tokens: Option<i64>,
+    cached_input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    reasoning_output_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+    duration_ms: Option<u64>,
+    started_at: Option<u64>,
+    completed_at: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -736,6 +792,7 @@ fn codex_turn_event_params(
         thread_id: tracking.thread_id.clone(),
         turn_id: tracking.turn_id.clone(),
         product_client_id: Some(originator().value),
+        submission_type: turn_event.submission_type,
         model: Some(tracking.model_slug.clone()),
         model_provider: turn_event.model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&turn_event.sandbox_policy)),
@@ -752,6 +809,25 @@ fn codex_turn_event_params(
         personality: personality_mode(turn_event.personality),
         num_input_images: turn_event.num_input_images,
         is_first_turn: turn_event.is_first_turn,
+        status: turn_event.status,
+        turn_error: turn_event.turn_error,
+        steer_count: turn_event.steer_count,
+        total_tool_call_count: turn_event.total_tool_call_count,
+        shell_command_count: turn_event.shell_command_count,
+        file_change_count: turn_event.file_change_count,
+        mcp_tool_call_count: turn_event.mcp_tool_call_count,
+        dynamic_tool_call_count: turn_event.dynamic_tool_call_count,
+        subagent_tool_call_count: turn_event.subagent_tool_call_count,
+        web_search_count: turn_event.web_search_count,
+        image_generation_count: turn_event.image_generation_count,
+        input_tokens: turn_event.input_tokens,
+        cached_input_tokens: turn_event.cached_input_tokens,
+        output_tokens: turn_event.output_tokens,
+        reasoning_output_tokens: turn_event.reasoning_output_tokens,
+        total_tokens: turn_event.total_tokens,
+        duration_ms: turn_event.duration_ms,
+        started_at: turn_event.started_at,
+        completed_at: turn_event.completed_at,
     }
 }
 
