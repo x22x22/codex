@@ -652,12 +652,21 @@ impl AnalyticsReducer {
             tracking,
             turn_event,
         } = input;
-        out.push(TrackEventRequest::TurnEvent(Box::new(
-            CodexTurnEventRequest {
-                event_type: "codex_turn_event",
-                event_params: codex_turn_event_params(&tracking, turn_event),
-            },
-        )));
+        out.push(TrackEventRequest::TurnEvent(CodexTurnEventRequest {
+            event_type: "codex_turn_event",
+            event_params: codex_turn_event_params(&tracking, turn_event),
+        }));
+    }
+
+    fn ingest_turn_steer(&mut self, input: TurnSteerInput, out: &mut Vec<TrackEventRequest>) {
+        let TurnSteerInput {
+            tracking,
+            turn_steer,
+        } = input;
+        out.push(TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
+            event_type: "codex_turn_steer_event",
+            event_params: codex_turn_steer_event_params(&tracking, turn_steer),
+        }));
     }
 
     fn ingest_turn_steer(&mut self, input: TurnSteerInput, out: &mut Vec<TrackEventRequest>) {
