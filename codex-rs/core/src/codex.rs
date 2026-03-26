@@ -357,6 +357,7 @@ use codex_analytics::CodexTurnEvent;
 use codex_analytics::CodexTurnSteerEvent;
 use codex_analytics::InitializationMode;
 use codex_analytics::InvocationType;
+use codex_analytics::TurnSteerResult;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
@@ -3970,6 +3971,11 @@ impl Session {
             return Err(SteerInputError::EmptyInput);
         }
 
+        let num_input_images = input
+            .iter()
+            .filter(|item| matches!(item, UserInput::Image { .. }))
+            .count();
+
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
             return Err(SteerInputError::NoActiveTurn(input));
@@ -4013,9 +4019,23 @@ impl Session {
         turn_state.push_pending_input(input.into());
         drop(turn_state);
         drop(active);
-        self.services
-            .analytics_events_client
-            .track_turn_steer(tracking, CodexTurnSteerEvent);
+        let expected_turn_id = expected_turn_id
+            .map(str::to_string)
+            .unwrap_or_else(|| active_turn_id.clone());
+        self.services.analytics_events_client.track_turn_steer(
+            tracking,
+            CodexTurnSteerEvent {
+                expected_turn_id,
+                accepted_turn_id: Some(active_turn_id.clone()),
+                num_input_images,
+                result: TurnSteerResult::Accepted,
+                rejection_reason: None,
+                created_at: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            },
+        );
         Ok(active_turn_id)
     }
 

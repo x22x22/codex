@@ -13,6 +13,7 @@ use super::InitializationMode;
 use super::InvocationType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
+use super::TurnSteerResult;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
@@ -269,8 +270,18 @@ fn turn_steer_event_serializes_expected_shape() {
         turn_id: "turn-2".to_string(),
     };
     let event = TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
-        event_type: "codex_turn_event",
-        event_params: codex_turn_steer_event_params(&tracking, CodexTurnSteerEvent),
+        event_type: "codex_turn_steer_event",
+        event_params: codex_turn_steer_event_params(
+            &tracking,
+            CodexTurnSteerEvent {
+                expected_turn_id: "turn-2".to_string(),
+                accepted_turn_id: Some("turn-2".to_string()),
+                num_input_images: 2,
+                result: TurnSteerResult::Accepted,
+                rejection_reason: None,
+                created_at: 1_716_000_123,
+            },
+        ),
     });
 
     let payload = serde_json::to_value(&event).expect("serialize turn steer event");
@@ -278,12 +289,16 @@ fn turn_steer_event_serializes_expected_shape() {
     assert_eq!(
         payload,
         json!({
-            "event_type": "codex_turn_event",
+            "event_type": "codex_turn_steer_event",
             "event_params": {
                 "thread_id": "thread-2",
-                "turn_id": "turn-2",
+                "expected_turn_id": "turn-2",
+                "accepted_turn_id": "turn-2",
                 "product_client_id": originator().value,
-                "model": "gpt-5"
+                "num_input_images": 2,
+                "result": "accepted",
+                "rejection_reason": null,
+                "created_at": 1_716_000_123
             }
         })
     );

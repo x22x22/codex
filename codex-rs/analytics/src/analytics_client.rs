@@ -62,8 +62,34 @@ pub struct CodexThreadInitializedEvent {
     pub created_at: u64,
 }
 
-#[derive(Clone, Copy)]
-pub struct CodexTurnSteerEvent;
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerResult {
+    Accepted,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerRejectionReason {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+    EmptyInput,
+    InputTooLarge,
+    InternalError,
+}
+
+#[derive(Clone)]
+pub struct CodexTurnSteerEvent {
+    pub expected_turn_id: String,
+    pub accepted_turn_id: Option<String>,
+    pub num_input_images: usize,
+    pub result: TurnSteerResult,
+    pub rejection_reason: Option<TurnSteerRejectionReason>,
+    pub created_at: u64,
+}
 
 #[derive(Clone)]
 pub struct CodexThreadInitializedInput {
@@ -484,9 +510,13 @@ struct CodexTurnEventRequest {
 #[derive(Serialize)]
 struct CodexTurnSteerEventParams {
     thread_id: String,
-    turn_id: String,
+    expected_turn_id: String,
+    accepted_turn_id: Option<String>,
     product_client_id: Option<String>,
-    model: Option<String>,
+    num_input_images: usize,
+    result: TurnSteerResult,
+    rejection_reason: Option<TurnSteerRejectionReason>,
+    created_at: u64,
 }
 
 #[derive(Serialize)]
@@ -590,7 +620,7 @@ impl AnalyticsReducer {
             turn_event,
         } = input;
         out.push(TrackEventRequest::TurnEvent(CodexTurnEventRequest {
-            event_type: "codex_turn_event",
+            event_type: "codex_turn_steer_event",
             event_params: codex_turn_event_params(&tracking, turn_event),
         }));
     }
@@ -750,13 +780,17 @@ fn codex_turn_event_params(
 
 fn codex_turn_steer_event_params(
     tracking: &TrackEventsContext,
-    _turn_steer: CodexTurnSteerEvent,
+    turn_steer: CodexTurnSteerEvent,
 ) -> CodexTurnSteerEventParams {
     CodexTurnSteerEventParams {
         thread_id: tracking.thread_id.clone(),
-        turn_id: tracking.turn_id.clone(),
+        expected_turn_id: turn_steer.expected_turn_id,
+        accepted_turn_id: turn_steer.accepted_turn_id,
         product_client_id: Some(originator().value),
-        model: Some(tracking.model_slug.clone()),
+        num_input_images: turn_steer.num_input_images,
+        result: turn_steer.result,
+        rejection_reason: turn_steer.rejection_reason,
+        created_at: turn_steer.created_at,
     }
 }
 
