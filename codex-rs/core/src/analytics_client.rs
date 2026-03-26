@@ -117,7 +117,13 @@ impl AnalyticsEventsQueue {
                 TrySendError::Full(job) => ("queue_full", job),
                 TrySendError::Closed(job) => ("queue_closed", job),
             };
-            emit_analytics_events_failure_counters(reason, job.job_type(), job.event_count(), &[]);
+            emit_analytics_events_failure_counter(reason, &[]);
+            emit_analytics_events_failure_events_counter(
+                reason,
+                job.job_type(),
+                job.event_count(),
+                &[],
+            );
             tracing::warn!(
                 "dropping analytics events job: reason={reason} job_type={}",
                 job.job_type()
@@ -291,7 +297,17 @@ impl TrackEventsJob {
     }
 }
 
-fn emit_analytics_events_failure_counters(
+fn emit_analytics_events_failure_counter(reason: &'static str, extra_tags: &[(&str, &str)]) {
+    if let Some(metrics) = codex_otel::metrics::global() {
+        let mut tags = Vec::with_capacity(1 + extra_tags.len());
+        tags.push(("reason", reason));
+        tags.extend(extra_tags.iter().copied());
+        let increment = 1;
+        let _ = metrics.counter("codex.analytics_events.emit.failure", increment, &tags);
+    }
+}
+
+fn emit_analytics_events_failure_events_counter(
     reason: &'static str,
     job_type: &'static str,
     event_count: usize,
@@ -302,20 +318,22 @@ fn emit_analytics_events_failure_counters(
         tags.push(("reason", reason));
         tags.push(("job_type", job_type));
         tags.extend(extra_tags.iter().copied());
-        let _ = metrics.counter("codex.analytics_events.emit.failure", /*inc*/ 1, &tags);
+        let event_count = event_count.min(i64::MAX as usize) as i64;
         let _ = metrics.counter(
             "codex.analytics_events.emit.failure_events",
-            i64::try_from(event_count).unwrap_or(i64::MAX),
+            event_count,
             &tags,
         );
     }
 }
 
-fn emit_analytics_events_failure_counters_for_events(
+fn emit_analytics_events_request_failure_counts(
     reason: &'static str,
     events: &[TrackEventRequest],
     extra_tags: &[(&str, &str)],
 ) {
+    emit_analytics_events_failure_counter(reason, extra_tags);
+
     let mut counts = BTreeMap::new();
     for event in events {
         let job_type = match event {
@@ -332,7 +350,7 @@ fn emit_analytics_events_failure_counters_for_events(
     }
 
     for (job_type, event_count) in counts {
-        emit_analytics_events_failure_counters(reason, job_type, event_count, extra_tags);
+        emit_analytics_events_failure_events_counter(reason, job_type, event_count, extra_tags);
     }
 }
 
@@ -770,22 +788,22 @@ async fn send_track_events(
         return;
     }
     let Some(auth) = auth_manager.auth().await else {
-        emit_analytics_events_failure_counters_for_events("auth_missing", &events, &[]);
+        emit_analytics_events_request_failure_counts("auth_missing", &events, &[]);
         return;
     };
     if !auth.is_chatgpt_auth() {
-        emit_analytics_events_failure_counters_for_events("non_chatgpt_auth", &events, &[]);
+        emit_analytics_events_request_failure_counts("non_chatgpt_auth", &events, &[]);
         return;
     }
     let access_token = match auth.get_token() {
         Ok(token) => token,
         Err(_) => {
-            emit_analytics_events_failure_counters_for_events("token_error", &events, &[]);
+            emit_analytics_events_request_failure_counts("token_error", &events, &[]);
             return;
         }
     };
     let Some(account_id) = auth.get_account_id() else {
-        emit_analytics_events_failure_counters_for_events("account_id_missing", &events, &[]);
+        emit_analytics_events_request_failure_counts("account_id_missing", &events, &[]);
         return;
     };
 
@@ -807,7 +825,7 @@ async fn send_track_events(
         Ok(response) if response.status().is_success() => {}
         Ok(response) => {
             let status = response.status();
-            emit_analytics_events_failure_counters_for_events(
+            emit_analytics_events_request_failure_counts(
                 "http_status",
                 &payload.events,
                 &[("status_code", status.as_str())],
@@ -816,11 +834,7 @@ async fn send_track_events(
             tracing::warn!("events failed with status {status}: {body}");
         }
         Err(err) => {
-            emit_analytics_events_failure_counters_for_events(
-                "request_error",
-                &payload.events,
-                &[],
-            );
+            emit_analytics_events_request_failure_counts("request_error", &payload.events, &[]);
             tracing::warn!("failed to send events request: {err}");
         }
     }
