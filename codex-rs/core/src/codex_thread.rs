@@ -127,6 +127,10 @@ impl CodexThread {
         self.codex.session.set_dependency_env(values).await;
     }
 
+    pub async fn dependency_env(&self) -> HashMap<String, String> {
+        self.codex.session.dependency_env().await
+    }
+
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
         self.codex.agent_status.clone()
     }

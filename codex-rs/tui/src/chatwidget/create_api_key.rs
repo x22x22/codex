@@ -19,45 +19,76 @@ use crate::history_cell::PlainHistoryCell;
 
 impl ChatWidget {
     pub(crate) fn start_create_api_key(&mut self) {
-        match start_create_api_key_command(self.thread_id(), self.app_event_tx.clone()) {
-            Ok(start_message) => {
-                self.add_to_history(start_message);
-                self.request_redraw();
-            }
-            Err(err) => {
-                self.add_error_message(err);
-            }
-        }
+        let Some(thread_id) = self.thread_id() else {
+            self.add_error_message("No active Codex thread for API key creation.".to_string());
+            return;
+        };
+
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cell = start_create_api_key_command(thread_id, app_event_tx.clone()).await;
+            app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        });
     }
 }
 
-fn start_create_api_key_command(
-    thread_id: Option<ThreadId>,
+async fn start_create_api_key_command(
+    thread_id: ThreadId,
     app_event_tx: AppEventSender,
-) -> Result<PlainHistoryCell, String> {
-    let thread_id =
-        thread_id.ok_or_else(|| "No active Codex thread for API key creation.".to_string())?;
-
-    if read_openai_api_key_from_env().is_some() {
-        return Ok(existing_shell_api_key_message());
+) -> PlainHistoryCell {
+    match is_openai_api_key_set_in_session(thread_id, app_event_tx.clone()).await {
+        Ok(true) => return existing_api_key_message(),
+        Ok(false) => {}
+        Err(err) => {
+            return history_cell::new_error_event(format!(
+                "Failed to check API key environment: {err}"
+            ));
+        }
     }
 
-    let session = start_create_api_key_flow()
-        .map_err(|err| format!("Failed to start API key creation: {err}"))?;
+    let session = match start_create_api_key_flow() {
+        Ok(session) => session,
+        Err(err) => {
+            return history_cell::new_error_event(format!(
+                "Failed to start API key creation: {err}"
+            ));
+        }
+    };
     let browser_opened = session.open_browser();
     let start_message =
         continue_in_browser_message(session.auth_url(), session.callback_port(), browser_opened);
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(start_message)));
 
-    let app_event_tx_for_task = app_event_tx;
-    tokio::spawn(async move {
-        let cell = complete_command(session, thread_id, app_event_tx_for_task.clone()).await;
-        app_event_tx_for_task.send(AppEvent::InsertHistoryCell(Box::new(cell)));
-    });
-
-    Ok(start_message)
+    complete_command(session, thread_id, app_event_tx).await
 }
 
-fn existing_shell_api_key_message() -> PlainHistoryCell {
+async fn is_openai_api_key_set_in_session(
+    thread_id: ThreadId,
+    app_event_tx: AppEventSender,
+) -> Result<bool, String> {
+    if read_openai_api_key_from_env().is_some() {
+        return Ok(true);
+    }
+
+    let (result_tx, result_rx) = oneshot::channel();
+    app_event_tx.send(AppEvent::GetDependencyEnv {
+        thread_id,
+        result_tx,
+    });
+
+    let dependency_env = match result_rx.await {
+        Ok(result) => result?,
+        Err(err) => {
+            return Err(format!(
+                "dependency env read response channel closed before completion: {err}"
+            ));
+        }
+    };
+
+    Ok(dependency_env.contains_key(OPENAI_API_KEY_ENV_VAR))
+}
+
+fn existing_api_key_message() -> PlainHistoryCell {
     history_cell::new_info_event(
         format!(
             "{OPENAI_API_KEY_ENV_VAR} is already set in this Codex session; skipping API key creation."
@@ -144,8 +175,6 @@ async fn apply_api_key_to_current_session(
     thread_id: ThreadId,
     app_event_tx: AppEventSender,
 ) -> Result<(), String> {
-    set_current_process_api_key(api_key);
-
     let (result_tx, result_rx) = oneshot::channel();
     app_event_tx.send(AppEvent::SetDependencyEnv {
         thread_id,
@@ -158,16 +187,6 @@ async fn apply_api_key_to_current_session(
         Err(err) => Err(format!(
             "dependency env update response channel closed before completion: {err}"
         )),
-    }
-}
-
-fn set_current_process_api_key(api_key: &str) {
-    // SAFETY: `/create-api-key` intentionally mutates process-global environment so the running
-    // Codex session can observe `OPENAI_API_KEY` immediately. This is scoped to a single
-    // user-triggered command, and spawned tool environments are updated separately through the
-    // session dependency env override.
-    unsafe {
-        std::env::set_var(OPENAI_API_KEY_ENV_VAR, api_key);
     }
 }
 
@@ -272,8 +291,8 @@ mod tests {
     }
 
     #[test]
-    fn existing_shell_api_key_message_mentions_openai_api_key() {
-        let cell = existing_shell_api_key_message();
+    fn existing_api_key_message_mentions_openai_api_key() {
+        let cell = existing_api_key_message();
 
         assert_eq!(
             render_cell(&cell),

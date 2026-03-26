@@ -177,6 +177,12 @@ pub(crate) enum AppEvent {
         result_tx: oneshot::Sender<Result<(), String>>,
     },
 
+    /// Read the specified thread's dependency env override.
+    GetDependencyEnv {
+        thread_id: ThreadId,
+        result_tx: oneshot::Sender<Result<HashMap<String, String>, String>>,
+    },
+
     /// Fetch plugin marketplace state for the provided working directory.
     FetchPluginsList {
         cwd: PathBuf,
