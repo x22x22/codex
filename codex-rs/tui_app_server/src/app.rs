@@ -22,6 +22,7 @@ use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
+use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
@@ -958,6 +959,7 @@ pub(crate) struct App {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     remote_app_server_url: Option<String>,
+    remote_app_server_auth_token: Option<String>,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -1701,7 +1703,11 @@ impl App {
                         .approval_id
                         .clone()
                         .unwrap_or_else(|| params.item_id.clone()),
-                    command: params.command.clone().into_iter().collect(),
+                    command: params
+                        .command
+                        .as_deref()
+                        .map(split_command_string)
+                        .unwrap_or_default(),
                     reason: params.reason.clone(),
                     available_decisions: params
                         .available_decisions
@@ -2181,6 +2187,10 @@ impl App {
                 app_server
                     .thread_shell_command(thread_id, command.to_string())
                     .await?;
+                Ok(true)
+            }
+            AppCommandView::ReloadUserConfig => {
+                app_server.reload_user_config().await?;
                 Ok(true)
             }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
@@ -3115,6 +3125,7 @@ impl App {
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
+        remote_app_server_auth_token: Option<String>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -3326,6 +3337,7 @@ impl App {
             feedback: feedback.clone(),
             feedback_audience,
             remote_app_server_url,
+            remote_app_server_auth_token,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -3574,7 +3586,10 @@ impl App {
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
                     &match self.remote_app_server_url.clone() {
-                        Some(websocket_url) => crate::AppServerTarget::Remote(websocket_url),
+                        Some(websocket_url) => crate::AppServerTarget::Remote {
+                            websocket_url,
+                            auth_token: self.remote_app_server_auth_token.clone(),
+                        },
                         None => crate::AppServerTarget::Embedded,
                     },
                 )
@@ -7551,6 +7566,36 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn inactive_thread_exec_approval_splits_shell_wrapped_command() {
+        let app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let script = r#"python3 -c 'print("Hello, world!")'"#;
+        let mut request = exec_approval_request(thread_id, "turn-approval", "call-approval", None);
+        let ServerRequest::CommandExecutionRequestApproval { params, .. } = &mut request else {
+            panic!("expected exec approval request");
+        };
+        params.command = Some(
+            shlex::try_join(["/bin/zsh", "-lc", script]).expect("round-trippable shell wrapper"),
+        );
+
+        let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec { command, .. })) = app
+            .interactive_request_for_thread_request(thread_id, &request)
+            .await
+        else {
+            panic!("expected exec approval request");
+        };
+
+        assert_eq!(
+            command,
+            vec![
+                "/bin/zsh".to_string(),
+                "-lc".to_string(),
+                script.to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn inactive_thread_approval_badge_clears_after_turn_completion_notification() -> Result<()>
     {
         let mut app = make_test_app().await;
@@ -8082,6 +8127,7 @@ guardian_approval = true
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             remote_app_server_url: None,
+            remote_app_server_auth_token: None,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -8134,6 +8180,7 @@ guardian_approval = true
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
                 remote_app_server_url: None,
+                remote_app_server_auth_token: None,
                 pending_update_action: None,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
