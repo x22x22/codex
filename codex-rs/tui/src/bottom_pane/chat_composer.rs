@@ -2328,6 +2328,7 @@ impl ChatComposer {
                     slash_commands::find_builtin_command(name, self.builtin_command_flags())
                         .is_some();
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+                let is_custom_prompt_command = name.starts_with(&prompt_prefix);
                 let is_known_prompt = name
                     .strip_prefix(&prompt_prefix)
                     .map(|prompt_name| {
@@ -2337,12 +2338,25 @@ impl ChatComposer {
                     })
                     .unwrap_or(false);
                 if !is_builtin && !is_known_prompt {
-                    let message = format!(
-                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                    );
-                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(message, /*hint*/ None),
-                    )));
+                    let message = if is_custom_prompt_command && self.custom_prompts.is_empty() {
+                        tracing::warn!(
+                            "custom prompt listing/picker is not available in app-server TUI yet"
+                        );
+                        "Not available in app-server TUI yet.".to_string()
+                    } else {
+                        format!(
+                            r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                        )
+                    };
+                    if is_custom_prompt_command && self.custom_prompts.is_empty() {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(message),
+                        )));
+                    } else {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_info_event(message, /*hint*/ None),
+                        )));
+                    }
                     self.set_text_content_with_mention_bindings(
                         original_input.clone(),
                         original_text_elements,
@@ -3508,6 +3522,7 @@ impl ChatComposer {
             }
         }
     }
+    #[cfg(test)]
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {
@@ -8851,6 +8866,41 @@ mod tests {
             }
         }
         assert!(found_error, "expected error history cell to be sent");
+    }
+
+    #[test]
+    fn custom_prompt_command_is_stubbed_when_prompt_listing_is_unavailable() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("/prompts:my-prompt", composer.textarea.text());
+
+        let AppEvent::InsertHistoryCell(cell) = rx.try_recv().expect("expected stub history cell")
+        else {
+            panic!("expected stub history cell");
+        };
+        let message = cell
+            .display_lines(80)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(message.contains("Not available in app-server TUI yet."));
     }
 
     #[test]

@@ -5,11 +5,14 @@ use std::path::PathBuf;
 use codex_app_server_protocol::McpElicitationEnumSchema;
 use codex_app_server_protocol::McpElicitationPrimitiveSchema;
 use codex_app_server_protocol::McpElicitationSingleSelectEnumSchema;
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::RequestId as McpRequestId;
+#[cfg(test)]
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
@@ -25,7 +28,6 @@ use ratatui::widgets::Widget;
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ChatComposer;
@@ -201,6 +203,36 @@ impl FooterTip {
 }
 
 impl McpServerElicitationFormRequest {
+    pub(crate) fn from_app_server_request(
+        thread_id: ThreadId,
+        request_id: McpRequestId,
+        request: McpServerElicitationRequestParams,
+    ) -> Option<Self> {
+        let McpServerElicitationRequestParams {
+            server_name,
+            request,
+            ..
+        } = request;
+        let McpServerElicitationRequest::Form {
+            meta,
+            message,
+            requested_schema,
+        } = request
+        else {
+            return None;
+        };
+
+        let requested_schema = serde_json::to_value(requested_schema).ok()?;
+        Self::from_parts(
+            thread_id,
+            server_name,
+            request_id,
+            meta,
+            message,
+            requested_schema,
+        )
+    }
+
     pub(crate) fn from_event(
         thread_id: ThreadId,
         request: ElicitationRequestEvent,
@@ -214,6 +246,24 @@ impl McpServerElicitationFormRequest {
             return None;
         };
 
+        Self::from_parts(
+            thread_id,
+            request.server_name,
+            request.id,
+            meta,
+            message,
+            requested_schema,
+        )
+    }
+
+    fn from_parts(
+        thread_id: ThreadId,
+        server_name: String,
+        request_id: McpRequestId,
+        meta: Option<Value>,
+        message: String,
+        requested_schema: Value,
+    ) -> Option<Self> {
         let tool_suggestion = parse_tool_suggestion_request(meta.as_ref());
         let is_tool_approval = meta
             .as_ref()
@@ -313,8 +363,8 @@ impl McpServerElicitationFormRequest {
 
         Some(Self {
             thread_id,
-            server_name: request.server_name,
-            request_id: request.id,
+            server_name,
+            request_id,
             message,
             approval_display_params,
             response_mode,
@@ -1083,16 +1133,14 @@ impl McpServerElicitationOverlay {
     }
 
     fn dispatch_cancel(&self) {
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id: self.request.thread_id,
-            op: Op::ResolveElicitation {
-                server_name: self.request.server_name.clone(),
-                request_id: self.request.request_id.clone(),
-                decision: ElicitationAction::Cancel,
-                content: None,
-                meta: None,
-            },
-        });
+        self.app_event_tx.resolve_elicitation(
+            self.request.thread_id,
+            self.request.server_name.clone(),
+            self.request.request_id.clone(),
+            ElicitationAction::Cancel,
+            /*content*/ None,
+            /*meta*/ None,
+        );
     }
 
     fn submit_answers(&mut self) {
@@ -1123,16 +1171,14 @@ impl McpServerElicitationOverlay {
                     Some(APPROVAL_CANCEL_VALUE) => (ElicitationAction::Cancel, None),
                     _ => (ElicitationAction::Cancel, None),
                 };
-            self.app_event_tx.send(AppEvent::SubmitThreadOp {
-                thread_id: self.request.thread_id,
-                op: Op::ResolveElicitation {
-                    server_name: self.request.server_name.clone(),
-                    request_id: self.request.request_id.clone(),
-                    decision,
-                    content: None,
-                    meta,
-                },
-            });
+            self.app_event_tx.resolve_elicitation(
+                self.request.thread_id,
+                self.request.server_name.clone(),
+                self.request.request_id.clone(),
+                decision,
+                /*content*/ None,
+                meta,
+            );
             if let Some(next) = self.queue.pop_front() {
                 self.request = next;
                 self.reset_for_request();
@@ -1149,16 +1195,14 @@ impl McpServerElicitationOverlay {
             .enumerate()
             .filter_map(|(idx, field)| self.field_value(idx).map(|value| (field.id.clone(), value)))
             .collect::<serde_json::Map<_, _>>();
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id: self.request.thread_id,
-            op: Op::ResolveElicitation {
-                server_name: self.request.server_name.clone(),
-                request_id: self.request.request_id.clone(),
-                decision: ElicitationAction::Accept,
-                content: Some(Value::Object(content)),
-                meta: None,
-            },
-        });
+        self.app_event_tx.resolve_elicitation(
+            self.request.thread_id,
+            self.request.server_name.clone(),
+            self.request.request_id.clone(),
+            ElicitationAction::Accept,
+            Some(Value::Object(content)),
+            /*meta*/ None,
+        );
         if let Some(next) = self.queue.pop_front() {
             self.request = next;
             self.reset_for_request();

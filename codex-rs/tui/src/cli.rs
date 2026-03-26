@@ -32,7 +32,7 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_show_all: bool,
 
-    /// Internal: include non-interactive sessions in resume listings.
+    /// Internal: include non-interactive sessions when listing resume targets.
     #[clap(skip)]
     pub resume_include_non_interactive: bool,
 

@@ -5,7 +5,7 @@ It owns the remote connection lifecycle, including the initialize/initialized
 handshake, JSON-RPC request/response routing, server-request resolution, and
 notification streaming. The rest of the crate uses the same `AppServerEvent`
 surface for both in-process and remote transports, so callers such as
-`tui_app_server` can switch between them without changing their higher-level
+`codex_tui` can switch between them without changing their higher-level
 session logic.
 */
 

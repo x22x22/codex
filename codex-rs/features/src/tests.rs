@@ -31,8 +31,11 @@ fn default_enabled_features_are_stable() {
     for spec in crate::FEATURES {
         if spec.default_enabled {
             assert!(
-                matches!(spec.stage, Stage::Stable | Stage::Removed),
-                "feature `{}` is enabled by default but is not stable/removed ({:?})",
+                matches!(
+                    spec.stage,
+                    Stage::Stable | Stage::Deprecated | Stage::Removed
+                ),
+                "feature `{}` is enabled by default but is not stable/deprecated/removed ({:?})",
                 spec.key,
                 spec.stage
             );
@@ -50,6 +53,12 @@ fn use_legacy_landlock_is_stable_and_disabled_by_default() {
 fn use_linux_sandbox_bwrap_is_removed_and_disabled_by_default() {
     assert_eq!(Feature::UseLinuxSandboxBwrap.stage(), Stage::Removed);
     assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+}
+
+#[test]
+fn tui_app_server_is_deprecated_compatibility_flag() {
+    assert_eq!(Feature::TuiAppServer.stage(), Stage::Deprecated);
+    assert_eq!(Feature::TuiAppServer.default_enabled(), true);
 }
 
 #[test]

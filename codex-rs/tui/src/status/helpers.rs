@@ -1,16 +1,12 @@
 use crate::exec_command::relativize_to_home;
+use crate::status::StatusAccountDisplay;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::AuthManager;
-use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
-use codex_protocol::account::PlanType;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
-
-use super::account::StatusAccountDisplay;
 
 fn normalize_agents_display_path(path: &Path) -> String {
     dunce::simplified(path).display().to_string()
@@ -85,21 +81,9 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
 }
 
 pub(crate) fn compose_account_display(
-    auth_manager: &AuthManager,
-    plan: Option<PlanType>,
+    account_display: Option<&StatusAccountDisplay>,
 ) -> Option<StatusAccountDisplay> {
-    let auth = auth_manager.auth_cached()?;
-
-    match auth.auth_mode() {
-        CoreAuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),
-        CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
-            let email = auth.get_account_email();
-            let plan = plan
-                .map(|plan_type| title_case(format!("{plan_type:?}").as_str()))
-                .or_else(|| Some("Unknown".to_string()));
-            Some(StatusAccountDisplay::ChatGpt { email, plan })
-        }
-    }
+    account_display.cloned()
 }
 
 pub(crate) fn format_tokens_compact(value: i64) -> String {
@@ -173,17 +157,4 @@ pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<
     } else {
         format!("{time} on {}", dt.format("%-d %b"))
     }
-}
-
-pub(crate) fn title_case(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    let mut chars = s.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return String::new(),
-    };
-    let rest: String = chars.as_str().to_ascii_lowercase();
-    first.to_uppercase().collect::<String>() + &rest
 }

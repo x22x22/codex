@@ -27,6 +27,7 @@ use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
+#[cfg(test)]
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -264,14 +265,8 @@ impl ApprovalOverlay {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
         let thread_id = request.thread_id();
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id,
-            op: Op::ExecApproval {
-                id: id.to_string(),
-                turn_id: None,
-                decision,
-            },
-        });
+        self.app_event_tx
+            .exec_approval(thread_id, id.to_string(), decision);
     }
 
     fn handle_permissions_decision(
@@ -307,16 +302,14 @@ impl ApprovalOverlay {
             )));
         }
         let thread_id = request.thread_id();
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+        self.app_event_tx.request_permissions_response(
             thread_id,
-            op: Op::RequestPermissionsResponse {
-                id: call_id.to_string(),
-                response: codex_protocol::request_permissions::RequestPermissionsResponse {
-                    permissions: granted_permissions,
-                    scope,
-                },
+            call_id.to_string(),
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: granted_permissions,
+                scope,
             },
-        });
+        );
     }
 
     fn handle_patch_decision(&self, id: &str, decision: ReviewDecision) {
@@ -327,13 +320,8 @@ impl ApprovalOverlay {
         else {
             return;
         };
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id,
-            op: Op::PatchApproval {
-                id: id.to_string(),
-                decision,
-            },
-        });
+        self.app_event_tx
+            .patch_approval(thread_id, id.to_string(), decision);
     }
 
     fn handle_elicitation_decision(
@@ -349,16 +337,14 @@ impl ApprovalOverlay {
         else {
             return;
         };
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+        self.app_event_tx.resolve_elicitation(
             thread_id,
-            op: Op::ResolveElicitation {
-                server_name: server_name.to_string(),
-                request_id: request_id.clone(),
-                decision,
-                content: None,
-                meta: None,
-            },
-        });
+            server_name.to_string(),
+            request_id.clone(),
+            decision,
+            /*content*/ None,
+            /*meta*/ None,
+        );
     }
 
     fn advance_queue(&mut self) {

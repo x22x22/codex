@@ -30,6 +30,7 @@ use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
 
+#[cfg(test)]
 use codex_protocol::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -745,13 +746,12 @@ impl RequestUserInputOverlay {
                 },
             );
         }
-        self.app_event_tx
-            .send(AppEvent::CodexOp(Op::UserInputAnswer {
-                id: self.request.turn_id.clone(),
-                response: RequestUserInputResponse {
-                    answers: answers.clone(),
-                },
-            }));
+        self.app_event_tx.user_input_answer(
+            self.request.turn_id.clone(),
+            RequestUserInputResponse {
+                answers: answers.clone(),
+            },
+        );
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::RequestUserInputResultCell {
                 questions: self.request.questions.clone(),
@@ -1007,7 +1007,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             }
             // TODO: Emit interrupted request_user_input results (including committed answers)
             // once core supports persisting them reliably without follow-up turn issues.
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+            self.app_event_tx.interrupt();
             self.done = true;
             return;
         }
@@ -1223,7 +1223,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             self.close_unanswered_confirmation();
             // TODO: Emit interrupted request_user_input results (including committed answers)
             // once core supports persisting them reliably without follow-up turn issues.
-            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+            self.app_event_tx.interrupt();
             self.done = true;
             return CancellationEvent::Handled;
         }
@@ -1234,7 +1234,7 @@ impl BottomPaneView for RequestUserInputOverlay {
 
         // TODO: Emit interrupted request_user_input results (including committed answers)
         // once core supports persisting them reliably without follow-up turn issues.
-        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+        self.app_event_tx.interrupt();
         self.done = true;
         CancellationEvent::Handled
     }

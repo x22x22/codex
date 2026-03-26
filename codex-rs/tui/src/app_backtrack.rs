@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
+use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::history_cell::SessionInfoCell;
 use crate::history_cell::UserHistoryCell;
@@ -35,10 +36,6 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::ErrorEvent;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
 use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -215,7 +212,8 @@ impl App {
             selection,
             thread_id: self.chat_widget.thread_id(),
         });
-        self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
+        self.chat_widget
+            .submit_op(AppCommand::thread_rollback(num_turns));
         self.chat_widget.set_remote_image_urls(remote_image_urls);
         if !prefill.is_empty()
             || !text_elements.is_empty()
@@ -461,35 +459,17 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
-        match event {
-            EventMsg::ThreadRolledBack(rollback) => {
-                // `pending_rollback` is set only after this UI sends `Op::ThreadRollback`
-                // from the backtrack flow. In that case, finish immediately using the
-                // stored selection (nth user message) so local trim matches the exact
-                // backtrack target.
-                //
-                // When it is `None`, rollback came from replay or another source. We
-                // queue an AppEvent so rollback trim runs in FIFO order with
-                // `InsertHistoryCell` events, avoiding races with in-flight transcript
-                // inserts.
-                if self.backtrack.pending_rollback.is_some() {
-                    self.finish_pending_backtrack();
-                } else {
-                    self.app_event_tx.send(AppEvent::ApplyThreadRollback {
-                        num_turns: rollback.num_turns,
-                    });
-                }
-            }
-            EventMsg::Error(ErrorEvent {
-                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-                ..
-            }) => {
-                // Core rejected the rollback; clear the guard so the user can retry.
-                self.backtrack.pending_rollback = None;
-            }
-            _ => {}
+    pub(crate) fn handle_backtrack_rollback_succeeded(&mut self, num_turns: u32) {
+        if self.backtrack.pending_rollback.is_some() {
+            self.finish_pending_backtrack();
+        } else {
+            self.app_event_tx
+                .send(AppEvent::ApplyThreadRollback { num_turns });
         }
+    }
+
+    pub(crate) fn handle_backtrack_rollback_failed(&mut self) {
+        self.backtrack.pending_rollback = None;
     }
 
     /// Apply rollback semantics for `ThreadRolledBack` events where this TUI does not have an
