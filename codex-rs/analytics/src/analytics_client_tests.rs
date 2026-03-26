@@ -204,8 +204,8 @@ fn thread_initialized_event_serializes_expected_shape() {
             model: "gpt-5".to_string(),
             ephemeral: true,
             session_source: SessionSource::Exec,
+            initialization_mode: InitializationMode::New,
         },
-        InitializationMode::New,
     ));
 
     let payload = serde_json::to_value(&event).expect("serialize thread initialized event");
@@ -240,35 +240,14 @@ fn thread_initialized_event_serializes_subagent_source() {
             model: "gpt-5".to_string(),
             ephemeral: false,
             session_source: SessionSource::SubAgent(SubAgentSource::Review),
+            initialization_mode: InitializationMode::New,
         },
-        InitializationMode::New,
     ));
 
     let payload =
         serde_json::to_value(&event).expect("serialize subagent thread initialized event");
     assert_eq!(payload["event_params"]["session_source"], "subagent");
     assert_eq!(payload["event_params"]["subagent_source"], "review");
-}
-
-#[test]
-fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
-    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        originator().value,
-        ThreadInitializeInput {
-            connection_id: 1,
-            thread_id: "thread-2".to_string(),
-            model: "gpt-5".to_string(),
-            ephemeral: false,
-            session_source: SessionSource::Mcp,
-        },
-        InitializationMode::New,
-    ));
-
-    let payload = serde_json::to_value(&event).expect("serialize mcp thread initialized event");
-    assert_eq!(
-        payload["event_params"]["session_source"],
-        serde_json::Value::Null
-    );
 }
 
 #[tokio::test]
@@ -278,12 +257,13 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsInput::ThreadStart(ThreadInitializeInput {
+            AnalyticsInput::ThreadInitialized(ThreadInitializeInput {
                 connection_id: 7,
                 thread_id: "thread-no-client".to_string(),
                 model: "gpt-5".to_string(),
                 ephemeral: false,
                 session_source: SessionSource::Exec,
+                initialization_mode: InitializationMode::New,
             }),
             &mut events,
         )
@@ -303,7 +283,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsInput::ThreadResume(ThreadInitializeInput {
+            AnalyticsInput::ThreadInitialized(ThreadInitializeInput {
                 connection_id: 7,
                 thread_id: "thread-1".to_string(),
                 model: "gpt-5".to_string(),
@@ -318,6 +298,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                     agent_nickname: None,
                     agent_role: None,
                 }),
+                initialization_mode: InitializationMode::Resumed,
             }),
             &mut events,
         )

@@ -39,6 +39,7 @@ pub struct ThreadInitializeInput {
     pub model: String,
     pub ephemeral: bool,
     pub session_source: SessionSource,
+    pub initialization_mode: InitializationMode,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -84,9 +85,7 @@ pub struct AppInvocation {
 
 pub enum AnalyticsInput {
     Initialize(InitializeInput),
-    ThreadStart(ThreadInitializeInput),
-    ThreadFork(ThreadInitializeInput),
-    ThreadResume(ThreadInitializeInput),
+    ThreadInitialized(ThreadInitializeInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
@@ -234,16 +233,8 @@ impl AnalyticsEventsClient {
         self.record(AnalyticsInput::Initialize(input));
     }
 
-    pub fn track_thread_start(&self, input: ThreadInitializeInput) {
-        self.record(AnalyticsInput::ThreadStart(input));
-    }
-
-    pub fn track_thread_fork(&self, input: ThreadInitializeInput) {
-        self.record(AnalyticsInput::ThreadFork(input));
-    }
-
-    pub fn track_thread_resume(&self, input: ThreadInitializeInput) {
-        self.record(AnalyticsInput::ThreadResume(input));
+    pub fn track_thread_initialized(&self, input: ThreadInitializeInput) {
+        self.record(AnalyticsInput::ThreadInitialized(input));
     }
 
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
@@ -438,14 +429,8 @@ impl AnalyticsReducer {
             AnalyticsInput::Initialize(input) => {
                 self.ingest_initialize(input);
             }
-            AnalyticsInput::ThreadStart(input) => {
-                self.ingest_thread_initialized(input, InitializationMode::New, out);
-            }
-            AnalyticsInput::ThreadFork(input) => {
-                self.ingest_thread_initialized(input, InitializationMode::Forked, out);
-            }
-            AnalyticsInput::ThreadResume(input) => {
-                self.ingest_thread_initialized(input, InitializationMode::Resumed, out);
+            AnalyticsInput::ThreadInitialized(input) => {
+                self.ingest_thread_initialized(input, out);
             }
             AnalyticsInput::SkillInvoked(input) => {
                 self.ingest_skill_invoked(input, out).await;
@@ -477,18 +462,13 @@ impl AnalyticsReducer {
     fn ingest_thread_initialized(
         &mut self,
         input: ThreadInitializeInput,
-        initialization_mode: InitializationMode,
         out: &mut Vec<TrackEventRequest>,
     ) {
         let Some(client_state) = self.clients.get(&input.connection_id) else {
             return;
         };
         out.push(TrackEventRequest::CodexThreadInitialized(
-            codex_thread_initialized_event_request(
-                client_state.product_client_id.clone(),
-                input,
-                initialization_mode,
-            ),
+            codex_thread_initialized_event_request(client_state.product_client_id.clone(), input),
         ));
     }
 
@@ -611,22 +591,16 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
 fn codex_thread_initialized_event_request(
     product_client_id: String,
     input: ThreadInitializeInput,
-    initialization_mode: InitializationMode,
 ) -> CodexThreadInitializedEvent {
     CodexThreadInitializedEvent {
         event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(
-            product_client_id,
-            input,
-            initialization_mode,
-        ),
+        event_params: codex_thread_initialized_event_params(product_client_id, input),
     }
 }
 
 fn codex_thread_initialized_event_params(
     product_client_id: String,
     input: ThreadInitializeInput,
-    initialization_mode: InitializationMode,
 ) -> CodexThreadInitializedEventParams {
     CodexThreadInitializedEventParams {
         thread_id: input.thread_id,
@@ -634,7 +608,7 @@ fn codex_thread_initialized_event_params(
         model: input.model,
         ephemeral: input.ephemeral,
         session_source: session_source_name(&input.session_source),
-        initialization_mode,
+        initialization_mode: input.initialization_mode,
         subagent_source: session_source_subagent_source(&input.session_source)
             .map(subagent_source_name),
         parent_thread_id: session_source_parent_thread_id(&input.session_source),

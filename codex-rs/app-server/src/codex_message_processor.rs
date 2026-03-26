@@ -185,6 +185,7 @@ use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::ForkSnapshot;
+use codex_core::InitializationMode;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
@@ -2163,10 +2164,11 @@ impl CodexMessageProcessor {
                 };
                 listener_task_context
                     .analytics_events_client
-                    .track_thread_start(thread_lifecycle_input(
+                    .track_thread_initialized(thread_initialize_input(
                         request_id.connection_id,
                         &thread,
                         response.model.clone(),
+                        InitializationMode::New,
                     ));
 
                 listener_task_context
@@ -3647,10 +3649,11 @@ impl CodexMessageProcessor {
                     reasoning_effort: session_configured.reasoning_effort,
                 };
                 self.analytics_events_client
-                    .track_thread_resume(thread_lifecycle_input(
+                    .track_thread_initialized(thread_initialize_input(
                         request_id.connection_id,
                         &response.thread,
                         response.model.clone(),
+                        InitializationMode::Resumed,
                     ));
 
                 self.outgoing.send_response(request_id, response).await;
@@ -4260,10 +4263,11 @@ impl CodexMessageProcessor {
             reasoning_effort: session_configured.reasoning_effort,
         };
         self.analytics_events_client
-            .track_thread_fork(thread_lifecycle_input(
+            .track_thread_initialized(thread_initialize_input(
                 request_id.connection_id,
                 &thread,
                 response.model.clone(),
+                InitializationMode::Forked,
             ));
 
         self.outgoing.send_response(request_id, response).await;
@@ -7884,10 +7888,11 @@ fn cloud_requirements_load_error(err: &std::io::Error) -> Option<&CloudRequireme
     None
 }
 
-fn thread_lifecycle_input(
+fn thread_initialize_input(
     connection_id: ConnectionId,
     thread: &Thread,
     model: String,
+    initialization_mode: InitializationMode,
 ) -> ThreadInitializeInput {
     ThreadInitializeInput {
         connection_id: connection_id.0,
@@ -7895,6 +7900,7 @@ fn thread_lifecycle_input(
         model,
         ephemeral: thread.ephemeral,
         session_source: thread.source.clone().into(),
+        initialization_mode,
     }
 }
 
