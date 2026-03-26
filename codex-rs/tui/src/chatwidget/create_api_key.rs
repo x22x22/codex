@@ -1,18 +1,13 @@
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::collections::HashMap;
 
-use codex_core::AuthManager;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::login_with_api_key;
 use codex_core::auth::read_openai_api_key_from_env;
 use codex_login::CreatedApiKey;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::PendingCreateApiKey;
 use codex_login::start_create_api_key as start_create_api_key_flow;
-use codex_protocol::config_types::ForcedLoginMethod;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use tokio::sync::oneshot;
 
 use super::ChatWidget;
 use crate::app_event::AppEvent;
@@ -23,12 +18,7 @@ use crate::history_cell::PlainHistoryCell;
 
 impl ChatWidget {
     pub(crate) fn start_create_api_key(&mut self) {
-        match start_create_api_key_command(
-            self.app_event_tx.clone(),
-            self.auth_manager.clone(),
-            self.config.codex_home.clone(),
-            self.config.forced_login_method,
-        ) {
+        match start_create_api_key_command(self.app_event_tx.clone()) {
             Ok(start_message) => {
                 self.add_to_history(start_message);
                 self.request_redraw();
@@ -42,9 +32,6 @@ impl ChatWidget {
 
 fn start_create_api_key_command(
     app_event_tx: AppEventSender,
-    auth_manager: Arc<AuthManager>,
-    codex_home: PathBuf,
-    forced_login_method: Option<ForcedLoginMethod>,
 ) -> Result<PlainHistoryCell, String> {
     if read_openai_api_key_from_env().is_some() {
         return Ok(existing_shell_api_key_message());
@@ -61,7 +48,7 @@ fn start_create_api_key_command(
 
     let app_event_tx_for_task = app_event_tx;
     tokio::spawn(async move {
-        let cell = complete_command(session, codex_home, forced_login_method, auth_manager).await;
+        let cell = complete_command(session, app_event_tx_for_task.clone()).await;
         app_event_tx_for_task.send(AppEvent::InsertHistoryCell(Box::new(cell)));
     });
 
@@ -133,9 +120,7 @@ fn continue_in_browser_message(
 
 async fn complete_command(
     session: PendingCreateApiKey,
-    codex_home: PathBuf,
-    forced_login_method: Option<ForcedLoginMethod>,
-    auth_manager: Arc<AuthManager>,
+    app_event_tx: AppEventSender,
 ) -> PlainHistoryCell {
     let provisioned = match session.finish().await {
         Ok(provisioned) => provisioned,
@@ -144,44 +129,49 @@ async fn complete_command(
         }
     };
     let copy_result = clipboard_text::copy_text_to_clipboard(&provisioned.project_api_key);
-
-    success_cell(
-        &provisioned,
-        copy_result,
-        live_apply_api_key(
-            forced_login_method,
-            &codex_home,
-            &provisioned.project_api_key,
-            auth_manager,
-        ),
+    let session_env_result = apply_api_key_to_current_session(
+        &provisioned.project_api_key,
+        app_event_tx,
     )
+    .await;
+
+    success_cell(&provisioned, copy_result, session_env_result)
 }
 
-fn live_apply_api_key(
-    forced_login_method: Option<ForcedLoginMethod>,
-    codex_home: &Path,
+async fn apply_api_key_to_current_session(
     api_key: &str,
-    auth_manager: Arc<AuthManager>,
-) -> LiveApplyOutcome {
-    if matches!(forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
-        return LiveApplyOutcome::Skipped(format!(
-            "Created {OPENAI_API_KEY_ENV_VAR}, but left this session unchanged because ChatGPT login is required here."
-        ));
-    }
+    app_event_tx: AppEventSender,
+) -> Result<(), String> {
+    set_current_process_api_key(api_key);
 
-    match login_with_api_key(codex_home, api_key, AuthCredentialsStoreMode::Ephemeral) {
-        Ok(()) => {
-            auth_manager.reload();
-            LiveApplyOutcome::Applied
-        }
-        Err(err) => LiveApplyOutcome::Failed(err.to_string()),
+    let (result_tx, result_rx) = oneshot::channel();
+    app_event_tx.send(AppEvent::SetDependencyEnv {
+        values: HashMap::from([(OPENAI_API_KEY_ENV_VAR.to_string(), api_key.to_string())]),
+        result_tx,
+    });
+
+    match result_rx.await {
+        Ok(result) => result,
+        Err(err) => Err(format!(
+            "dependency env update response channel closed before completion: {err}"
+        )),
+    }
+}
+
+fn set_current_process_api_key(api_key: &str) {
+    // SAFETY: `/create-api-key` intentionally mutates process-global environment so the running
+    // Codex session can observe `OPENAI_API_KEY` immediately. This is scoped to a single
+    // user-triggered command, and spawned tool environments are updated separately through the
+    // session dependency env override.
+    unsafe {
+        std::env::set_var(OPENAI_API_KEY_ENV_VAR, api_key);
     }
 }
 
 fn success_cell(
     provisioned: &CreatedApiKey,
     copy_result: Result<(), String>,
-    live_apply_outcome: LiveApplyOutcome,
+    session_env_result: Result<(), String>,
 ) -> PlainHistoryCell {
     let organization = provisioned
         .organization_title
@@ -196,20 +186,15 @@ fn success_cell(
         Ok(()) => "Copied the full key to your clipboard.".to_string(),
         Err(err) => format!("Could not copy the key to your clipboard: {err}"),
     };
-    let live_apply_status = match live_apply_outcome {
-        LiveApplyOutcome::Applied => Some(
-            "Updated this session to use the newly created API key without touching auth.json."
-                .to_string(),
-        ),
-        LiveApplyOutcome::Skipped(reason) => Some(reason),
-        LiveApplyOutcome::Failed(err) => Some(format!(
-            "Created {OPENAI_API_KEY_ENV_VAR}, but could not hot-apply it in this session: {err}",
-        )),
+    let session_env_status = match session_env_result {
+        Ok(()) => {
+            format!("Set {OPENAI_API_KEY_ENV_VAR} in this Codex session for spawned commands.")
+        }
+        Err(err) => {
+            format!("Could not set {OPENAI_API_KEY_ENV_VAR} in this Codex session: {err}")
+        }
     };
-    let hint = Some(match live_apply_status {
-        Some(live_apply_status) => format!("{copy_status} {live_apply_status}"),
-        None => copy_status,
-    });
+    let hint = Some(format!("{copy_status} {session_env_status}"));
 
     history_cell::new_info_event(
         format!(
@@ -234,12 +219,6 @@ fn mask_api_key(api_key: &str) -> String {
     )
 }
 
-enum LiveApplyOutcome {
-    Applied,
-    Skipped(String),
-    Failed(String),
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,14 +236,14 @@ mod tests {
                 project_api_key: "sk-proj-123".to_string(),
             },
             Ok(()),
-            LiveApplyOutcome::Applied,
+            Ok(()),
         );
 
         assert_snapshot!(render_cell(&cell));
     }
 
     #[test]
-    fn success_cell_snapshot_when_live_apply_is_skipped() {
+    fn success_cell_snapshot_when_clipboard_copy_fails() {
         let cell = success_cell(
             &CreatedApiKey {
                 organization_id: "org-default".to_string(),
@@ -274,10 +253,7 @@ mod tests {
                 project_api_key: "sk-proj-123".to_string(),
             },
             Err("clipboard unavailable".to_string()),
-            LiveApplyOutcome::Skipped(
-                "Created OPENAI_API_KEY, but left this session unchanged because ChatGPT login is required here."
-                    .to_string(),
-            ),
+            Err("dependency env unavailable".to_string()),
         );
 
         assert_snapshot!(render_cell(&cell));

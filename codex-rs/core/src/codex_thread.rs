@@ -8,6 +8,7 @@ use crate::file_watcher::WatchRegistration;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
+use std::collections::HashMap;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
@@ -120,6 +121,10 @@ impl CodexThread {
 
     pub async fn agent_status(&self) -> AgentStatus {
         self.codex.agent_status().await
+    }
+
+    pub async fn set_dependency_env(&self, values: HashMap<String, String>) {
+        self.codex.set_dependency_env(values).await;
     }
 
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
