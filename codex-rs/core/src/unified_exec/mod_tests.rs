@@ -303,6 +303,34 @@ async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_inherits_dependency_env() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    session
+        .set_dependency_env(HashMap::from([(
+            "OPENAI_API_KEY".to_string(),
+            "session-api-key".to_string(),
+        )]))
+        .await;
+
+    let output = exec_command(
+        &session,
+        &turn,
+        "printf '%s' \"$OPENAI_API_KEY\"",
+        2_500,
+        None,
+    )
+    .await?;
+    assert!(
+        output.truncated_output().contains("session-api-key"),
+        "expected exec_command to inherit dependency env"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn unified_exec_timeouts() -> anyhow::Result<()> {
     skip_if_sandbox!(Ok(()));
