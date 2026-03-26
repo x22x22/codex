@@ -28,6 +28,7 @@ use codex_windows_sandbox::ipc_framed::Message;
 use codex_windows_sandbox::ipc_framed::OutputPayload;
 use codex_windows_sandbox::ipc_framed::OutputStream;
 use codex_windows_sandbox::ipc_framed::ResizePayload;
+use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::parse_policy;
 use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::spawn_process_with_pipes;
@@ -167,7 +168,15 @@ fn read_spawn_request(
 fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
     let use_junction = match read_acl_mutex::read_acl_mutex_exists() {
         Ok(exists) => exists,
-        Err(_) => true,
+        Err(err) => {
+            log_note(
+                &format!(
+                    "junction: failed to probe ACL mutex state: {err}; defaulting to junction cwd"
+                ),
+                log_dir,
+            );
+            true
+        }
     };
     if use_junction {
         cwd_junction::create_cwd_junction(req_cwd, log_dir).unwrap_or_else(|| req_cwd.to_path_buf())
