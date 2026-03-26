@@ -777,14 +777,6 @@ impl Codex {
     }
 }
 
-fn initialization_mode(conversation_history: &InitialHistory) -> InitializationMode {
-    match conversation_history {
-        InitialHistory::New => InitializationMode::New,
-        InitialHistory::Forked(_) => InitializationMode::Forked,
-        InitialHistory::Resumed(_) => InitializationMode::Resumed,
-    }
-}
-
 fn session_source_subagent_source(session_source: &SessionSource) -> Option<SubAgentSource> {
     match session_source {
         SessionSource::SubAgent(subagent_source) => Some(subagent_source.clone()),
