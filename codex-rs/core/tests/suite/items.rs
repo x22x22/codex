@@ -217,7 +217,7 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
         event_params["product_client_id"],
         serde_json::json!(codex_core::default_client::originator().value)
     );
-    assert_eq!(event_params["submission_type"], "prompt");
+    assert_eq!(event_params["submission_type"], "default");
     assert_eq!(event_params["model"], session_configured.model);
     assert_eq!(event_params["model_provider"], config.model_provider_id);
     assert_eq!(event_params["reasoning_effort"], "high");
