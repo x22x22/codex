@@ -25,6 +25,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::MissedTickBehavior;
@@ -59,7 +60,8 @@ pub(crate) async fn start_remote_control(
         let (server_event_tx, server_event_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (writer_exited_tx, writer_exited_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
-        let mut websocket_task = tokio::spawn(run_remote_control_websocket_loop(
+        let mut join_set = JoinSet::new();
+        join_set.spawn(run_remote_control_websocket_loop(
             remote_control_url,
             state_db,
             auth_manager,
@@ -67,7 +69,7 @@ pub(crate) async fn start_remote_control(
             server_event_rx,
             local_shutdown_token.clone(),
         ));
-        let mut manager_task = tokio::spawn(run_remote_control_manager(
+        join_set.spawn(run_remote_control_manager(
             transport_event_tx,
             client_event_rx,
             server_event_tx,
@@ -78,16 +80,10 @@ pub(crate) async fn start_remote_control(
 
         tokio::select! {
             _ = local_shutdown_token.cancelled() => {}
-            _ = &mut websocket_task => {
-                local_shutdown_token.cancel();
-            }
-            _ = &mut manager_task => {
-                local_shutdown_token.cancel();
-            }
+            _ = join_set.join_next() => local_shutdown_token.cancel(),
         }
 
-        let _ = websocket_task.await;
-        let _ = manager_task.await;
+        join_set.shutdown().await;
     }))
 }
 

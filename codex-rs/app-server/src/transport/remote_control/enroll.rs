@@ -1,6 +1,7 @@
 use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RemoteControlTarget;
+use axum::http::HeaderMap;
 use base64::Engine;
 use codex_core::AuthManager;
 use codex_core::default_client::build_reqwest_client;
@@ -140,18 +141,8 @@ fn preview_remote_control_response_body(body: &[u8]) -> String {
     truncated
 }
 
-fn format_remote_control_websocket_connect_error(
-    websocket_url: &str,
-    err: &tungstenite::Error,
-) -> String {
-    let mut message =
-        format!("failed to connect app-server remote control websocket `{websocket_url}`: {err}");
-    let tungstenite::Error::Http(response) = err else {
-        return message;
-    };
-
-    let mut headers = response
-        .headers()
+fn format_headers(headers: &HeaderMap) -> String {
+    let mut headers = headers
         .iter()
         .map(|(name, value)| {
             format!(
@@ -162,7 +153,23 @@ fn format_remote_control_websocket_connect_error(
         })
         .collect::<Vec<_>>();
     headers.sort();
-    message.push_str(&format!(", headers: {{{}}}", headers.join(", ")));
+    format!("{{{}}}", headers.join(", "))
+}
+
+fn format_remote_control_websocket_connect_error(
+    websocket_url: &str,
+    err: &tungstenite::Error,
+) -> String {
+    let mut message =
+        format!("failed to connect app-server remote control websocket `{websocket_url}`: {err}");
+    let tungstenite::Error::Http(response) = err else {
+        return message;
+    };
+
+    message.push_str(&format!(
+        ", headers: {}",
+        format_headers(response.headers())
+    ));
     if let Some(body) = response.body().as_ref()
         && !body.is_empty()
     {
@@ -200,6 +207,7 @@ pub(super) async fn enroll_remote_control_server(
             "failed to enroll remote control server at `{enroll_url}`: {err}"
         ))
     })?;
+    let headers = response.headers().clone();
     let status = response.status();
     let body = response.bytes().await.map_err(|err| {
         io::Error::other(format!(
@@ -208,14 +216,16 @@ pub(super) async fn enroll_remote_control_server(
     })?;
     let body_preview = preview_remote_control_response_body(&body);
     if !status.is_success() {
+        let headers_str = format_headers(&headers);
         return Err(io::Error::other(format!(
-            "remote control server enrollment failed at `{enroll_url}`: HTTP {status}, body: {body_preview}"
+            "remote control server enrollment failed at `{enroll_url}`: HTTP {status}, headers: {headers_str}, body: {body_preview}"
         )));
     }
 
     let enrollment = serde_json::from_slice::<EnrollRemoteServerResponse>(&body).map_err(|err| {
+        let headers_str = format_headers(&headers);
         io::Error::other(format!(
-            "failed to parse remote control enrollment response from `{enroll_url}`: HTTP {status}, body: {body_preview}, decode error: {err}"
+            "failed to parse remote control enrollment response from `{enroll_url}`: HTTP {status}, headers: {headers_str}, body: {body_preview}, decode error: {err}"
         ))
     })?;
 

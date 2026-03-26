@@ -124,7 +124,7 @@ pub(super) fn normalize_remote_control_url(
     }
 
     let mut enroll_url = remote_control_url
-        .join("remote/control/server/enroll")
+        .join("wham/remote/control/server/enroll")
         .map_err(map_url_parse_error)?;
     let mut websocket_url = remote_control_url
         .join("wham/remote/control/server")
