@@ -106,10 +106,10 @@ fn normalize_additional_permissions_preserves_network() {
         network: Some(NetworkPermissions {
             enabled: Some(true),
         }),
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![path.clone()]),
-            write: Some(vec![path.clone()]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![path.clone()]),
+            Some(vec![path.clone()]),
+        )),
         ..Default::default()
     })
     .expect("permissions");
@@ -122,10 +122,10 @@ fn normalize_additional_permissions_preserves_network() {
     );
     assert_eq!(
         permissions.file_system,
-        Some(FileSystemPermissions {
-            read: Some(vec![path.clone()]),
-            write: Some(vec![path]),
-        })
+        Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![path.clone()]),
+            Some(vec![path]),
+        ))
     );
 }
 
@@ -147,20 +147,20 @@ fn normalize_additional_permissions_canonicalizes_symlinked_write_paths() {
     .expect("absolute canonical write dir");
 
     let permissions = normalize_additional_permissions(PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![link_write_dir]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![link_write_dir]),
+        )),
         ..Default::default()
     })
     .expect("permissions");
 
     assert_eq!(
         permissions.file_system,
-        Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![expected_write_dir]),
-        })
+        Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![expected_write_dir]),
+        ))
     );
 }
 
@@ -168,10 +168,7 @@ fn normalize_additional_permissions_canonicalizes_symlinked_write_paths() {
 fn normalize_additional_permissions_drops_empty_nested_profiles() {
     let permissions = normalize_additional_permissions(PermissionProfile {
         network: Some(NetworkPermissions { enabled: None }),
-        file_system: Some(FileSystemPermissions {
-            read: None,
-            write: None,
-        }),
+        file_system: Some(FileSystemPermissions::default()),
         macos: None,
     })
     .expect("permissions");
@@ -201,12 +198,12 @@ fn normalize_additional_permissions_preserves_default_macos_preferences_permissi
 #[test]
 fn intersect_permission_profiles_preserves_default_macos_grants() {
     let requested = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(Vec::from(["/tmp/requested"
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(Vec::from(["/tmp/requested"
                 .try_into()
                 .expect("absolute path")])),
-            write: None,
-        }),
+            None,
+        )),
         macos: Some(MacOsSeatbeltProfileExtensions {
             macos_preferences: MacOsPreferencesPermission::ReadWrite,
             macos_automation: MacOsAutomationPermission::BundleIds(vec![
@@ -221,10 +218,7 @@ fn intersect_permission_profiles_preserves_default_macos_grants() {
         ..Default::default()
     };
     let granted = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(Vec::new()),
-            write: None,
-        }),
+        file_system: Some(FileSystemPermissions::default()),
         macos: Some(MacOsSeatbeltProfileExtensions::default()),
         ..Default::default()
     };
@@ -292,10 +286,10 @@ fn read_only_additional_permissions_can_enable_network_without_writes() {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![path.clone()]),
-                write: Some(Vec::new()),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![path.clone()]),
+                Some(Vec::new()),
+            )),
             ..Default::default()
         },
     );
@@ -340,10 +334,10 @@ fn effective_permissions_merge_macos_extensions_with_additional_permissions() {
             macos_contacts: MacOsContactsPermission::None,
         }),
         Some(&PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![path]),
-                write: Some(Vec::new()),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![path]),
+                Some(Vec::new()),
+            )),
             macos: Some(MacOsSeatbeltProfileExtensions {
                 macos_preferences: MacOsPreferencesPermission::ReadWrite,
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
@@ -391,10 +385,10 @@ fn external_sandbox_additional_permissions_can_enable_network() {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![path]),
-                write: Some(Vec::new()),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![path]),
+                Some(Vec::new()),
+            )),
             ..Default::default()
         },
     );
@@ -431,8 +425,10 @@ fn merge_file_system_policy_with_additional_permissions_preserves_unreadable_roo
                 access: FileSystemAccessMode::None,
             },
         ]),
-        vec![allowed_path.clone()],
-        Vec::new(),
+        &FileSystemPermissions::from_read_write_roots(
+            Some(vec![allowed_path.clone()]),
+            Some(Vec::new()),
+        ),
     );
 
     assert_eq!(
@@ -501,10 +497,10 @@ fn effective_file_system_sandbox_policy_merges_additional_write_roots() {
         },
     ]);
     let additional_permissions = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![allowed_path.clone()]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![allowed_path.clone()]),
+        )),
         ..Default::default()
     };
 

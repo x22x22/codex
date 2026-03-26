@@ -90,6 +90,7 @@ use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
@@ -620,6 +621,10 @@ impl Codex {
             sandbox_policy: config.permissions.sandbox_policy.clone(),
             file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
             network_sandbox_policy: config.permissions.network_sandbox_policy,
+            macos_seatbelt_profile_extensions: config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -859,6 +864,7 @@ pub(crate) struct TurnContext {
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
+    pub(crate) macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
@@ -967,6 +973,7 @@ impl TurnContext {
             sandbox_policy: self.sandbox_policy.clone(),
             file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
             network_sandbox_policy: self.network_sandbox_policy,
+            macos_seatbelt_profile_extensions: self.macos_seatbelt_profile_extensions.clone(),
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             shell_environment_policy: self.shell_environment_policy.clone(),
@@ -1076,6 +1083,7 @@ pub(crate) struct SessionConfiguration {
     sandbox_policy: Constrained<SandboxPolicy>,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
+    macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
     windows_sandbox_level: WindowsSandboxLevel,
 
     /// Absolute working directory that should be treated as the *root* of the
@@ -1283,6 +1291,17 @@ impl Session {
         per_turn_config.service_tier = session_configuration.service_tier;
         per_turn_config.personality = session_configuration.personality;
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
+        per_turn_config.permissions.approval_policy = session_configuration.approval_policy.clone();
+        per_turn_config.permissions.sandbox_policy = session_configuration.sandbox_policy.clone();
+        per_turn_config.permissions.file_system_sandbox_policy =
+            session_configuration.file_system_sandbox_policy.clone();
+        per_turn_config.permissions.network_sandbox_policy =
+            session_configuration.network_sandbox_policy;
+        per_turn_config
+            .permissions
+            .macos_seatbelt_profile_extensions = session_configuration
+            .macos_seatbelt_profile_extensions
+            .clone();
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
             session_configuration.sandbox_policy.get(),
@@ -1425,6 +1444,9 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
             network_sandbox_policy: session_configuration.network_sandbox_policy,
+            macos_seatbelt_profile_extensions: session_configuration
+                .macos_seatbelt_profile_extensions
+                .clone(),
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
@@ -5471,6 +5493,9 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
         network_sandbox_policy: parent_turn_context.network_sandbox_policy,
+        macos_seatbelt_profile_extensions: parent_turn_context
+            .macos_seatbelt_profile_extensions
+            .clone(),
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),

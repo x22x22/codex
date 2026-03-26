@@ -79,6 +79,8 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+#[cfg(test)]
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -209,6 +211,17 @@ pub struct Permissions {
     /// Optional macOS seatbelt extension profile used to extend default
     /// seatbelt permissions when running under seatbelt.
     pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
+}
+
+impl Permissions {
+    #[cfg(test)]
+    pub(crate) fn runtime_permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+            self.macos_seatbelt_profile_extensions.as_ref(),
+        )
+    }
 }
 
 /// Application configuration loaded from disk and merged with overrides.
