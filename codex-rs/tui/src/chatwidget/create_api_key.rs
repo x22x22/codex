@@ -205,23 +205,39 @@ fn success_cell(
         .unwrap_or_else(|| provisioned.default_project_id.clone());
     let masked_api_key = mask_api_key(&provisioned.project_api_key);
     let copy_status = match copy_result {
-        Ok(()) => "Copied the full key to your clipboard.".to_string(),
+        Ok(()) => "I copied the full key to your clipboard.".to_string(),
         Err(err) => format!("Could not copy the key to your clipboard: {err}"),
     };
     let session_env_status = match session_env_result {
-        Ok(()) => {
-            format!("Set {OPENAI_API_KEY_ENV_VAR} in this Codex session for spawned commands.")
-        }
+        Ok(()) => format!(
+            "I also set {OPENAI_API_KEY_ENV_VAR} in this Codex session for future commands."
+        ),
         Err(err) => {
             format!("Could not set {OPENAI_API_KEY_ENV_VAR} in this Codex session: {err}")
         }
     };
-    let hint = Some(format!("{copy_status} {session_env_status}"));
 
-    history_cell::new_info_event(
-        format!("Created an API key for {organization} / {project}: {masked_api_key}"),
-        hint,
-    )
+    PlainHistoryCell::new(vec![
+        vec![
+            "• ".dim(),
+            format!("Created an API key for {organization} / {project}: {masked_api_key}.").into(),
+        ]
+        .into(),
+        vec!["  ".into(), format!("{copy_status} {session_env_status}").into()].into(),
+        "".into(),
+        vec![
+            "  ".into(),
+            "To create more keys or monitor usage, go to platform.openai.com.".dark_gray(),
+        ]
+        .into(),
+        "".into(),
+        vec![
+            "  ".into(),
+            "You can start building with the OpenAI API with limited usage of gpt-5.4-nano. To use more models, add credits on platform.openai.com."
+                .dark_gray(),
+        ]
+        .into(),
+    ])
 }
 
 fn mask_api_key(api_key: &str) -> String {
