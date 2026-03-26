@@ -3117,18 +3117,19 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
-            AppEvent::SetDependencyEnv { values, result_tx } => {
-                let result = match self.active_thread_id {
-                    Some(thread_id) => match self.server.get_thread(thread_id).await {
-                        Ok(thread) => {
-                            thread.set_dependency_env(values).await;
-                            Ok(())
-                        }
-                        Err(err) => Err(format!(
-                            "failed to load active Codex thread for dependency env update: {err}"
-                        )),
-                    },
-                    None => Err("no active Codex thread for dependency env update".to_string()),
+            AppEvent::SetDependencyEnv {
+                thread_id,
+                values,
+                result_tx,
+            } => {
+                let result = match self.server.get_thread(thread_id).await {
+                    Ok(thread) => {
+                        thread.set_dependency_env(values).await;
+                        Ok(())
+                    }
+                    Err(err) => Err(format!(
+                        "failed to load Codex thread {thread_id} for dependency env update: {err}"
+                    )),
                 };
                 let _ = result_tx.send(result);
             }

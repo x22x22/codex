@@ -170,8 +170,9 @@ pub(crate) enum AppEvent {
         force_refetch: bool,
     },
 
-    /// Add environment variables to the active thread's dependency env override.
+    /// Add environment variables to the specified thread's dependency env override.
     SetDependencyEnv {
+        thread_id: ThreadId,
         values: HashMap<String, String>,
         result_tx: oneshot::Sender<Result<(), String>>,
     },

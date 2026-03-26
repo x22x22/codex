@@ -5,6 +5,7 @@ use codex_login::CreatedApiKey;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::PendingCreateApiKey;
 use codex_login::start_create_api_key as start_create_api_key_flow;
+use codex_protocol::ThreadId;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use tokio::sync::oneshot;
@@ -18,7 +19,7 @@ use crate::history_cell::PlainHistoryCell;
 
 impl ChatWidget {
     pub(crate) fn start_create_api_key(&mut self) {
-        match start_create_api_key_command(self.app_event_tx.clone()) {
+        match start_create_api_key_command(self.thread_id(), self.app_event_tx.clone()) {
             Ok(start_message) => {
                 self.add_to_history(start_message);
                 self.request_redraw();
@@ -30,7 +31,13 @@ impl ChatWidget {
     }
 }
 
-fn start_create_api_key_command(app_event_tx: AppEventSender) -> Result<PlainHistoryCell, String> {
+fn start_create_api_key_command(
+    thread_id: Option<ThreadId>,
+    app_event_tx: AppEventSender,
+) -> Result<PlainHistoryCell, String> {
+    let thread_id =
+        thread_id.ok_or_else(|| "No active Codex thread for API key creation.".to_string())?;
+
     if read_openai_api_key_from_env().is_some() {
         return Ok(existing_shell_api_key_message());
     }
@@ -43,7 +50,7 @@ fn start_create_api_key_command(app_event_tx: AppEventSender) -> Result<PlainHis
 
     let app_event_tx_for_task = app_event_tx;
     tokio::spawn(async move {
-        let cell = complete_command(session, app_event_tx_for_task.clone()).await;
+        let cell = complete_command(session, thread_id, app_event_tx_for_task.clone()).await;
         app_event_tx_for_task.send(AppEvent::InsertHistoryCell(Box::new(cell)));
     });
 
@@ -56,7 +63,7 @@ fn existing_shell_api_key_message() -> PlainHistoryCell {
             "{OPENAI_API_KEY_ENV_VAR} is already set in this Codex session; skipping API key creation."
         ),
         Some(format!(
-            "This Codex session already inherited {OPENAI_API_KEY_ENV_VAR} from its shell environment. Unset it and run /create-api-key again if you want Codex to create a different key."
+            "Unset {OPENAI_API_KEY_ENV_VAR} and run /create-api-key again if you want Codex to create a different key."
         )),
     )
 }
@@ -115,6 +122,7 @@ fn continue_in_browser_message(
 
 async fn complete_command(
     session: PendingCreateApiKey,
+    thread_id: ThreadId,
     app_event_tx: AppEventSender,
 ) -> PlainHistoryCell {
     let provisioned = match session.finish().await {
@@ -125,19 +133,22 @@ async fn complete_command(
     };
     let copy_result = clipboard_text::copy_text_to_clipboard(&provisioned.project_api_key);
     let session_env_result =
-        apply_api_key_to_current_session(&provisioned.project_api_key, app_event_tx).await;
+        apply_api_key_to_current_session(&provisioned.project_api_key, thread_id, app_event_tx)
+            .await;
 
     success_cell(&provisioned, copy_result, session_env_result)
 }
 
 async fn apply_api_key_to_current_session(
     api_key: &str,
+    thread_id: ThreadId,
     app_event_tx: AppEventSender,
 ) -> Result<(), String> {
     set_current_process_api_key(api_key);
 
     let (result_tx, result_rx) = oneshot::channel();
     app_event_tx.send(AppEvent::SetDependencyEnv {
+        thread_id,
         values: HashMap::from([(OPENAI_API_KEY_ENV_VAR.to_string(), api_key.to_string())]),
         result_tx,
     });
@@ -266,7 +277,7 @@ mod tests {
 
         assert_eq!(
             render_cell(&cell),
-            "• OPENAI_API_KEY is already set in this Codex session; skipping API key creation. This Codex session already inherited OPENAI_API_KEY from its shell environment. Unset it and run /create-api-key again if you want Codex to create a different key."
+            "• OPENAI_API_KEY is already set in this Codex session; skipping API key creation. Unset OPENAI_API_KEY and run /create-api-key again if you want Codex to create a different key."
         );
     }
 
