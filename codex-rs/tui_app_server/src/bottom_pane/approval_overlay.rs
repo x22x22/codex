@@ -23,6 +23,7 @@ use codex_protocol::models::MacOsAutomationPermission;
 use codex_protocol::models::MacOsContactsPermission;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
@@ -746,20 +747,24 @@ pub(crate) fn format_additional_permissions_rule(
         parts.push("network".to_string());
     }
     if let Some(file_system) = additional_permissions.file_system.as_ref() {
-        if let Some(read) = file_system.read.as_ref() {
-            let reads = read
-                .iter()
-                .map(|path| format!("`{}`", path.display()))
-                .collect::<Vec<_>>()
-                .join(", ");
+        let reads = file_system
+            .explicit_path_entries()
+            .filter_map(|(path, access)| {
+                (access == FileSystemAccessMode::Read).then_some(format!("`{}`", path.display()))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !reads.is_empty() {
             parts.push(format!("read {reads}"));
         }
-        if let Some(write) = file_system.write.as_ref() {
-            let writes = write
-                .iter()
-                .map(|path| format!("`{}`", path.display()))
-                .collect::<Vec<_>>()
-                .join(", ");
+        let writes = file_system
+            .explicit_path_entries()
+            .filter_map(|(path, access)| {
+                (access == FileSystemAccessMode::Write).then_some(format!("`{}`", path.display()))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !writes.is_empty() {
             parts.push(format!("write {writes}"));
         }
     }
@@ -958,10 +963,10 @@ mod tests {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/readme.txt")]),
-                    write: Some(vec![absolute_path("/tmp/out.txt")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![absolute_path("/tmp/readme.txt")]),
+                    Some(vec![absolute_path("/tmp/out.txt")]),
+                )),
             },
         }
     }
@@ -1235,10 +1240,10 @@ mod tests {
     #[test]
     fn additional_permissions_exec_options_hide_execpolicy_amendment() {
         let additional_permissions = PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![absolute_path("/tmp/readme.txt")]),
-                write: Some(vec![absolute_path("/tmp/out.txt")]),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![absolute_path("/tmp/readme.txt")]),
+                Some(vec![absolute_path("/tmp/out.txt")]),
+            )),
             ..Default::default()
         };
         let options = exec_options(
@@ -1316,10 +1321,10 @@ mod tests {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/readme.txt")]),
-                    write: Some(vec![absolute_path("/tmp/out.txt")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![absolute_path("/tmp/readme.txt")]),
+                    Some(vec![absolute_path("/tmp/out.txt")]),
+                )),
                 ..Default::default()
             }),
         };
@@ -1364,10 +1369,10 @@ mod tests {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/readme.txt")]),
-                    write: Some(vec![absolute_path("/tmp/out.txt")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![absolute_path("/tmp/readme.txt")]),
+                    Some(vec![absolute_path("/tmp/out.txt")]),
+                )),
                 ..Default::default()
             }),
         };

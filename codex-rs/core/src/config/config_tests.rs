@@ -19,6 +19,7 @@ use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -513,6 +514,14 @@ fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::io::Re
                 access: FileSystemAccessMode::Write,
             },
         ]),
+    );
+    assert_eq!(
+        config.permissions.permission_profile,
+        PermissionProfile::from_runtime_permissions(
+            &config.permissions.file_system_sandbox_policy,
+            config.permissions.network_sandbox_policy,
+            None,
+        )
     );
     assert_eq!(
         config.permissions.sandbox_policy.get(),
@@ -1129,6 +1138,15 @@ exclude_slash_tmp = true
             config.permissions.network_sandbox_policy,
             NetworkSandboxPolicy::from(sandbox_policy),
             "case `{name}` should preserve network semantics from legacy config"
+        );
+        assert_eq!(
+            config.permissions.permission_profile,
+            PermissionProfile::from_runtime_permissions(
+                &config.permissions.file_system_sandbox_policy,
+                config.permissions.network_sandbox_policy,
+                None,
+            ),
+            "case `{name}` should populate canonical permission profile from runtime policies"
         );
         assert_eq!(
             config
@@ -4369,6 +4387,11 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_provider: fixture.openai_provider.clone(),
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
+                permission_profile: PermissionProfile::from_runtime_permissions(
+                    &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
+                    NetworkSandboxPolicy::Restricted,
+                    None,
+                ),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                     &SandboxPolicy::new_read_only_policy(),
@@ -4512,6 +4535,11 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_custom_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
+            permission_profile: PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
+                NetworkSandboxPolicy::Restricted,
+                None,
+            ),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                 &SandboxPolicy::new_read_only_policy(),
@@ -4653,6 +4681,11 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
+                NetworkSandboxPolicy::Restricted,
+                None,
+            ),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                 &SandboxPolicy::new_read_only_policy(),
@@ -4780,6 +4813,11 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_provider: fixture.openai_provider.clone(),
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
+            permission_profile: PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
+                NetworkSandboxPolicy::Restricted,
+                None,
+            ),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(
                 &SandboxPolicy::new_read_only_policy(),
