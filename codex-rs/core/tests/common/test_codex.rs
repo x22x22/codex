@@ -489,16 +489,14 @@ impl TestCodexBuilder {
             setup(config.cwd.clone(), Arc::clone(&file_system)).await?;
         }
         let cwd = test_env.local_cwd_temp_dir().unwrap_or(fallback_cwd);
-        Box::pin(
-            self.build_from_config(
-                config,
-                cwd,
-                home,
-                resume_from,
-                test_env,
-                environment_manager,
-            ),
-        )
+        Box::pin(self.build_from_config(
+            config,
+            cwd,
+            home,
+            resume_from,
+            test_env,
+            environment_manager,
+        ))
         .await
     }
 
