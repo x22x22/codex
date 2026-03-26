@@ -55,7 +55,6 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
-use codex_core::InitializeInput;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -560,6 +559,7 @@ impl MessageProcessor {
                 session.experimental_api_enabled = experimental_api_enabled;
                 session.opted_out_notification_methods =
                     opt_out_notification_methods.into_iter().collect();
+                let analytics_initialize_params = params.clone();
                 let ClientInfo {
                     name,
                     title: _title,
@@ -598,10 +598,7 @@ impl MessageProcessor {
                     }
                 }
                 self.analytics_events_client
-                    .track_initialize(InitializeInput {
-                        connection_id: connection_id.0,
-                        product_client_id: originator.clone(),
-                    });
+                    .track_initialize(connection_id.0, analytics_initialize_params);
                 set_default_client_residency_requirement(self.config.enforce_residency.value());
                 let user_agent_suffix = format!("{name}; {version}");
                 if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {

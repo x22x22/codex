@@ -1,13 +1,13 @@
 mod analytics_client;
 
 pub use analytics_client::AnalyticsEventsClient;
-pub use analytics_client::AnalyticsInput;
+pub use analytics_client::AnalyticsFact;
 pub use analytics_client::AnalyticsReducer;
 pub use analytics_client::AppInvocation;
 pub use analytics_client::AppMentionedInput;
 pub use analytics_client::AppUsedInput;
+pub use analytics_client::CustomAnalyticsFact;
 pub use analytics_client::InitializationMode;
-pub use analytics_client::InitializeInput;
 pub use analytics_client::InvocationType;
 pub use analytics_client::PluginState;
 pub use analytics_client::PluginStateChangedInput;

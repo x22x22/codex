@@ -1,13 +1,13 @@
 use super::AnalyticsEventsQueue;
-use super::AnalyticsInput;
+use super::AnalyticsFact;
 use super::AnalyticsReducer;
 use super::AppInvocation;
 use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
+use super::CustomAnalyticsFact;
 use super::InitializationMode;
-use super::InitializeInput;
 use super::InvocationType;
 use super::ThreadInitializeInput;
 use super::TrackEventRequest;
@@ -17,6 +17,8 @@ use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
 use super::codex_thread_initialized_event_request;
 use super::normalize_path_for_skill_id;
+use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::InitializeParams;
 use codex_login::default_client::originator;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -197,7 +199,7 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        originator().value,
+        "codex-tui".to_string(),
         ThreadInitializeInput {
             connection_id: 1,
             thread_id: "thread-0".to_string(),
@@ -216,7 +218,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_type": "codex_thread_initialized",
             "event_params": {
                 "thread_id": "thread-0",
-                "product_client_id": originator().value,
+                "product_client_id": "codex-tui",
                 "model": "gpt-5",
                 "ephemeral": true,
                 "session_source": "user",
@@ -233,7 +235,7 @@ fn thread_initialized_event_serializes_expected_shape() {
 #[test]
 fn thread_initialized_event_serializes_subagent_source() {
     let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        originator().value,
+        "codex-tui".to_string(),
         ThreadInitializeInput {
             connection_id: 1,
             thread_id: "thread-1".to_string(),
@@ -257,14 +259,16 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsInput::ThreadInitialized(ThreadInitializeInput {
-                connection_id: 7,
-                thread_id: "thread-no-client".to_string(),
-                model: "gpt-5".to_string(),
-                ephemeral: false,
-                session_source: SessionSource::Exec,
-                initialization_mode: InitializationMode::New,
-            }),
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
+                ThreadInitializeInput {
+                    connection_id: 7,
+                    thread_id: "thread-no-client".to_string(),
+                    model: "gpt-5".to_string(),
+                    ephemeral: false,
+                    session_source: SessionSource::Exec,
+                    initialization_mode: InitializationMode::New,
+                },
+            )),
             &mut events,
         )
         .await;
@@ -272,10 +276,17 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsInput::Initialize(InitializeInput {
+            AnalyticsFact::Initialize {
                 connection_id: 7,
-                product_client_id: "codex-app-server-tests".to_string(),
-            }),
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: None,
+                },
+            },
             &mut events,
         )
         .await;
@@ -283,23 +294,25 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsInput::ThreadInitialized(ThreadInitializeInput {
-                connection_id: 7,
-                thread_id: "thread-1".to_string(),
-                model: "gpt-5".to_string(),
-                ephemeral: true,
-                session_source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                    parent_thread_id: codex_protocol::ThreadId::from_string(
-                        "11111111-1111-1111-1111-111111111111",
-                    )
-                    .expect("valid thread id"),
-                    depth: 1,
-                    agent_path: None,
-                    agent_nickname: None,
-                    agent_role: None,
-                }),
-                initialization_mode: InitializationMode::Resumed,
-            }),
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
+                ThreadInitializeInput {
+                    connection_id: 7,
+                    thread_id: "thread-1".to_string(),
+                    model: "gpt-5".to_string(),
+                    ephemeral: true,
+                    session_source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id: codex_protocol::ThreadId::from_string(
+                            "11111111-1111-1111-1111-111111111111",
+                        )
+                        .expect("valid thread id"),
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: None,
+                        agent_role: None,
+                    }),
+                    initialization_mode: InitializationMode::Resumed,
+                },
+            )),
             &mut events,
         )
         .await;
@@ -307,10 +320,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
-    assert_eq!(
-        payload[0]["event_params"]["product_client_id"],
-        "codex-app-server-tests"
-    );
+    assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
     assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");
     assert_eq!(payload[0]["event_params"]["session_source"], "subagent");
     assert_eq!(

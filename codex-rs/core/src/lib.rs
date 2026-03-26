@@ -136,8 +136,9 @@ pub type CodexConversation = CodexThread;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
 pub use codex_analytics::AnalyticsEventsClient;
+pub use codex_analytics::AnalyticsFact;
+pub use codex_analytics::CustomAnalyticsFact;
 pub use codex_analytics::InitializationMode;
-pub use codex_analytics::InitializeInput;
 pub use codex_analytics::ThreadInitializeInput;
 mod default_client_forwarding;
 

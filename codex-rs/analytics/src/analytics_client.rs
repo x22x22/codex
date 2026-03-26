@@ -1,3 +1,7 @@
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_login::AuthManager;
@@ -24,12 +28,6 @@ pub struct TrackEventsContext {
     pub model_slug: String,
     pub thread_id: String,
     pub turn_id: String,
-}
-
-#[derive(Clone)]
-pub struct InitializeInput {
-    pub connection_id: u64,
-    pub product_client_id: String,
 }
 
 #[derive(Clone)]
@@ -83,8 +81,28 @@ pub struct AppInvocation {
     pub invocation_type: Option<InvocationType>,
 }
 
-pub enum AnalyticsInput {
-    Initialize(InitializeInput),
+pub enum AnalyticsFact {
+    Initialize {
+        connection_id: u64,
+        params: InitializeParams,
+    },
+    Request {
+        connection_id: u64,
+        request_id: RequestId,
+        request: ClientRequest,
+    },
+    Notification {
+        connection_id: u64,
+        notification: ServerNotification,
+    },
+    // Facts that do not naturally exist on the app-server protocol surface, or
+    // would require non-trivial protocol reshaping on this branch.
+    Custom(CustomAnalyticsFact),
+}
+
+pub enum CustomAnalyticsFact {
+    // This remains custom on this branch because app-server-protocol does not
+    // yet expose a generic client response enum we can reduce over directly.
     ThreadInitialized(ThreadInitializeInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
@@ -137,7 +155,7 @@ struct ClientState {
 
 #[derive(Clone)]
 pub(crate) struct AnalyticsEventsQueue {
-    sender: mpsc::Sender<AnalyticsInput>,
+    sender: mpsc::Sender<AnalyticsFact>,
     app_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
     plugin_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
 }
@@ -166,7 +184,7 @@ impl AnalyticsEventsQueue {
         }
     }
 
-    fn try_send(&self, input: AnalyticsInput) {
+    fn try_send(&self, input: AnalyticsFact) {
         if self.sender.try_send(input).is_err() {
             //TODO: add a metric for this
             tracing::warn!("dropping analytics events: queue is full");
@@ -223,84 +241,91 @@ impl AnalyticsEventsClient {
         if invocations.is_empty() {
             return;
         }
-        self.record(AnalyticsInput::SkillInvoked(SkillInvokedInput {
-            tracking,
-            invocations,
-        }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::SkillInvoked(
+            SkillInvokedInput {
+                tracking,
+                invocations,
+            },
+        )));
     }
 
-    pub fn track_initialize(&self, input: InitializeInput) {
-        self.record(AnalyticsInput::Initialize(input));
+    pub fn track_initialize(&self, connection_id: u64, params: InitializeParams) {
+        self.record_fact(AnalyticsFact::Initialize {
+            connection_id,
+            params,
+        });
     }
 
     pub fn track_thread_initialized(&self, input: ThreadInitializeInput) {
-        self.record(AnalyticsInput::ThreadInitialized(input));
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ThreadInitialized(input),
+        ));
     }
 
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
         if mentions.is_empty() {
             return;
         }
-        self.record(AnalyticsInput::AppMentioned(AppMentionedInput {
-            tracking,
-            mentions,
-        }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::AppMentioned(
+            AppMentionedInput { tracking, mentions },
+        )));
     }
 
     pub fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
         if !self.queue.should_enqueue_app_used(&tracking, &app) {
             return;
         }
-        self.record(AnalyticsInput::AppUsed(AppUsedInput { tracking, app }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(
+            AppUsedInput { tracking, app },
+        )));
     }
 
     pub fn track_plugin_used(&self, tracking: TrackEventsContext, plugin: PluginTelemetryMetadata) {
         if !self.queue.should_enqueue_plugin_used(&tracking, &plugin) {
             return;
         }
-        self.record(AnalyticsInput::PluginUsed(PluginUsedInput {
-            tracking,
-            plugin,
-        }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(
+            PluginUsedInput { tracking, plugin },
+        )));
     }
 
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
-        self.record(AnalyticsInput::PluginStateChanged(
-            PluginStateChangedInput {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Installed,
-            },
+            }),
         ));
     }
 
     pub fn track_plugin_uninstalled(&self, plugin: PluginTelemetryMetadata) {
-        self.record(AnalyticsInput::PluginStateChanged(
-            PluginStateChangedInput {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Uninstalled,
-            },
+            }),
         ));
     }
 
     pub fn track_plugin_enabled(&self, plugin: PluginTelemetryMetadata) {
-        self.record(AnalyticsInput::PluginStateChanged(
-            PluginStateChangedInput {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Enabled,
-            },
+            }),
         ));
     }
 
     pub fn track_plugin_disabled(&self, plugin: PluginTelemetryMetadata) {
-        self.record(AnalyticsInput::PluginStateChanged(
-            PluginStateChangedInput {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Disabled,
-            },
+            }),
         ));
     }
 
-    pub fn record(&self, input: AnalyticsInput) {
+    pub fn record_fact(&self, input: AnalyticsFact) {
         if self.analytics_enabled == Some(false) {
             return;
         }
@@ -424,37 +449,51 @@ struct CodexPluginUsedEventRequest {
 }
 
 impl AnalyticsReducer {
-    async fn ingest(&mut self, input: AnalyticsInput, out: &mut Vec<TrackEventRequest>) {
+    async fn ingest(&mut self, input: AnalyticsFact, out: &mut Vec<TrackEventRequest>) {
         match input {
-            AnalyticsInput::Initialize(input) => {
-                self.ingest_initialize(input);
+            AnalyticsFact::Initialize {
+                connection_id,
+                params,
+            } => {
+                self.ingest_initialize(connection_id, params);
             }
-            AnalyticsInput::ThreadInitialized(input) => {
-                self.ingest_thread_initialized(input, out);
-            }
-            AnalyticsInput::SkillInvoked(input) => {
-                self.ingest_skill_invoked(input, out).await;
-            }
-            AnalyticsInput::AppMentioned(input) => {
-                self.ingest_app_mentioned(input, out);
-            }
-            AnalyticsInput::AppUsed(input) => {
-                self.ingest_app_used(input, out);
-            }
-            AnalyticsInput::PluginUsed(input) => {
-                self.ingest_plugin_used(input, out);
-            }
-            AnalyticsInput::PluginStateChanged(input) => {
-                self.ingest_plugin_state_changed(input, out);
-            }
+            AnalyticsFact::Request {
+                connection_id: _connection_id,
+                request_id: _request_id,
+                request: _request,
+            } => {}
+            AnalyticsFact::Notification {
+                connection_id: _connection_id,
+                notification: _notification,
+            } => {}
+            AnalyticsFact::Custom(input) => match input {
+                CustomAnalyticsFact::ThreadInitialized(input) => {
+                    self.ingest_thread_initialized(input, out);
+                }
+                CustomAnalyticsFact::SkillInvoked(input) => {
+                    self.ingest_skill_invoked(input, out).await;
+                }
+                CustomAnalyticsFact::AppMentioned(input) => {
+                    self.ingest_app_mentioned(input, out);
+                }
+                CustomAnalyticsFact::AppUsed(input) => {
+                    self.ingest_app_used(input, out);
+                }
+                CustomAnalyticsFact::PluginUsed(input) => {
+                    self.ingest_plugin_used(input, out);
+                }
+                CustomAnalyticsFact::PluginStateChanged(input) => {
+                    self.ingest_plugin_state_changed(input, out);
+                }
+            },
         }
     }
 
-    fn ingest_initialize(&mut self, input: InitializeInput) {
+    fn ingest_initialize(&mut self, connection_id: u64, params: InitializeParams) {
         self.clients.insert(
-            input.connection_id,
+            connection_id,
             ClientState {
-                product_client_id: input.product_client_id,
+                product_client_id: params.client_info.name,
             },
         );
     }
