@@ -8,6 +8,7 @@ use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -253,17 +254,26 @@ enum TrackEventsJob {
     PluginDisabled(TrackPluginManagementJob),
 }
 
+const SKILL_INVOCATIONS_JOB_TYPE: &str = "skill_invocations";
+const APP_MENTIONED_JOB_TYPE: &str = "app_mentioned";
+const APP_USED_JOB_TYPE: &str = "app_used";
+const PLUGIN_USED_JOB_TYPE: &str = "plugin_used";
+const PLUGIN_INSTALLED_JOB_TYPE: &str = "plugin_installed";
+const PLUGIN_UNINSTALLED_JOB_TYPE: &str = "plugin_uninstalled";
+const PLUGIN_ENABLED_JOB_TYPE: &str = "plugin_enabled";
+const PLUGIN_DISABLED_JOB_TYPE: &str = "plugin_disabled";
+
 impl TrackEventsJob {
     fn job_type(&self) -> &'static str {
         match self {
-            Self::SkillInvocations(_) => "skill_invocations",
-            Self::AppMentioned(_) => "app_mentioned",
-            Self::AppUsed(_) => "app_used",
-            Self::PluginUsed(_) => "plugin_used",
-            Self::PluginInstalled(_) => "plugin_installed",
-            Self::PluginUninstalled(_) => "plugin_uninstalled",
-            Self::PluginEnabled(_) => "plugin_enabled",
-            Self::PluginDisabled(_) => "plugin_disabled",
+            Self::SkillInvocations(_) => SKILL_INVOCATIONS_JOB_TYPE,
+            Self::AppMentioned(_) => APP_MENTIONED_JOB_TYPE,
+            Self::AppUsed(_) => APP_USED_JOB_TYPE,
+            Self::PluginUsed(_) => PLUGIN_USED_JOB_TYPE,
+            Self::PluginInstalled(_) => PLUGIN_INSTALLED_JOB_TYPE,
+            Self::PluginUninstalled(_) => PLUGIN_UNINSTALLED_JOB_TYPE,
+            Self::PluginEnabled(_) => PLUGIN_ENABLED_JOB_TYPE,
+            Self::PluginDisabled(_) => PLUGIN_DISABLED_JOB_TYPE,
         }
     }
 
@@ -281,28 +291,37 @@ impl TrackEventsJob {
     }
 }
 
-fn job_type_for_events(events: &[TrackEventRequest]) -> &'static str {
-    match events.first() {
-        Some(TrackEventRequest::SkillInvocation(_)) => "skill_invocations",
-        Some(TrackEventRequest::AppMentioned(_)) => "app_mentioned",
-        Some(TrackEventRequest::AppUsed(_)) => "app_used",
-        Some(TrackEventRequest::PluginUsed(_)) => "plugin_used",
-        Some(TrackEventRequest::PluginInstalled(_)) => "plugin_installed",
-        Some(TrackEventRequest::PluginUninstalled(_)) => "plugin_uninstalled",
-        Some(TrackEventRequest::PluginEnabled(_)) => "plugin_enabled",
-        Some(TrackEventRequest::PluginDisabled(_)) => "plugin_disabled",
-        None => unreachable!("events should be non-empty"),
+fn job_type_for_event(event: &TrackEventRequest) -> &'static str {
+    match event {
+        TrackEventRequest::SkillInvocation(_) => SKILL_INVOCATIONS_JOB_TYPE,
+        TrackEventRequest::AppMentioned(_) => APP_MENTIONED_JOB_TYPE,
+        TrackEventRequest::AppUsed(_) => APP_USED_JOB_TYPE,
+        TrackEventRequest::PluginUsed(_) => PLUGIN_USED_JOB_TYPE,
+        TrackEventRequest::PluginInstalled(_) => PLUGIN_INSTALLED_JOB_TYPE,
+        TrackEventRequest::PluginUninstalled(_) => PLUGIN_UNINSTALLED_JOB_TYPE,
+        TrackEventRequest::PluginEnabled(_) => PLUGIN_ENABLED_JOB_TYPE,
+        TrackEventRequest::PluginDisabled(_) => PLUGIN_DISABLED_JOB_TYPE,
     }
 }
 
-fn emit_analytics_events_failure_counters<'a>(
+fn event_counts_by_job_type(events: &[TrackEventRequest]) -> BTreeMap<&'static str, usize> {
+    let mut counts = BTreeMap::new();
+    for event in events {
+        *counts.entry(job_type_for_event(event)).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn emit_analytics_events_failure_counters(
     reason: &'static str,
     job_type: &'static str,
     event_count: usize,
-    extra_tags: &[(&'a str, &'a str)],
+    extra_tags: &[(&str, &str)],
 ) {
     if let Some(metrics) = codex_otel::metrics::global() {
-        let mut tags = vec![("reason", reason), ("job_type", job_type)];
+        let mut tags = Vec::with_capacity(2 + extra_tags.len());
+        tags.push(("reason", reason));
+        tags.push(("job_type", job_type));
         tags.extend(extra_tags.iter().copied());
         let _ = metrics.counter("codex.analytics_events.emit.failure", /*inc*/ 1, &tags);
         let _ = metrics.counter(
@@ -310,6 +329,16 @@ fn emit_analytics_events_failure_counters<'a>(
             i64::try_from(event_count).unwrap_or(i64::MAX),
             &tags,
         );
+    }
+}
+
+fn emit_analytics_events_failure_counters_for_events(
+    reason: &'static str,
+    events: &[TrackEventRequest],
+    extra_tags: &[(&str, &str)],
+) {
+    for (job_type, event_count) in event_counts_by_job_type(events) {
+        emit_analytics_events_failure_counters(reason, job_type, event_count, extra_tags);
     }
 }
 
@@ -746,25 +775,23 @@ async fn send_track_events(
     if events.is_empty() {
         return;
     }
-    let event_count = events.len();
-    let job_type = job_type_for_events(&events);
     let Some(auth) = auth_manager.auth().await else {
-        emit_analytics_events_failure_counters("auth_missing", job_type, event_count, &[]);
+        emit_analytics_events_failure_counters_for_events("auth_missing", &events, &[]);
         return;
     };
     if !auth.is_chatgpt_auth() {
-        emit_analytics_events_failure_counters("non_chatgpt_auth", job_type, event_count, &[]);
+        emit_analytics_events_failure_counters_for_events("non_chatgpt_auth", &events, &[]);
         return;
     }
     let access_token = match auth.get_token() {
         Ok(token) => token,
         Err(_) => {
-            emit_analytics_events_failure_counters("token_error", job_type, event_count, &[]);
+            emit_analytics_events_failure_counters_for_events("token_error", &events, &[]);
             return;
         }
     };
     let Some(account_id) = auth.get_account_id() else {
-        emit_analytics_events_failure_counters("account_id_missing", job_type, event_count, &[]);
+        emit_analytics_events_failure_counters_for_events("account_id_missing", &events, &[]);
         return;
     };
 
@@ -786,17 +813,20 @@ async fn send_track_events(
         Ok(response) if response.status().is_success() => {}
         Ok(response) => {
             let status = response.status();
-            emit_analytics_events_failure_counters(
+            emit_analytics_events_failure_counters_for_events(
                 "http_status",
-                job_type,
-                event_count,
+                &payload.events,
                 &[("status_code", status.as_str())],
             );
             let body = response.text().await.unwrap_or_default();
             tracing::warn!("events failed with status {status}: {body}");
         }
         Err(err) => {
-            emit_analytics_events_failure_counters("request_error", job_type, event_count, &[]);
+            emit_analytics_events_failure_counters_for_events(
+                "request_error",
+                &payload.events,
+                &[],
+            );
             tracing::warn!("failed to send events request: {err}");
         }
     }
