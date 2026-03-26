@@ -186,29 +186,29 @@ async fn user_turn_tracks_turn_metadata_analytics() -> anyhow::Result<()> {
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let deadline = Instant::now() + Duration::from_secs(10);
-    let analytics_request = loop {
+    let event = loop {
         let requests = server.received_requests().await.unwrap_or_default();
-        if let Some(request) = requests
+        let turn_events = requests
             .into_iter()
-            .find(|request| request.url.path() == "/codex/analytics-events/events")
-        {
-            break request;
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
+            .flat_map(|payload| {
+                payload["events"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+            })
+            .filter(|event| event["event_type"] == "codex_turn_event")
+            .collect::<Vec<_>>();
+        if let Some(event) = turn_events.last().cloned() {
+            break event;
         }
         if Instant::now() >= deadline {
-            panic!("timed out waiting for turn analytics request");
+            panic!("timed out waiting for turn analytics event");
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-
-    let payload: Value = serde_json::from_slice(&analytics_request.body)?;
-    let event = payload["events"]
-        .as_array()
-        .and_then(|events| {
-            events
-                .iter()
-                .find(|event| event["event_type"] == "codex_turn_event")
-        })
-        .expect("codex_turn_event should be present");
 
     let event_params = &event["event_params"];
 

@@ -735,13 +735,6 @@ fn personality_mode(personality: Option<Personality>) -> Option<String> {
         Some(personality) => Some(personality.to_string()),
     }
 }
-
-fn codex_thread_initialized_event_params(
-    thread_event: CodexThreadInitializedEvent,
-) -> CodexThreadInitializedEventParams {
-    codex_thread_initialized_event_params_with_product_client_id(originator().value, thread_event)
-}
-
 fn codex_thread_initialized_event_request(
     product_client_id: String,
     thread_event: CodexThreadInitializedEvent,

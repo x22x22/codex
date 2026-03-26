@@ -264,6 +264,7 @@ fn turn_event_serializes_expected_shape() {
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
+        originator().value,
         CodexThreadInitializedEvent {
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
@@ -300,6 +301,7 @@ fn thread_initialized_event_serializes_expected_shape() {
 #[test]
 fn thread_initialized_event_serializes_subagent_source() {
     let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
+        originator().value,
         CodexThreadInitializedEvent {
             thread_id: "thread-1".to_string(),
             model: "gpt-5".to_string(),
@@ -321,6 +323,7 @@ fn thread_initialized_event_serializes_subagent_source() {
 #[test]
 fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
     let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
+        originator().value,
         CodexThreadInitializedEvent {
             thread_id: "thread-2".to_string(),
             model: "gpt-5".to_string(),
