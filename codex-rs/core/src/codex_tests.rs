@@ -72,6 +72,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -1790,6 +1791,14 @@ async fn set_rate_limits_retains_previous_credits() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: PermissionProfile::from_runtime_permissions(
+            &config.permissions.file_system_sandbox_policy,
+            config.permissions.network_sandbox_policy,
+            config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .as_ref(),
+        ),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -1888,6 +1897,14 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: PermissionProfile::from_runtime_permissions(
+            &config.permissions.file_system_sandbox_policy,
+            config.permissions.network_sandbox_policy,
+            config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .as_ref(),
+        ),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -2232,6 +2249,14 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: PermissionProfile::from_runtime_permissions(
+            &config.permissions.file_system_sandbox_policy,
+            config.permissions.network_sandbox_policy,
+            config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .as_ref(),
+        ),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -2494,6 +2519,14 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: PermissionProfile::from_runtime_permissions(
+            &config.permissions.file_system_sandbox_policy,
+            config.permissions.network_sandbox_policy,
+            config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .as_ref(),
+        ),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -2588,6 +2621,14 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: PermissionProfile::from_runtime_permissions(
+            &config.permissions.file_system_sandbox_policy,
+            config.permissions.network_sandbox_policy,
+            config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .as_ref(),
+        ),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -3425,6 +3466,14 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
+        permission_profile: PermissionProfile::from_runtime_permissions(
+            &config.permissions.file_system_sandbox_policy,
+            config.permissions.network_sandbox_policy,
+            config
+                .permissions
+                .macos_seatbelt_profile_extensions
+                .as_ref(),
+        ),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,

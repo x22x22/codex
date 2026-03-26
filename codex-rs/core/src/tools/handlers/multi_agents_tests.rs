@@ -2479,6 +2479,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .expect("sandbox policy set");
     expected.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
     expected.permissions.network_sandbox_policy = network_sandbox_policy;
+    expected.permissions.sync_permission_profile();
     assert_eq!(config, expected);
 }
 

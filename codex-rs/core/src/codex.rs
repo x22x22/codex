@@ -618,6 +618,7 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
+            permission_profile: config.permissions.runtime_permission_profile(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
             file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
             network_sandbox_policy: config.permissions.network_sandbox_policy,
@@ -857,6 +858,7 @@ pub(crate) struct TurnContext {
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
+    pub(crate) permission_profile: PermissionProfile,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
     pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
@@ -965,6 +967,7 @@ impl TurnContext {
             collaboration_mode,
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
+            permission_profile: self.permission_profile.clone(),
             sandbox_policy: self.sandbox_policy.clone(),
             file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
             network_sandbox_policy: self.network_sandbox_policy,
@@ -1073,6 +1076,7 @@ pub(crate) struct SessionConfiguration {
     /// When to escalate for approval for execution
     approval_policy: Constrained<AskForApproval>,
     approvals_reviewer: ApprovalsReviewer,
+    permission_profile: PermissionProfile,
     /// How to sandbox commands executed in the system
     sandbox_policy: Constrained<SandboxPolicy>,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
@@ -1184,6 +1188,11 @@ impl SessionConfiguration {
                     &next_configuration.cwd,
                 );
         }
+        next_configuration.permission_profile = PermissionProfile::from_runtime_permissions(
+            &next_configuration.file_system_sandbox_policy,
+            next_configuration.network_sandbox_policy,
+            next_configuration.permission_profile.macos.as_ref(),
+        );
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
             next_configuration.app_server_client_name = Some(app_server_client_name);
         }
@@ -1284,6 +1293,17 @@ impl Session {
         per_turn_config.service_tier = session_configuration.service_tier;
         per_turn_config.personality = session_configuration.personality;
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
+        per_turn_config.permissions.approval_policy = session_configuration.approval_policy.clone();
+        per_turn_config.permissions.sandbox_policy = session_configuration.sandbox_policy.clone();
+        per_turn_config.permissions.file_system_sandbox_policy =
+            session_configuration.file_system_sandbox_policy.clone();
+        per_turn_config.permissions.network_sandbox_policy =
+            session_configuration.network_sandbox_policy;
+        per_turn_config
+            .permissions
+            .macos_seatbelt_profile_extensions =
+            session_configuration.permission_profile.macos.clone();
+        per_turn_config.permissions.sync_permission_profile();
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
             session_configuration.sandbox_policy.get(),
@@ -1423,6 +1443,7 @@ impl Session {
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
+            permission_profile: session_configuration.permission_profile.clone(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
             network_sandbox_policy: session_configuration.network_sandbox_policy,
@@ -5471,6 +5492,7 @@ async fn spawn_review_thread(
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
+        permission_profile: parent_turn_context.permission_profile.clone(),
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
         network_sandbox_policy: parent_turn_context.network_sandbox_policy,

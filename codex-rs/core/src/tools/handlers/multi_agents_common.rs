@@ -277,6 +277,8 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
         })?;
     config.permissions.file_system_sandbox_policy = turn.file_system_sandbox_policy.clone();
     config.permissions.network_sandbox_policy = turn.network_sandbox_policy;
+    config.permissions.macos_seatbelt_profile_extensions = turn.permission_profile.macos.clone();
+    config.permissions.sync_permission_profile();
     Ok(())
 }
 

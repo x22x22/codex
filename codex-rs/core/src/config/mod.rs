@@ -79,6 +79,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -228,6 +229,8 @@ pub(crate) fn test_config() -> Config {
 pub struct Permissions {
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
+    /// Canonical permission abstraction for the current thread/runtime.
+    pub permission_profile: PermissionProfile,
     /// Effective sandbox policy used for shell/unified exec.
     pub sandbox_policy: Constrained<SandboxPolicy>,
     /// Effective filesystem sandbox policy, including entries that cannot yet
@@ -257,6 +260,20 @@ pub struct Permissions {
     /// Optional macOS seatbelt extension profile used to extend default
     /// seatbelt permissions when running under seatbelt.
     pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
+}
+
+impl Permissions {
+    pub(crate) fn runtime_permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+            self.macos_seatbelt_profile_extensions.as_ref(),
+        )
+    }
+
+    pub(crate) fn sync_permission_profile(&mut self) {
+        self.permission_profile = self.runtime_permission_profile();
+    }
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -2584,6 +2601,11 @@ impl Config {
             } else {
                 NetworkSandboxPolicy::from(&effective_sandbox_policy)
             };
+        let permission_profile = PermissionProfile::from_runtime_permissions(
+            &effective_file_system_sandbox_policy,
+            effective_network_sandbox_policy,
+            /*macos*/ None,
+        );
         let config = Self {
             model,
             service_tier,
@@ -2596,6 +2618,7 @@ impl Config {
             startup_warnings,
             permissions: Permissions {
                 approval_policy: constrained_approval_policy.value,
+                permission_profile,
                 sandbox_policy: constrained_sandbox_policy.value,
                 file_system_sandbox_policy: effective_file_system_sandbox_policy,
                 network_sandbox_policy: effective_network_sandbox_policy,
