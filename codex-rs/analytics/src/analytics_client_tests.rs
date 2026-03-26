@@ -25,7 +25,6 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -232,26 +231,6 @@ fn thread_initialized_event_serializes_expected_shape() {
     assert!(payload["event_params"]["created_at"].as_u64().is_some());
 }
 
-#[test]
-fn thread_initialized_event_serializes_subagent_source() {
-    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        "codex-tui".to_string(),
-        ThreadInitializeInput {
-            connection_id: 1,
-            thread_id: "thread-1".to_string(),
-            model: "gpt-5".to_string(),
-            ephemeral: false,
-            session_source: SessionSource::SubAgent(SubAgentSource::Review),
-            initialization_mode: InitializationMode::New,
-        },
-    ));
-
-    let payload =
-        serde_json::to_value(&event).expect("serialize subagent thread initialized event");
-    assert_eq!(payload["event_params"]["session_source"], "subagent");
-    assert_eq!(payload["event_params"]["subagent_source"], "review");
-}
-
 #[tokio::test]
 async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialized() {
     let mut reducer = AnalyticsReducer::default();
@@ -300,16 +279,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                     thread_id: "thread-1".to_string(),
                     model: "gpt-5".to_string(),
                     ephemeral: true,
-                    session_source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                        parent_thread_id: codex_protocol::ThreadId::from_string(
-                            "11111111-1111-1111-1111-111111111111",
-                        )
-                        .expect("valid thread id"),
-                        depth: 1,
-                        agent_path: None,
-                        agent_nickname: None,
-                        agent_role: None,
-                    }),
+                    session_source: SessionSource::Exec,
                     initialization_mode: InitializationMode::Resumed,
                 },
             )),
@@ -322,15 +292,9 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
     assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
     assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");
-    assert_eq!(payload[0]["event_params"]["session_source"], "subagent");
-    assert_eq!(
-        payload[0]["event_params"]["subagent_source"],
-        "thread_spawn"
-    );
-    assert_eq!(
-        payload[0]["event_params"]["parent_thread_id"],
-        "11111111-1111-1111-1111-111111111111"
-    );
+    assert_eq!(payload[0]["event_params"]["session_source"], "user");
+    assert_eq!(payload[0]["event_params"]["subagent_source"], Value::Null);
+    assert_eq!(payload[0]["event_params"]["parent_thread_id"], Value::Null);
 }
 
 #[test]

@@ -10,7 +10,6 @@ use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
-use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -648,9 +647,8 @@ fn codex_thread_initialized_event_params(
         ephemeral: input.ephemeral,
         session_source: session_source_name(&input.session_source),
         initialization_mode: input.initialization_mode,
-        subagent_source: session_source_subagent_source(&input.session_source)
-            .map(subagent_source_name),
-        parent_thread_id: session_source_parent_thread_id(&input.session_source),
+        subagent_source: None,
+        parent_thread_id: None,
         created_at: now_unix_timestamp_secs(),
     }
 }
@@ -693,34 +691,10 @@ fn codex_plugin_used_metadata(
 fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
     match session_source {
         SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
-        SessionSource::SubAgent(_) => Some("subagent"),
-        SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
-    }
-}
-
-fn subagent_source_name(subagent_source: SubAgentSource) -> String {
-    match subagent_source {
-        SubAgentSource::Review => "review".to_string(),
-        SubAgentSource::Compact => "compact".to_string(),
-        SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
-        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
-        SubAgentSource::Other(other) => other,
-    }
-}
-
-fn session_source_subagent_source(session_source: &SessionSource) -> Option<SubAgentSource> {
-    match session_source {
-        SessionSource::SubAgent(subagent_source) => Some(subagent_source.clone()),
-        _ => None,
-    }
-}
-
-fn session_source_parent_thread_id(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) => Some(parent_thread_id.to_string()),
-        _ => None,
+        SessionSource::SubAgent(_)
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
     }
 }
 
