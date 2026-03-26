@@ -4,7 +4,8 @@ use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
-use super::CodexThreadInitializedEvent;
+use super::CodexThreadContext;
+use super::CodexThreadInitializedInput;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
 use super::CodexTurnSteerEvent;
@@ -306,17 +307,19 @@ fn turn_steer_event_serializes_expected_shape() {
 
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
-    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
-        originator().value,
-        CodexThreadInitializedEvent {
+    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
+        CodexThreadInitializedInput {
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
-            ephemeral: true,
-            session_source: SessionSource::Exec,
-            initialization_mode: InitializationMode::New,
-            subagent_source: None,
-            parent_thread_id: None,
+            product_client_id: originator().value,
             created_at: 1_716_000_000,
+            thread_context: CodexThreadContext {
+                ephemeral: true,
+                session_source: SessionSource::Exec,
+                initialization_mode: InitializationMode::New,
+                subagent_source: None,
+                parent_thread_id: None,
+            },
         },
     ));
 
@@ -343,17 +346,19 @@ fn thread_initialized_event_serializes_expected_shape() {
 
 #[test]
 fn thread_initialized_event_serializes_subagent_source() {
-    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
-        originator().value,
-        CodexThreadInitializedEvent {
+    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
+        CodexThreadInitializedInput {
             thread_id: "thread-1".to_string(),
             model: "gpt-5".to_string(),
-            ephemeral: false,
-            session_source: SessionSource::SubAgent(SubAgentSource::Review),
-            initialization_mode: InitializationMode::New,
-            subagent_source: Some(SubAgentSource::Review),
-            parent_thread_id: None,
+            product_client_id: originator().value,
             created_at: 1,
+            thread_context: CodexThreadContext {
+                ephemeral: false,
+                session_source: SessionSource::SubAgent(SubAgentSource::Review),
+                initialization_mode: InitializationMode::New,
+                subagent_source: Some(SubAgentSource::Review),
+                parent_thread_id: None,
+            },
         },
     ));
 
@@ -365,17 +370,19 @@ fn thread_initialized_event_serializes_subagent_source() {
 
 #[test]
 fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
-    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
-        originator().value,
-        CodexThreadInitializedEvent {
+    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
+        CodexThreadInitializedInput {
             thread_id: "thread-2".to_string(),
             model: "gpt-5".to_string(),
-            ephemeral: false,
-            session_source: SessionSource::Mcp,
-            initialization_mode: InitializationMode::New,
-            subagent_source: None,
-            parent_thread_id: None,
+            product_client_id: originator().value,
             created_at: 1,
+            thread_context: CodexThreadContext {
+                ephemeral: false,
+                session_source: SessionSource::Mcp,
+                initialization_mode: InitializationMode::New,
+                subagent_source: None,
+                parent_thread_id: None,
+            },
         },
     ));
 
