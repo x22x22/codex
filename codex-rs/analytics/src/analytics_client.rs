@@ -1,3 +1,7 @@
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_login::AuthManager;
@@ -15,7 +19,6 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
-use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -87,21 +90,13 @@ pub enum TurnStatus {
 }
 
 #[derive(Clone)]
-pub struct CodexThreadInitializedInput {
+pub struct ThreadInitializedInput {
+    pub connection_id: u64,
     pub thread_id: String,
     pub model: String,
-    pub product_client_id: String,
-    pub created_at: u64,
-    pub thread_context: CodexThreadContext,
-}
-
-#[derive(Clone)]
-pub struct CodexThreadContext {
     pub ephemeral: bool,
     pub session_source: SessionSource,
     pub initialization_mode: InitializationMode,
-    pub subagent_source: Option<SubAgentSource>,
-    pub parent_thread_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -145,9 +140,30 @@ pub struct AppInvocation {
     pub invocation_type: Option<InvocationType>,
 }
 
-pub enum AnalyticsInput {
-    CodexThreadInitialized(CodexThreadInitializedInput),
-    TurnStarted(TurnStartedInput),
+pub enum AnalyticsFact {
+    Initialize {
+        connection_id: u64,
+        params: InitializeParams,
+    },
+    Request {
+        connection_id: u64,
+        request_id: RequestId,
+        request: ClientRequest,
+    },
+    Notification {
+        connection_id: u64,
+        notification: ServerNotification,
+    },
+    // Facts that do not naturally exist on the app-server protocol surface, or
+    // would require non-trivial protocol reshaping on this branch.
+    Custom(CustomAnalyticsFact),
+}
+
+pub enum CustomAnalyticsFact {
+    // This remains custom on this branch because app-server-protocol does not
+    // yet expose a generic client response enum we can reduce over directly.
+    ThreadInitialized(ThreadInitializedInput),
+    TurnStarted(Box<TurnStartedInput>),
     TurnCompleted(TurnCompletedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
@@ -200,12 +216,12 @@ pub enum PluginState {
 
 #[derive(Default)]
 pub struct AnalyticsReducer {
-    threads: HashMap<String, ThreadState>,
     turns: HashMap<String, TurnState>,
+    clients: HashMap<u64, ClientState>,
 }
 
-struct ThreadState {
-    _initialized_input: CodexThreadInitializedInput,
+struct ClientState {
+    product_client_id: String,
 }
 
 struct TurnState {
@@ -214,7 +230,7 @@ struct TurnState {
 
 #[derive(Clone)]
 pub(crate) struct AnalyticsEventsQueue {
-    sender: mpsc::Sender<AnalyticsInput>,
+    sender: mpsc::Sender<AnalyticsFact>,
     app_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
     plugin_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
 }
@@ -243,7 +259,7 @@ impl AnalyticsEventsQueue {
         }
     }
 
-    fn try_send(&self, input: AnalyticsInput) {
+    fn try_send(&self, input: AnalyticsFact) {
         if self.sender.try_send(input).is_err() {
             //TODO: add a metric for this
             tracing::warn!("dropping analytics events: queue is full");
@@ -300,93 +316,106 @@ impl AnalyticsEventsClient {
         if invocations.is_empty() {
             return;
         }
-        self.record(AnalyticsInput::SkillInvoked(SkillInvokedInput {
-            tracking,
-            invocations,
-        }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::SkillInvoked(
+            SkillInvokedInput {
+                tracking,
+                invocations,
+            },
+        )));
     }
 
-    pub fn track_thread_initialized(&self, input: CodexThreadInitializedInput) {
-        self.record(AnalyticsInput::CodexThreadInitialized(input));
+    pub fn track_initialize(&self, connection_id: u64, params: InitializeParams) {
+        self.record_fact(AnalyticsFact::Initialize {
+            connection_id,
+            params,
+        });
+    }
+
+    pub fn track_thread_initialized(&self, input: ThreadInitializedInput) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ThreadInitialized(input),
+        ));
     }
 
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
         if mentions.is_empty() {
             return;
         }
-        self.record(AnalyticsInput::AppMentioned(AppMentionedInput {
-            tracking,
-            mentions,
-        }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::AppMentioned(
+            AppMentionedInput { tracking, mentions },
+        )));
     }
 
     pub fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
         if !self.queue.should_enqueue_app_used(&tracking, &app) {
             return;
         }
-        self.record(AnalyticsInput::AppUsed(AppUsedInput { tracking, app }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(
+            AppUsedInput { tracking, app },
+        )));
     }
 
     pub fn track_plugin_used(&self, tracking: TrackEventsContext, plugin: PluginTelemetryMetadata) {
         if !self.queue.should_enqueue_plugin_used(&tracking, &plugin) {
             return;
         }
-        self.record(AnalyticsInput::PluginUsed(PluginUsedInput {
-            tracking,
-            plugin,
-        }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(
+            PluginUsedInput { tracking, plugin },
+        )));
     }
 
     pub fn track_turn_started(&self, tracking: TrackEventsContext, turn_event: CodexTurnEvent) {
-        self.record(AnalyticsInput::TurnStarted(TurnStartedInput {
-            tracking,
-            turn_event,
-        }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnStarted(
+            Box::new(TurnStartedInput {
+                tracking,
+                turn_event,
+            }),
+        )));
     }
 
     pub fn track_turn_completed(&self, turn_id: String) {
-        self.record(AnalyticsInput::TurnCompleted(TurnCompletedInput {
-            turn_id,
-        }));
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnCompleted(
+            TurnCompletedInput { turn_id },
+        )));
     }
 
     pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
-        self.record(AnalyticsInput::PluginStateChanged(
-            PluginStateChangedInput {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Installed,
-            },
+            }),
         ));
     }
 
     pub fn track_plugin_uninstalled(&self, plugin: PluginTelemetryMetadata) {
-        self.record(AnalyticsInput::PluginStateChanged(
-            PluginStateChangedInput {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Uninstalled,
-            },
+            }),
         ));
     }
 
     pub fn track_plugin_enabled(&self, plugin: PluginTelemetryMetadata) {
-        self.record(AnalyticsInput::PluginStateChanged(
-            PluginStateChangedInput {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Enabled,
-            },
+            }),
         ));
     }
 
     pub fn track_plugin_disabled(&self, plugin: PluginTelemetryMetadata) {
-        self.record(AnalyticsInput::PluginStateChanged(
-            PluginStateChangedInput {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::PluginStateChanged(PluginStateChangedInput {
                 plugin,
                 state: PluginState::Disabled,
-            },
+            }),
         ));
     }
 
-    pub fn record(&self, input: AnalyticsInput) {
+    pub fn record_fact(&self, input: AnalyticsFact) {
         if self.analytics_enabled == Some(false) {
             return;
         }
@@ -557,48 +586,71 @@ struct CodexPluginUsedEventRequest {
 }
 
 impl AnalyticsReducer {
-    async fn ingest(&mut self, input: AnalyticsInput, out: &mut Vec<TrackEventRequest>) {
+    async fn ingest(&mut self, input: AnalyticsFact, out: &mut Vec<TrackEventRequest>) {
         match input {
-            AnalyticsInput::CodexThreadInitialized(input) => {
-                self.ingest_thread_initialized(input, out);
+            AnalyticsFact::Initialize {
+                connection_id,
+                params,
+            } => {
+                self.ingest_initialize(connection_id, params);
             }
-            AnalyticsInput::TurnStarted(input) => {
-                self.ingest_turn_started(input);
-            }
-            AnalyticsInput::TurnCompleted(input) => {
-                self.ingest_turn_completed(input, out);
-            }
-            AnalyticsInput::SkillInvoked(input) => {
-                self.ingest_skill_invoked(input, out).await;
-            }
-            AnalyticsInput::AppMentioned(input) => {
-                self.ingest_app_mentioned(input, out);
-            }
-            AnalyticsInput::AppUsed(input) => {
-                self.ingest_app_used(input, out);
-            }
-            AnalyticsInput::PluginUsed(input) => {
-                self.ingest_plugin_used(input, out);
-            }
-            AnalyticsInput::PluginStateChanged(input) => {
-                self.ingest_plugin_state_changed(input, out);
-            }
+            AnalyticsFact::Request {
+                connection_id: _connection_id,
+                request_id: _request_id,
+                request: _request,
+            } => {}
+            AnalyticsFact::Notification {
+                connection_id: _connection_id,
+                notification: _notification,
+            } => {}
+            AnalyticsFact::Custom(input) => match input {
+                CustomAnalyticsFact::ThreadInitialized(input) => {
+                    self.ingest_thread_initialized(input, out);
+                }
+                CustomAnalyticsFact::TurnStarted(input) => {
+                    self.ingest_turn_started(*input);
+                }
+                CustomAnalyticsFact::TurnCompleted(input) => {
+                    self.ingest_turn_completed(input, out);
+                }
+                CustomAnalyticsFact::SkillInvoked(input) => {
+                    self.ingest_skill_invoked(input, out).await;
+                }
+                CustomAnalyticsFact::AppMentioned(input) => {
+                    self.ingest_app_mentioned(input, out);
+                }
+                CustomAnalyticsFact::AppUsed(input) => {
+                    self.ingest_app_used(input, out);
+                }
+                CustomAnalyticsFact::PluginUsed(input) => {
+                    self.ingest_plugin_used(input, out);
+                }
+                CustomAnalyticsFact::PluginStateChanged(input) => {
+                    self.ingest_plugin_state_changed(input, out);
+                }
+            },
         }
+    }
+
+    fn ingest_initialize(&mut self, connection_id: u64, params: InitializeParams) {
+        self.clients.insert(
+            connection_id,
+            ClientState {
+                product_client_id: params.client_info.name,
+            },
+        );
     }
 
     fn ingest_thread_initialized(
         &mut self,
-        input: CodexThreadInitializedInput,
+        input: ThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        self.threads.insert(
-            input.thread_id.clone(),
-            ThreadState {
-                _initialized_input: input.clone(),
-            },
-        );
+        let Some(client_state) = self.clients.get(&input.connection_id) else {
+            return;
+        };
         out.push(TrackEventRequest::CodexThreadInitialized(
-            codex_thread_initialized_event_request(input),
+            codex_thread_initialized_event_request(client_state.product_client_id.clone(), input),
         ));
     }
 
@@ -824,30 +876,29 @@ fn personality_mode(personality: Option<Personality>) -> Option<String> {
 }
 
 fn codex_thread_initialized_event_request(
-    input: CodexThreadInitializedInput,
+    product_client_id: String,
+    input: ThreadInitializedInput,
 ) -> CodexThreadInitializedEvent {
     CodexThreadInitializedEvent {
         event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(input),
+        event_params: codex_thread_initialized_event_params(product_client_id, input),
     }
 }
 
 fn codex_thread_initialized_event_params(
-    input: CodexThreadInitializedInput,
+    product_client_id: String,
+    input: ThreadInitializedInput,
 ) -> CodexThreadInitializedEventParams {
     CodexThreadInitializedEventParams {
         thread_id: input.thread_id,
-        product_client_id: input.product_client_id,
+        product_client_id,
         model: input.model,
-        ephemeral: input.thread_context.ephemeral,
-        session_source: session_source_name(&input.thread_context.session_source),
-        initialization_mode: input.thread_context.initialization_mode,
-        subagent_source: input
-            .thread_context
-            .subagent_source
-            .map(subagent_source_name),
-        parent_thread_id: input.thread_context.parent_thread_id,
-        created_at: input.created_at,
+        ephemeral: input.ephemeral,
+        session_source: session_source_name(&input.session_source),
+        initialization_mode: input.initialization_mode,
+        subagent_source: None,
+        parent_thread_id: None,
+        created_at: now_unix_timestamp_secs(),
     }
 }
 
@@ -889,19 +940,18 @@ fn codex_plugin_used_metadata(
 fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
     match session_source {
         SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
-        SessionSource::SubAgent(_) => Some("subagent"),
-        SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
+        SessionSource::SubAgent(_)
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => None,
     }
 }
 
-fn subagent_source_name(subagent_source: SubAgentSource) -> String {
-    match subagent_source {
-        SubAgentSource::Review => "review".to_string(),
-        SubAgentSource::Compact => "compact".to_string(),
-        SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
-        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
-        SubAgentSource::Other(other) => other,
-    }
+fn now_unix_timestamp_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 async fn send_track_events(

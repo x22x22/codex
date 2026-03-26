@@ -1,17 +1,17 @@
 use super::AnalyticsEventsQueue;
-use super::AnalyticsInput;
+use super::AnalyticsFact;
 use super::AnalyticsReducer;
 use super::AppInvocation;
 use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
-use super::CodexThreadContext;
-use super::CodexThreadInitializedInput;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
+use super::CustomAnalyticsFact;
 use super::InitializationMode;
 use super::InvocationType;
+use super::ThreadInitializedInput;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::TurnCompletedInput;
@@ -23,6 +23,8 @@ use super::codex_plugin_used_metadata;
 use super::codex_thread_initialized_event_request;
 use super::codex_turn_event_params;
 use super::normalize_path_for_skill_id;
+use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::InitializeParams;
 use codex_login::default_client::originator;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -37,7 +39,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -316,43 +317,45 @@ async fn turn_started_then_completed_emits_turn_event() {
 
     reducer
         .ingest(
-            AnalyticsInput::TurnStarted(TurnStartedInput {
-                tracking: tracking.clone(),
-                turn_event: CodexTurnEvent {
-                    submission_type: None,
-                    model_provider: "openai".to_string(),
-                    sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                    reasoning_effort: Some(ReasoningEffort::High),
-                    reasoning_summary: Some(ReasoningSummary::Detailed),
-                    service_tier: Some(ServiceTier::Flex),
-                    approval_policy: AskForApproval::OnRequest,
-                    approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
-                    sandbox_network_access: true,
-                    collaboration_mode: ModeKind::Plan,
-                    personality: Some(Personality::Pragmatic),
-                    num_input_images: 2,
-                    is_first_turn: true,
-                    status: None,
-                    turn_error: None,
-                    steer_count: None,
-                    total_tool_call_count: None,
-                    shell_command_count: None,
-                    file_change_count: None,
-                    mcp_tool_call_count: None,
-                    dynamic_tool_call_count: None,
-                    subagent_tool_call_count: None,
-                    web_search_count: None,
-                    image_generation_count: None,
-                    input_tokens: None,
-                    cached_input_tokens: None,
-                    output_tokens: None,
-                    reasoning_output_tokens: None,
-                    total_tokens: None,
-                    duration_ms: None,
-                    started_at: None,
-                    completed_at: None,
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnStarted(Box::new(
+                TurnStartedInput {
+                    tracking: tracking.clone(),
+                    turn_event: CodexTurnEvent {
+                        submission_type: None,
+                        model_provider: "openai".to_string(),
+                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                        reasoning_effort: Some(ReasoningEffort::High),
+                        reasoning_summary: Some(ReasoningSummary::Detailed),
+                        service_tier: Some(ServiceTier::Flex),
+                        approval_policy: AskForApproval::OnRequest,
+                        approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+                        sandbox_network_access: true,
+                        collaboration_mode: ModeKind::Plan,
+                        personality: Some(Personality::Pragmatic),
+                        num_input_images: 2,
+                        is_first_turn: true,
+                        status: None,
+                        turn_error: None,
+                        steer_count: None,
+                        total_tool_call_count: None,
+                        shell_command_count: None,
+                        file_change_count: None,
+                        mcp_tool_call_count: None,
+                        dynamic_tool_call_count: None,
+                        subagent_tool_call_count: None,
+                        web_search_count: None,
+                        image_generation_count: None,
+                        input_tokens: None,
+                        cached_input_tokens: None,
+                        output_tokens: None,
+                        reasoning_output_tokens: None,
+                        total_tokens: None,
+                        duration_ms: None,
+                        started_at: None,
+                        completed_at: None,
+                    },
                 },
-            }),
+            ))),
             &mut out,
         )
         .await;
@@ -361,9 +364,9 @@ async fn turn_started_then_completed_emits_turn_event() {
 
     reducer
         .ingest(
-            AnalyticsInput::TurnCompleted(TurnCompletedInput {
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnCompleted(TurnCompletedInput {
                 turn_id: tracking.turn_id.clone(),
-            }),
+            })),
             &mut out,
         )
         .await;
@@ -378,18 +381,14 @@ async fn turn_started_then_completed_emits_turn_event() {
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        CodexThreadInitializedInput {
+        "codex-tui".to_string(),
+        ThreadInitializedInput {
+            connection_id: 1,
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
-            product_client_id: originator().value,
-            created_at: 1_716_000_000,
-            thread_context: CodexThreadContext {
-                ephemeral: true,
-                session_source: SessionSource::Exec,
-                initialization_mode: InitializationMode::New,
-                subagent_source: None,
-                parent_thread_id: None,
-            },
+            ephemeral: true,
+            session_source: SessionSource::Exec,
+            initialization_mode: InitializationMode::New,
         },
     ));
 
@@ -401,66 +400,84 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_type": "codex_thread_initialized",
             "event_params": {
                 "thread_id": "thread-0",
-                "product_client_id": originator().value,
+                "product_client_id": "codex-tui",
                 "model": "gpt-5",
                 "ephemeral": true,
                 "session_source": "user",
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
-                "created_at": 1716000000
+                "created_at": payload["event_params"]["created_at"]
             }
         })
     );
+    assert!(payload["event_params"]["created_at"].as_u64().is_some());
 }
 
-#[test]
-fn thread_initialized_event_serializes_subagent_source() {
-    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        CodexThreadInitializedInput {
-            thread_id: "thread-1".to_string(),
-            model: "gpt-5".to_string(),
-            product_client_id: originator().value,
-            created_at: 1,
-            thread_context: CodexThreadContext {
-                ephemeral: false,
-                session_source: SessionSource::SubAgent(SubAgentSource::Review),
-                initialization_mode: InitializationMode::New,
-                subagent_source: Some(SubAgentSource::Review),
-                parent_thread_id: None,
+#[tokio::test]
+async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialized() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
+                ThreadInitializedInput {
+                    connection_id: 7,
+                    thread_id: "thread-no-client".to_string(),
+                    model: "gpt-5".to_string(),
+                    ephemeral: false,
+                    session_source: SessionSource::Exec,
+                    initialization_mode: InitializationMode::New,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+    assert!(events.is_empty(), "thread events should require initialize");
+
+    reducer
+        .ingest(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: None,
+                },
             },
-        },
-    ));
+            &mut events,
+        )
+        .await;
+    assert!(events.is_empty(), "initialize should not publish by itself");
 
-    let payload =
-        serde_json::to_value(&event).expect("serialize subagent thread initialized event");
-    assert_eq!(payload["event_params"]["session_source"], "subagent");
-    assert_eq!(payload["event_params"]["subagent_source"], "review");
-}
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
+                ThreadInitializedInput {
+                    connection_id: 7,
+                    thread_id: "thread-1".to_string(),
+                    model: "gpt-5".to_string(),
+                    ephemeral: true,
+                    session_source: SessionSource::Exec,
+                    initialization_mode: InitializationMode::Resumed,
+                },
+            )),
+            &mut events,
+        )
+        .await;
 
-#[test]
-fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
-    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        CodexThreadInitializedInput {
-            thread_id: "thread-2".to_string(),
-            model: "gpt-5".to_string(),
-            product_client_id: originator().value,
-            created_at: 1,
-            thread_context: CodexThreadContext {
-                ephemeral: false,
-                session_source: SessionSource::Mcp,
-                initialization_mode: InitializationMode::New,
-                subagent_source: None,
-                parent_thread_id: None,
-            },
-        },
-    ));
-
-    let payload = serde_json::to_value(&event).expect("serialize mcp thread initialized event");
-    assert_eq!(
-        payload["event_params"]["session_source"],
-        serde_json::Value::Null
-    );
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
+    assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
+    assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");
+    assert_eq!(payload[0]["event_params"]["session_source"], "user");
+    assert_eq!(payload[0]["event_params"]["subagent_source"], json!(null));
+    assert_eq!(payload[0]["event_params"]["parent_thread_id"], json!(null));
 }
 
 #[test]
