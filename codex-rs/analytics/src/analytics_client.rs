@@ -436,7 +436,7 @@ enum TrackEventRequest {
     CodexThreadInitialized(CodexThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
-    TurnEvent(CodexTurnEventRequest),
+    TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
@@ -652,10 +652,12 @@ impl AnalyticsReducer {
             tracking,
             turn_event,
         } = input;
-        out.push(TrackEventRequest::TurnEvent(CodexTurnEventRequest {
-            event_type: "codex_turn_event",
-            event_params: codex_turn_event_params(&tracking, turn_event),
-        }));
+        out.push(TrackEventRequest::TurnEvent(Box::new(
+            CodexTurnEventRequest {
+                event_type: "codex_turn_event",
+                event_params: codex_turn_event_params(&tracking, turn_event),
+            },
+        )));
     }
 
     fn ingest_turn_steer(&mut self, input: TurnSteerInput, out: &mut Vec<TrackEventRequest>) {
