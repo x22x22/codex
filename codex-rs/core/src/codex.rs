@@ -777,22 +777,6 @@ impl Codex {
     }
 }
 
-fn session_source_subagent_source(session_source: &SessionSource) -> Option<SubAgentSource> {
-    match session_source {
-        SessionSource::SubAgent(subagent_source) => Some(subagent_source.clone()),
-        _ => None,
-    }
-}
-
-fn session_source_parent_thread_id(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) => Some(parent_thread_id.to_string()),
-        _ => None,
-    }
-}
-
 fn turn_submission_type(submission_type: SubmissionType) -> TurnSubmissionType {
     match submission_type {
         SubmissionType::Prompt => TurnSubmissionType::Default,
