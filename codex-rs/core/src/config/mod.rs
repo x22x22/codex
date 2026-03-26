@@ -157,6 +157,7 @@ pub fn system_bwrap_warning(sandbox_policy: &SandboxPolicy) -> Option<String> {
 
     linux_system_bwrap_warning()
 }
+
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
