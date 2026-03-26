@@ -1,17 +1,17 @@
 use super::AnalyticsEventsQueue;
-use super::AnalyticsInput;
+use super::AnalyticsFact;
 use super::AnalyticsReducer;
 use super::AppInvocation;
 use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
-use super::CodexThreadContext;
-use super::CodexThreadInitializedInput;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
+use super::CustomAnalyticsFact;
 use super::InitializationMode;
 use super::InvocationType;
+use super::ThreadInitializeInput;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::TurnCompletedInput;
@@ -22,6 +22,8 @@ use super::codex_plugin_used_metadata;
 use super::codex_thread_initialized_event_request;
 use super::codex_turn_event_params;
 use super::normalize_path_for_skill_id;
+use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::InitializeParams;
 use codex_login::default_client::originator;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -315,7 +317,7 @@ async fn turn_started_then_completed_emits_turn_event() {
 
     reducer
         .ingest(
-            AnalyticsInput::TurnStarted(TurnStartedInput {
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnStarted(TurnStartedInput {
                 tracking: tracking.clone(),
                 turn_event: CodexTurnEvent {
                     submission_type: None,
@@ -351,7 +353,7 @@ async fn turn_started_then_completed_emits_turn_event() {
                     started_at: None,
                     completed_at: None,
                 },
-            }),
+            })),
             &mut out,
         )
         .await;
@@ -360,9 +362,9 @@ async fn turn_started_then_completed_emits_turn_event() {
 
     reducer
         .ingest(
-            AnalyticsInput::TurnCompleted(TurnCompletedInput {
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnCompleted(TurnCompletedInput {
                 turn_id: tracking.turn_id.clone(),
-            }),
+            })),
             &mut out,
         )
         .await;
@@ -377,18 +379,14 @@ async fn turn_started_then_completed_emits_turn_event() {
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        CodexThreadInitializedInput {
+        "codex-tui".to_string(),
+        ThreadInitializeInput {
+            connection_id: 1,
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
-            product_client_id: originator().value,
-            created_at: 1_716_000_000,
-            thread_context: CodexThreadContext {
-                ephemeral: true,
-                session_source: SessionSource::Exec,
-                initialization_mode: InitializationMode::New,
-                subagent_source: None,
-                parent_thread_id: None,
-            },
+            ephemeral: true,
+            session_source: SessionSource::Exec,
+            initialization_mode: InitializationMode::New,
         },
     ));
 
@@ -400,34 +398,31 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_type": "codex_thread_initialized",
             "event_params": {
                 "thread_id": "thread-0",
-                "product_client_id": originator().value,
+                "product_client_id": "codex-tui",
                 "model": "gpt-5",
                 "ephemeral": true,
                 "session_source": "user",
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
-                "created_at": 1716000000
+                "created_at": payload["event_params"]["created_at"]
             }
         })
     );
+    assert!(payload["event_params"]["created_at"].as_u64().is_some());
 }
 
 #[test]
 fn thread_initialized_event_serializes_subagent_source() {
     let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        CodexThreadInitializedInput {
+        "codex-tui".to_string(),
+        ThreadInitializeInput {
+            connection_id: 1,
             thread_id: "thread-1".to_string(),
             model: "gpt-5".to_string(),
-            product_client_id: originator().value,
-            created_at: 1,
-            thread_context: CodexThreadContext {
-                ephemeral: false,
-                session_source: SessionSource::SubAgent(SubAgentSource::Review),
-                initialization_mode: InitializationMode::New,
-                subagent_source: Some(SubAgentSource::Review),
-                parent_thread_id: None,
-            },
+            ephemeral: false,
+            session_source: SessionSource::SubAgent(SubAgentSource::Review),
+            initialization_mode: InitializationMode::New,
         },
     ));
 
@@ -437,28 +432,84 @@ fn thread_initialized_event_serializes_subagent_source() {
     assert_eq!(payload["event_params"]["subagent_source"], "review");
 }
 
-#[test]
-fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
-    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        CodexThreadInitializedInput {
-            thread_id: "thread-2".to_string(),
-            model: "gpt-5".to_string(),
-            product_client_id: originator().value,
-            created_at: 1,
-            thread_context: CodexThreadContext {
-                ephemeral: false,
-                session_source: SessionSource::Mcp,
-                initialization_mode: InitializationMode::New,
-                subagent_source: None,
-                parent_thread_id: None,
-            },
-        },
-    ));
+#[tokio::test]
+async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialized() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
 
-    let payload = serde_json::to_value(&event).expect("serialize mcp thread initialized event");
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
+                ThreadInitializeInput {
+                    connection_id: 7,
+                    thread_id: "thread-no-client".to_string(),
+                    model: "gpt-5".to_string(),
+                    ephemeral: false,
+                    session_source: SessionSource::Exec,
+                    initialization_mode: InitializationMode::New,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+    assert!(events.is_empty(), "thread events should require initialize");
+
+    reducer
+        .ingest(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: None,
+                },
+            },
+            &mut events,
+        )
+        .await;
+    assert!(events.is_empty(), "initialize should not publish by itself");
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
+                ThreadInitializeInput {
+                    connection_id: 7,
+                    thread_id: "thread-1".to_string(),
+                    model: "gpt-5".to_string(),
+                    ephemeral: true,
+                    session_source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id: codex_protocol::ThreadId::from_string(
+                            "11111111-1111-1111-1111-111111111111",
+                        )
+                        .expect("valid thread id"),
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: None,
+                        agent_role: None,
+                    }),
+                    initialization_mode: InitializationMode::Resumed,
+                },
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
+    assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
+    assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");
+    assert_eq!(payload[0]["event_params"]["session_source"], "subagent");
     assert_eq!(
-        payload["event_params"]["session_source"],
-        serde_json::Value::Null
+        payload[0]["event_params"]["subagent_source"],
+        "thread_spawn"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["parent_thread_id"],
+        "11111111-1111-1111-1111-111111111111"
     );
 }
 

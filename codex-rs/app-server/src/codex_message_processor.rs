@@ -179,16 +179,19 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
+use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::ForkSnapshot;
+use codex_core::InitializationMode;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::ThreadInitializeInput;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::auth::AuthMode as CoreAuthMode;
@@ -374,6 +377,7 @@ pub(crate) struct CodexMessageProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
+    analytics_events_client: AnalyticsEventsClient,
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
@@ -404,6 +408,7 @@ struct ListenerTaskContext {
     thread_manager: Arc<ThreadManager>,
     thread_state_manager: ThreadStateManager,
     outgoing: Arc<OutgoingMessageSender>,
+    analytics_events_client: AnalyticsEventsClient,
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
@@ -426,6 +431,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) thread_manager: Arc<ThreadManager>,
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
@@ -490,6 +496,7 @@ impl CodexMessageProcessor {
             auth_manager,
             thread_manager,
             outgoing,
+            analytics_events_client,
             arg0_paths,
             config,
             cli_overrides,
@@ -502,6 +509,7 @@ impl CodexMessageProcessor {
             auth_manager,
             thread_manager,
             outgoing: outgoing.clone(),
+            analytics_events_client,
             arg0_paths,
             config,
             cli_overrides,
@@ -1921,6 +1929,7 @@ impl CodexMessageProcessor {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
+            analytics_events_client: self.analytics_events_client.clone(),
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.clone(),
@@ -2153,6 +2162,14 @@ impl CodexMessageProcessor {
                     sandbox: config_snapshot.sandbox_policy.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
+                listener_task_context
+                    .analytics_events_client
+                    .track_thread_initialized(thread_initialize_input(
+                        request_id.connection_id,
+                        &thread,
+                        response.model.clone(),
+                        InitializationMode::New,
+                    ));
 
                 listener_task_context
                     .outgoing
@@ -3631,6 +3648,13 @@ impl CodexMessageProcessor {
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
+                self.analytics_events_client
+                    .track_thread_initialized(thread_initialize_input(
+                        request_id.connection_id,
+                        &response.thread,
+                        response.model.clone(),
+                        InitializationMode::Resumed,
+                    ));
 
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -4238,6 +4262,13 @@ impl CodexMessageProcessor {
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
+        self.analytics_events_client
+            .track_thread_initialized(thread_initialize_input(
+                request_id.connection_id,
+                &thread,
+                response.model.clone(),
+                InitializationMode::Forked,
+            ));
 
         self.outgoing.send_response(request_id, response).await;
 
@@ -6819,6 +6850,7 @@ impl CodexMessageProcessor {
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
+                analytics_events_client: self.analytics_events_client.clone(),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
@@ -6906,6 +6938,7 @@ impl CodexMessageProcessor {
                 thread_manager: Arc::clone(&self.thread_manager),
                 thread_state_manager: self.thread_state_manager.clone(),
                 outgoing: Arc::clone(&self.outgoing),
+                analytics_events_client: self.analytics_events_client.clone(),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
@@ -6937,6 +6970,7 @@ impl CodexMessageProcessor {
             outgoing,
             thread_manager,
             thread_state_manager,
+            analytics_events_client: _,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
@@ -7852,6 +7886,22 @@ fn cloud_requirements_load_error(err: &std::io::Error) -> Option<&CloudRequireme
         current = source.source();
     }
     None
+}
+
+fn thread_initialize_input(
+    connection_id: ConnectionId,
+    thread: &Thread,
+    model: String,
+    initialization_mode: InitializationMode,
+) -> ThreadInitializeInput {
+    ThreadInitializeInput {
+        connection_id: connection_id.0,
+        thread_id: thread.id.clone(),
+        model,
+        ephemeral: thread.ephemeral,
+        session_source: thread.source.clone().into(),
+        initialization_mode,
+    }
 }
 
 fn config_load_error(err: &std::io::Error) -> JSONRPCErrorError {

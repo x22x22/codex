@@ -5,8 +5,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -351,8 +349,6 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
-use codex_analytics::CodexThreadContext;
-use codex_analytics::CodexThreadInitializedInput;
 use codex_analytics::CodexTurnEvent;
 use codex_analytics::InitializationMode;
 use codex_analytics::InvocationType;
@@ -639,12 +635,6 @@ impl Codex {
             user_shell_override,
         };
 
-        let initialization_mode = initialization_mode(&conversation_history);
-        let thread_session_source = session_configuration.session_source.clone();
-        let subagent_source = session_source_subagent_source(&thread_session_source);
-        let parent_thread_id = session_source_parent_thread_id(&thread_session_source);
-        let thread_initialized_configuration = session_configuration.clone();
-
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
@@ -671,31 +661,6 @@ impl Codex {
             map_session_init_error(&e, &config.codex_home)
         })?;
         let thread_id = session.conversation_id;
-
-        session
-            .services
-            .analytics_events_client
-            .track_thread_initialized(CodexThreadInitializedInput {
-                thread_id: thread_id.to_string(),
-                model: thread_initialized_configuration
-                    .collaboration_mode
-                    .model()
-                    .to_string(),
-                product_client_id: crate::default_client::originator().value,
-                created_at: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                thread_context: CodexThreadContext {
-                    ephemeral: thread_initialized_configuration
-                        .original_config_do_not_use
-                        .ephemeral,
-                    session_source: thread_session_source,
-                    initialization_mode,
-                    subagent_source,
-                    parent_thread_id,
-                },
-            });
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
@@ -808,30 +773,6 @@ impl Codex {
 
     pub(crate) fn enabled(&self, feature: Feature) -> bool {
         self.session.enabled(feature)
-    }
-}
-
-fn initialization_mode(conversation_history: &InitialHistory) -> InitializationMode {
-    match conversation_history {
-        InitialHistory::New => InitializationMode::New,
-        InitialHistory::Forked(_) => InitializationMode::Forked,
-        InitialHistory::Resumed(_) => InitializationMode::Resumed,
-    }
-}
-
-fn session_source_subagent_source(session_source: &SessionSource) -> Option<SubAgentSource> {
-    match session_source {
-        SessionSource::SubAgent(subagent_source) => Some(subagent_source.clone()),
-        _ => None,
-    }
-}
-
-fn session_source_parent_thread_id(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) => Some(parent_thread_id.to_string()),
-        _ => None,
     }
 }
 
