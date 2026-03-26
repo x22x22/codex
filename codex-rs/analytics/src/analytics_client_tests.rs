@@ -5,7 +5,6 @@ use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
 use super::CodexThreadInitializedEvent;
-use super::CodexThreadInitializedEventRequest;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
 use super::InitializationMode;
@@ -16,7 +15,7 @@ use super::TrackEventsContext;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
-use super::codex_thread_initialized_event_params;
+use super::codex_thread_initialized_event_request;
 use super::codex_turn_event_params;
 use super::normalize_path_for_skill_id;
 use codex_login::default_client::originator;
@@ -264,9 +263,8 @@ fn turn_event_serializes_expected_shape() {
 
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
-    let event = TrackEventRequest::ThreadInitialized(CodexThreadInitializedEventRequest {
-        event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
+    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
+        CodexThreadInitializedEvent {
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: true,
@@ -275,8 +273,8 @@ fn thread_initialized_event_serializes_expected_shape() {
             subagent_source: None,
             parent_thread_id: None,
             created_at: 1_716_000_000,
-        }),
-    });
+        },
+    ));
 
     let payload = serde_json::to_value(&event).expect("serialize thread initialized event");
 
@@ -301,9 +299,8 @@ fn thread_initialized_event_serializes_expected_shape() {
 
 #[test]
 fn thread_initialized_event_serializes_subagent_source() {
-    let event = TrackEventRequest::ThreadInitialized(CodexThreadInitializedEventRequest {
-        event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
+    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
+        CodexThreadInitializedEvent {
             thread_id: "thread-1".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: false,
@@ -312,8 +309,8 @@ fn thread_initialized_event_serializes_subagent_source() {
             subagent_source: Some(SubAgentSource::Review),
             parent_thread_id: None,
             created_at: 1,
-        }),
-    });
+        },
+    ));
 
     let payload =
         serde_json::to_value(&event).expect("serialize subagent thread initialized event");
@@ -323,9 +320,8 @@ fn thread_initialized_event_serializes_subagent_source() {
 
 #[test]
 fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
-    let event = TrackEventRequest::ThreadInitialized(CodexThreadInitializedEventRequest {
-        event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(CodexThreadInitializedEvent {
+    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
+        CodexThreadInitializedEvent {
             thread_id: "thread-2".to_string(),
             model: "gpt-5".to_string(),
             ephemeral: false,
@@ -334,8 +330,8 @@ fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
             subagent_source: None,
             parent_thread_id: None,
             created_at: 1,
-        }),
-    });
+        },
+    ));
 
     let payload = serde_json::to_value(&event).expect("serialize mcp thread initialized event");
     assert_eq!(

@@ -735,6 +735,7 @@ fn personality_mode(personality: Option<Personality>) -> Option<String> {
         Some(personality) => Some(personality.to_string()),
     }
 }
+
 fn codex_thread_initialized_event_params(
     thread_event: CodexThreadInitializedEvent,
 ) -> CodexThreadInitializedEventParams {
