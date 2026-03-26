@@ -1,15 +1,14 @@
 mod analytics_client;
 
 pub use analytics_client::AnalyticsEventsClient;
-pub use analytics_client::AnalyticsInput;
+pub use analytics_client::AnalyticsFact;
 pub use analytics_client::AnalyticsReducer;
 pub use analytics_client::AppInvocation;
 pub use analytics_client::AppMentionedInput;
 pub use analytics_client::AppUsedInput;
-pub use analytics_client::CodexThreadContext;
-pub use analytics_client::CodexThreadInitializedInput;
 pub use analytics_client::CodexTurnEvent;
 pub use analytics_client::CodexTurnSteerEvent;
+pub use analytics_client::CustomAnalyticsFact;
 pub use analytics_client::InitializationMode;
 pub use analytics_client::InvocationType;
 pub use analytics_client::PluginState;
@@ -17,6 +16,7 @@ pub use analytics_client::PluginStateChangedInput;
 pub use analytics_client::PluginUsedInput;
 pub use analytics_client::SkillInvocation;
 pub use analytics_client::SkillInvokedInput;
+pub use analytics_client::ThreadInitializedInput;
 pub use analytics_client::TrackEventsContext;
 pub use analytics_client::TurnCompletedInput;
 pub use analytics_client::TurnStartedInput;
