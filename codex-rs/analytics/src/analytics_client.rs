@@ -30,7 +30,7 @@ pub struct TrackEventsContext {
 }
 
 #[derive(Clone)]
-pub struct ThreadInitializeInput {
+pub struct ThreadInitializedInput {
     pub connection_id: u64,
     pub thread_id: String,
     pub model: String,
@@ -102,7 +102,7 @@ pub enum AnalyticsFact {
 pub enum CustomAnalyticsFact {
     // This remains custom on this branch because app-server-protocol does not
     // yet expose a generic client response enum we can reduce over directly.
-    ThreadInitialized(ThreadInitializeInput),
+    ThreadInitialized(ThreadInitializedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
@@ -255,7 +255,7 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_thread_initialized(&self, input: ThreadInitializeInput) {
+    pub fn track_thread_initialized(&self, input: ThreadInitializedInput) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::ThreadInitialized(input),
         ));
@@ -499,7 +499,7 @@ impl AnalyticsReducer {
 
     fn ingest_thread_initialized(
         &mut self,
-        input: ThreadInitializeInput,
+        input: ThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
         let Some(client_state) = self.clients.get(&input.connection_id) else {
@@ -628,7 +628,7 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
 
 fn codex_thread_initialized_event_request(
     product_client_id: String,
-    input: ThreadInitializeInput,
+    input: ThreadInitializedInput,
 ) -> CodexThreadInitializedEvent {
     CodexThreadInitializedEvent {
         event_type: "codex_thread_initialized",
@@ -638,7 +638,7 @@ fn codex_thread_initialized_event_request(
 
 fn codex_thread_initialized_event_params(
     product_client_id: String,
-    input: ThreadInitializeInput,
+    input: ThreadInitializedInput,
 ) -> CodexThreadInitializedEventParams {
     CodexThreadInitializedEventParams {
         thread_id: input.thread_id,

@@ -9,7 +9,7 @@ use super::CodexPluginUsedEventRequest;
 use super::CustomAnalyticsFact;
 use super::InitializationMode;
 use super::InvocationType;
-use super::ThreadInitializeInput;
+use super::ThreadInitializedInput;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::codex_app_metadata;
@@ -199,7 +199,7 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
 fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
         "codex-tui".to_string(),
-        ThreadInitializeInput {
+        ThreadInitializedInput {
             connection_id: 1,
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
@@ -239,7 +239,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     reducer
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
-                ThreadInitializeInput {
+                ThreadInitializedInput {
                     connection_id: 7,
                     thread_id: "thread-no-client".to_string(),
                     model: "gpt-5".to_string(),
@@ -274,7 +274,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     reducer
         .ingest(
             AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
-                ThreadInitializeInput {
+                ThreadInitializedInput {
                     connection_id: 7,
                     thread_id: "thread-1".to_string(),
                     model: "gpt-5".to_string(),
@@ -293,8 +293,8 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
     assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");
     assert_eq!(payload[0]["event_params"]["session_source"], "user");
-    assert_eq!(payload[0]["event_params"]["subagent_source"], Value::Null);
-    assert_eq!(payload[0]["event_params"]["parent_thread_id"], Value::Null);
+    assert_eq!(payload[0]["event_params"]["subagent_source"], json!(null));
+    assert_eq!(payload[0]["event_params"]["parent_thread_id"], json!(null));
 }
 
 #[test]
