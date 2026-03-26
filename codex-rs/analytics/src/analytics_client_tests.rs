@@ -1,4 +1,6 @@
 use super::AnalyticsEventsQueue;
+use super::AnalyticsInput;
+use super::AnalyticsReducer;
 use super::AppInvocation;
 use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
@@ -12,6 +14,8 @@ use super::InitializationMode;
 use super::InvocationType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
+use super::TurnCompletedInput;
+use super::TurnStartedInput;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
@@ -297,6 +301,77 @@ fn turn_event_serializes_expected_shape() {
             }
         })
     );
+}
+
+#[tokio::test]
+async fn turn_started_then_completed_emits_turn_event() {
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-2".to_string(),
+        turn_id: "turn-2".to_string(),
+    };
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsInput::TurnStarted(TurnStartedInput {
+                tracking: tracking.clone(),
+                turn_event: CodexTurnEvent {
+                    submission_type: None,
+                    model_provider: "openai".to_string(),
+                    sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                    reasoning_summary: Some(ReasoningSummary::Detailed),
+                    service_tier: Some(ServiceTier::Flex),
+                    approval_policy: AskForApproval::OnRequest,
+                    approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+                    sandbox_network_access: true,
+                    collaboration_mode: ModeKind::Plan,
+                    personality: Some(Personality::Pragmatic),
+                    num_input_images: 2,
+                    is_first_turn: true,
+                    status: None,
+                    turn_error: None,
+                    steer_count: None,
+                    total_tool_call_count: None,
+                    shell_command_count: None,
+                    file_change_count: None,
+                    mcp_tool_call_count: None,
+                    dynamic_tool_call_count: None,
+                    subagent_tool_call_count: None,
+                    web_search_count: None,
+                    image_generation_count: None,
+                    input_tokens: None,
+                    cached_input_tokens: None,
+                    output_tokens: None,
+                    reasoning_output_tokens: None,
+                    total_tokens: None,
+                    duration_ms: None,
+                    started_at: None,
+                    completed_at: None,
+                },
+            }),
+            &mut out,
+        )
+        .await;
+
+    assert!(out.is_empty());
+
+    reducer
+        .ingest(
+            AnalyticsInput::TurnCompleted(TurnCompletedInput {
+                turn_id: tracking.turn_id.clone(),
+            }),
+            &mut out,
+        )
+        .await;
+
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(payload["event_type"], json!("codex_turn_event"));
+    assert_eq!(payload["event_params"]["thread_id"], json!("thread-2"));
+    assert_eq!(payload["event_params"]["turn_id"], json!("turn-2"));
 }
 
 #[test]
