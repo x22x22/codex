@@ -478,14 +478,28 @@ impl TestCodexBuilder {
         let (config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
-        let file_system = test_env.environment().get_filesystem();
+        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
+            test_env.exec_server_url().map(str::to_owned),
+        ));
+        let environment = environment_manager.current().await?;
+        let file_system = environment.get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);
         for setup in workspace_setups {
             setup(config.cwd.clone(), Arc::clone(&file_system)).await?;
         }
         let cwd = test_env.local_cwd_temp_dir().unwrap_or(fallback_cwd);
-        Box::pin(self.build_from_config(config, cwd, home, resume_from, test_env)).await
+        Box::pin(
+            self.build_from_config(
+                config,
+                cwd,
+                home,
+                resume_from,
+                test_env,
+                environment_manager,
+            ),
+        )
+        .await
     }
 
     async fn build_from_config(
@@ -495,11 +509,9 @@ impl TestCodexBuilder {
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
         test_env: TestEnv,
+        environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
-            test_env.exec_server_url().map(str::to_owned),
-        ));
         let thread_manager = if config.model_catalog.is_some() {
             ThreadManager::new(
                 &config,
