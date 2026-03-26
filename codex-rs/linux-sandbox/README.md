@@ -26,8 +26,9 @@ is falling back to the vendored helper.
   no-`--argv0` compatibility path for the inner re-exec.
 - If `bwrap` is missing, the helper falls back to the vendored bubblewrap
   path.
-- If `bwrap` is missing, Codex also surfaces a startup warning instead of
-  printing directly from the sandbox helper.
+- If `bwrap` is missing, Codex also surfaces a startup warning instead
+  of printing directly from the sandbox helper, unless sandboxing is bypassed
+  with `danger-full-access`.
 - Legacy Landlock + mount protections remain available as an explicit legacy
   fallback path.
 - Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)
