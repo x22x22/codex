@@ -4,14 +4,15 @@ use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
-use super::CodexThreadInitializedEvent;
+use super::CodexThreadContext;
+use super::CodexThreadInitializedInput;
 use super::CodexTurnEvent;
 use super::CodexTurnEventRequest;
 use super::InitializationMode;
 use super::InvocationType;
-use super::SubmissionType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
+use super::TurnSubmissionType;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
@@ -210,12 +211,12 @@ fn turn_event_serializes_expected_shape() {
         thread_id: "thread-2".to_string(),
         turn_id: "turn-2".to_string(),
     };
-    let event = TrackEventRequest::TurnEvent(CodexTurnEventRequest {
+    let event = TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
         event_type: "codex_turn_event",
         event_params: codex_turn_event_params(
             &tracking,
             CodexTurnEvent {
-                submission_type: Some(SubmissionType::Prompt),
+                submission_type: Some(TurnSubmissionType::Default),
                 model_provider: "openai".to_string(),
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 reasoning_effort: Some(ReasoningEffort::High),
@@ -228,9 +229,28 @@ fn turn_event_serializes_expected_shape() {
                 personality: Some(Personality::Pragmatic),
                 num_input_images: 2,
                 is_first_turn: true,
+                status: None,
+                turn_error: None,
+                steer_count: None,
+                total_tool_call_count: None,
+                shell_command_count: None,
+                file_change_count: None,
+                mcp_tool_call_count: None,
+                dynamic_tool_call_count: None,
+                subagent_tool_call_count: None,
+                web_search_count: None,
+                image_generation_count: None,
+                input_tokens: None,
+                cached_input_tokens: None,
+                output_tokens: None,
+                reasoning_output_tokens: None,
+                total_tokens: None,
+                duration_ms: None,
+                started_at: None,
+                completed_at: None,
             },
         ),
-    });
+    }));
 
     let payload = serde_json::to_value(&event).expect("serialize turn event");
 
@@ -243,7 +263,7 @@ fn turn_event_serializes_expected_shape() {
                 "turn_id": "turn-2",
                 "product_client_id": originator().value,
                 "model": "gpt-5",
-                "submission_type": "prompt",
+                "submission_type": "default",
                 "model_provider": "openai",
                 "sandbox_policy": "read_only",
                 "reasoning_effort": "high",
@@ -255,7 +275,26 @@ fn turn_event_serializes_expected_shape() {
                 "collaboration_mode": "plan",
                 "personality": "pragmatic",
                 "num_input_images": 2,
-                "is_first_turn": true
+                "is_first_turn": true,
+                "status": null,
+                "turn_error": null,
+                "steer_count": null,
+                "total_tool_call_count": null,
+                "shell_command_count": null,
+                "file_change_count": null,
+                "mcp_tool_call_count": null,
+                "dynamic_tool_call_count": null,
+                "subagent_tool_call_count": null,
+                "web_search_count": null,
+                "image_generation_count": null,
+                "input_tokens": null,
+                "cached_input_tokens": null,
+                "output_tokens": null,
+                "reasoning_output_tokens": null,
+                "total_tokens": null,
+                "duration_ms": null,
+                "started_at": null,
+                "completed_at": null
             }
         })
     );
@@ -263,17 +302,19 @@ fn turn_event_serializes_expected_shape() {
 
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
-    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
-        originator().value,
-        CodexThreadInitializedEvent {
+    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
+        CodexThreadInitializedInput {
             thread_id: "thread-0".to_string(),
             model: "gpt-5".to_string(),
-            ephemeral: true,
-            session_source: SessionSource::Exec,
-            initialization_mode: InitializationMode::New,
-            subagent_source: None,
-            parent_thread_id: None,
+            product_client_id: originator().value,
             created_at: 1_716_000_000,
+            thread_context: CodexThreadContext {
+                ephemeral: true,
+                session_source: SessionSource::Exec,
+                initialization_mode: InitializationMode::New,
+                subagent_source: None,
+                parent_thread_id: None,
+            },
         },
     ));
 
@@ -300,17 +341,19 @@ fn thread_initialized_event_serializes_expected_shape() {
 
 #[test]
 fn thread_initialized_event_serializes_subagent_source() {
-    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
-        originator().value,
-        CodexThreadInitializedEvent {
+    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
+        CodexThreadInitializedInput {
             thread_id: "thread-1".to_string(),
             model: "gpt-5".to_string(),
-            ephemeral: false,
-            session_source: SessionSource::SubAgent(SubAgentSource::Review),
-            initialization_mode: InitializationMode::New,
-            subagent_source: Some(SubAgentSource::Review),
-            parent_thread_id: None,
+            product_client_id: originator().value,
             created_at: 1,
+            thread_context: CodexThreadContext {
+                ephemeral: false,
+                session_source: SessionSource::SubAgent(SubAgentSource::Review),
+                initialization_mode: InitializationMode::New,
+                subagent_source: Some(SubAgentSource::Review),
+                parent_thread_id: None,
+            },
         },
     ));
 
@@ -322,17 +365,19 @@ fn thread_initialized_event_serializes_subagent_source() {
 
 #[test]
 fn thread_initialized_event_omits_non_user_non_subagent_session_source() {
-    let event = TrackEventRequest::ThreadInitialized(codex_thread_initialized_event_request(
-        originator().value,
-        CodexThreadInitializedEvent {
+    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
+        CodexThreadInitializedInput {
             thread_id: "thread-2".to_string(),
             model: "gpt-5".to_string(),
-            ephemeral: false,
-            session_source: SessionSource::Mcp,
-            initialization_mode: InitializationMode::New,
-            subagent_source: None,
-            parent_thread_id: None,
+            product_client_id: originator().value,
             created_at: 1,
+            thread_context: CodexThreadContext {
+                ephemeral: false,
+                session_source: SessionSource::Mcp,
+                initialization_mode: InitializationMode::New,
+                subagent_source: None,
+                parent_thread_id: None,
+            },
         },
     ));
 

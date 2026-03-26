@@ -357,6 +357,7 @@ use codex_analytics::CodexThreadInitializedInput;
 use codex_analytics::CodexTurnEvent;
 use codex_analytics::InitializationMode;
 use codex_analytics::InvocationType;
+use codex_analytics::TurnSubmissionType;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
@@ -833,6 +834,13 @@ fn session_source_parent_thread_id(session_source: &SessionSource) -> Option<Str
             parent_thread_id, ..
         }) => Some(parent_thread_id.to_string()),
         _ => None,
+    }
+}
+
+fn turn_submission_type(submission_type: SubmissionType) -> TurnSubmissionType {
+    match submission_type {
+        SubmissionType::Prompt => TurnSubmissionType::Default,
+        SubmissionType::QueuedPrompt => TurnSubmissionType::Queued,
     }
 }
 
@@ -6169,7 +6177,8 @@ pub(crate) async fn run_turn(
     if !input.is_empty() {
         let submission_type = turn_context
             .submission_type
-            .unwrap_or(SubmissionType::Prompt);
+            .map(turn_submission_type)
+            .unwrap_or(TurnSubmissionType::Default);
         let is_first_turn = {
             let mut state = sess.state.lock().await;
             state.take_next_turn_is_first()
@@ -6195,6 +6204,25 @@ pub(crate) async fn run_turn(
                     })
                     .count(),
                 is_first_turn,
+                status: None,
+                turn_error: None,
+                steer_count: None,
+                total_tool_call_count: None,
+                shell_command_count: None,
+                file_change_count: None,
+                mcp_tool_call_count: None,
+                dynamic_tool_call_count: None,
+                subagent_tool_call_count: None,
+                web_search_count: None,
+                image_generation_count: None,
+                input_tokens: None,
+                cached_input_tokens: None,
+                output_tokens: None,
+                reasoning_output_tokens: None,
+                total_tokens: None,
+                duration_ms: None,
+                started_at: None,
+                completed_at: None,
             },
         );
     }

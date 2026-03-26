@@ -58,6 +58,7 @@ pub static CODEX_ALIASES_TEMP_DIR: TestCodexAliasesGuard = unsafe {
 mod abort_tasks;
 mod agent_jobs;
 mod agent_websocket;
+mod analytics;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
@@ -127,7 +128,6 @@ mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
 mod text_encoding_fix;
-mod thread_metadata;
 mod tool_harness;
 mod tool_parallelism;
 mod tool_suggest;

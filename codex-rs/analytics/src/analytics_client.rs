@@ -11,11 +11,11 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::SubmissionType;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
@@ -37,7 +37,7 @@ pub struct TrackEventsContext {
 
 #[derive(Clone)]
 pub struct CodexTurnEvent {
-    pub submission_type: Option<SubmissionType>,
+    pub submission_type: Option<TurnSubmissionType>,
     pub model_provider: String,
     pub sandbox_policy: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -50,18 +50,40 @@ pub struct CodexTurnEvent {
     pub personality: Option<Personality>,
     pub num_input_images: usize,
     pub is_first_turn: bool,
+    pub status: Option<TurnStatus>,
+    pub turn_error: Option<CodexErrorInfo>,
+    pub steer_count: Option<usize>,
+    pub total_tool_call_count: Option<usize>,
+    pub shell_command_count: Option<usize>,
+    pub file_change_count: Option<usize>,
+    pub mcp_tool_call_count: Option<usize>,
+    pub dynamic_tool_call_count: Option<usize>,
+    pub subagent_tool_call_count: Option<usize>,
+    pub web_search_count: Option<usize>,
+    pub image_generation_count: Option<usize>,
+    pub input_tokens: Option<i64>,
+    pub cached_input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub reasoning_output_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
+    pub duration_ms: Option<u64>,
+    pub started_at: Option<u64>,
+    pub completed_at: Option<u64>,
 }
 
-#[derive(Clone)]
-pub struct CodexThreadInitializedEvent {
-    pub thread_id: String,
-    pub model: String,
-    pub ephemeral: bool,
-    pub session_source: SessionSource,
-    pub initialization_mode: InitializationMode,
-    pub subagent_source: Option<SubAgentSource>,
-    pub parent_thread_id: Option<String>,
-    pub created_at: u64,
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSubmissionType {
+    Default,
+    Queued,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnStatus {
+    Completed,
+    Failed,
+    Interrupted,
 }
 
 #[derive(Clone)]
@@ -124,7 +146,7 @@ pub struct AppInvocation {
 }
 
 pub enum AnalyticsInput {
-    ThreadInitialized(CodexThreadInitializedInput),
+    CodexThreadInitialized(CodexThreadInitializedInput),
     TurnEvent(TurnEventInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
@@ -176,7 +198,7 @@ pub struct AnalyticsReducer {
 }
 
 struct ThreadState {
-    _initialized_event: CodexThreadInitializedEvent,
+    _initialized_input: CodexThreadInitializedInput,
 }
 
 #[derive(Clone)]
@@ -274,7 +296,7 @@ impl AnalyticsEventsClient {
     }
 
     pub fn track_thread_initialized(&self, input: CodexThreadInitializedInput) {
-        self.record(AnalyticsInput::ThreadInitialized(input));
+        self.record(AnalyticsInput::CodexThreadInitialized(input));
     }
 
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
@@ -368,10 +390,10 @@ struct TrackEventsRequest {
 #[serde(untagged)]
 enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
-    ThreadInitialized(CodexThreadInitializedEventRequest),
+    CodexThreadInitialized(CodexThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
-    TurnEvent(CodexTurnEventRequest),
+    TurnEvent(Box<CodexTurnEventRequest>),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -411,7 +433,7 @@ struct CodexThreadInitializedEventParams {
 }
 
 #[derive(Serialize)]
-struct CodexThreadInitializedEventRequest {
+struct CodexThreadInitializedEvent {
     event_type: &'static str,
     event_params: CodexThreadInitializedEventParams,
 }
@@ -444,8 +466,8 @@ struct CodexTurnEventParams {
     thread_id: String,
     turn_id: String,
     product_client_id: Option<String>,
+    submission_type: Option<TurnSubmissionType>,
     model: Option<String>,
-    submission_type: Option<SubmissionType>,
     model_provider: String,
     sandbox_policy: Option<&'static str>,
     reasoning_effort: Option<String>,
@@ -458,6 +480,25 @@ struct CodexTurnEventParams {
     personality: Option<String>,
     num_input_images: usize,
     is_first_turn: bool,
+    status: Option<TurnStatus>,
+    turn_error: Option<CodexErrorInfo>,
+    steer_count: Option<usize>,
+    total_tool_call_count: Option<usize>,
+    shell_command_count: Option<usize>,
+    file_change_count: Option<usize>,
+    mcp_tool_call_count: Option<usize>,
+    dynamic_tool_call_count: Option<usize>,
+    subagent_tool_call_count: Option<usize>,
+    web_search_count: Option<usize>,
+    image_generation_count: Option<usize>,
+    input_tokens: Option<i64>,
+    cached_input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    reasoning_output_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+    duration_ms: Option<u64>,
+    started_at: Option<u64>,
+    completed_at: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -501,7 +542,7 @@ struct CodexPluginUsedEventRequest {
 impl AnalyticsReducer {
     async fn ingest(&mut self, input: AnalyticsInput, out: &mut Vec<TrackEventRequest>) {
         match input {
-            AnalyticsInput::ThreadInitialized(input) => {
+            AnalyticsInput::CodexThreadInitialized(input) => {
                 self.ingest_thread_initialized(input, out);
             }
             AnalyticsInput::TurnEvent(input) => {
@@ -530,25 +571,14 @@ impl AnalyticsReducer {
         input: CodexThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let product_client_id = input.product_client_id.clone();
-        let event = CodexThreadInitializedEvent {
-            thread_id: input.thread_id,
-            model: input.model,
-            ephemeral: input.thread_context.ephemeral,
-            session_source: input.thread_context.session_source,
-            initialization_mode: input.thread_context.initialization_mode,
-            subagent_source: input.thread_context.subagent_source,
-            parent_thread_id: input.thread_context.parent_thread_id,
-            created_at: input.created_at,
-        };
         self.threads.insert(
-            event.thread_id.clone(),
+            input.thread_id.clone(),
             ThreadState {
-                _initialized_event: event.clone(),
+                _initialized_input: input.clone(),
             },
         );
-        out.push(TrackEventRequest::ThreadInitialized(
-            codex_thread_initialized_event_request(product_client_id, event),
+        out.push(TrackEventRequest::CodexThreadInitialized(
+            codex_thread_initialized_event_request(input),
         ));
     }
 
@@ -557,10 +587,12 @@ impl AnalyticsReducer {
             tracking,
             turn_event,
         } = input;
-        out.push(TrackEventRequest::TurnEvent(CodexTurnEventRequest {
-            event_type: "codex_turn_event",
-            event_params: codex_turn_event_params(&tracking, turn_event),
-        }));
+        out.push(TrackEventRequest::TurnEvent(Box::new(
+            CodexTurnEventRequest {
+                event_type: "codex_turn_event",
+                event_params: codex_turn_event_params(&tracking, turn_event),
+            },
+        )));
     }
 
     async fn ingest_skill_invoked(
@@ -686,8 +718,8 @@ fn codex_turn_event_params(
         thread_id: tracking.thread_id.clone(),
         turn_id: tracking.turn_id.clone(),
         product_client_id: Some(originator().value),
-        model: Some(tracking.model_slug.clone()),
         submission_type: turn_event.submission_type,
+        model: Some(tracking.model_slug.clone()),
         model_provider: turn_event.model_provider,
         sandbox_policy: Some(sandbox_policy_mode(&turn_event.sandbox_policy)),
         reasoning_effort: turn_event.reasoning_effort.map(|value| value.to_string()),
@@ -703,6 +735,25 @@ fn codex_turn_event_params(
         personality: personality_mode(turn_event.personality),
         num_input_images: turn_event.num_input_images,
         is_first_turn: turn_event.is_first_turn,
+        status: turn_event.status,
+        turn_error: turn_event.turn_error,
+        steer_count: turn_event.steer_count,
+        total_tool_call_count: turn_event.total_tool_call_count,
+        shell_command_count: turn_event.shell_command_count,
+        file_change_count: turn_event.file_change_count,
+        mcp_tool_call_count: turn_event.mcp_tool_call_count,
+        dynamic_tool_call_count: turn_event.dynamic_tool_call_count,
+        subagent_tool_call_count: turn_event.subagent_tool_call_count,
+        web_search_count: turn_event.web_search_count,
+        image_generation_count: turn_event.image_generation_count,
+        input_tokens: turn_event.input_tokens,
+        cached_input_tokens: turn_event.cached_input_tokens,
+        output_tokens: turn_event.output_tokens,
+        reasoning_output_tokens: turn_event.reasoning_output_tokens,
+        total_tokens: turn_event.total_tokens,
+        duration_ms: turn_event.duration_ms,
+        started_at: turn_event.started_at,
+        completed_at: turn_event.completed_at,
     }
 }
 
@@ -735,33 +786,32 @@ fn personality_mode(personality: Option<Personality>) -> Option<String> {
         Some(personality) => Some(personality.to_string()),
     }
 }
+
 fn codex_thread_initialized_event_request(
-    product_client_id: String,
-    thread_event: CodexThreadInitializedEvent,
-) -> CodexThreadInitializedEventRequest {
-    CodexThreadInitializedEventRequest {
+    input: CodexThreadInitializedInput,
+) -> CodexThreadInitializedEvent {
+    CodexThreadInitializedEvent {
         event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params_with_product_client_id(
-            product_client_id,
-            thread_event,
-        ),
+        event_params: codex_thread_initialized_event_params(input),
     }
 }
 
-fn codex_thread_initialized_event_params_with_product_client_id(
-    product_client_id: String,
-    thread_event: CodexThreadInitializedEvent,
+fn codex_thread_initialized_event_params(
+    input: CodexThreadInitializedInput,
 ) -> CodexThreadInitializedEventParams {
     CodexThreadInitializedEventParams {
-        thread_id: thread_event.thread_id,
-        product_client_id,
-        model: thread_event.model,
-        ephemeral: thread_event.ephemeral,
-        session_source: session_source_name(&thread_event.session_source),
-        initialization_mode: thread_event.initialization_mode,
-        subagent_source: thread_event.subagent_source.map(subagent_source_name),
-        parent_thread_id: thread_event.parent_thread_id,
-        created_at: thread_event.created_at,
+        thread_id: input.thread_id,
+        product_client_id: input.product_client_id,
+        model: input.model,
+        ephemeral: input.thread_context.ephemeral,
+        session_source: session_source_name(&input.thread_context.session_source),
+        initialization_mode: input.thread_context.initialization_mode,
+        subagent_source: input
+            .thread_context
+            .subagent_source
+            .map(subagent_source_name),
+        parent_thread_id: input.thread_context.parent_thread_id,
+        created_at: input.created_at,
     }
 }
 
