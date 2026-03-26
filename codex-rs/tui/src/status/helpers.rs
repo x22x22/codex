@@ -6,7 +6,10 @@ use codex_core::AuthManager;
 use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
+use codex_exec_server::LOCAL_FS;
 use codex_protocol::account::PlanType;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::io;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
@@ -14,6 +17,24 @@ use super::account::StatusAccountDisplay;
 
 fn normalize_agents_display_path(path: &Path) -> String {
     dunce::simplified(path).display().to_string()
+}
+
+fn discover_local_project_doc_paths(config: &Config) -> io::Result<Vec<AbsolutePathBuf>> {
+    let config = config.clone();
+    let discover = move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(discover_project_doc_paths(&config, LOCAL_FS.as_ref()))
+    };
+
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::spawn(discover)
+            .join()
+            .map_err(|_| io::Error::other("project doc discovery thread panicked"))?
+    } else {
+        discover()
+    }
 }
 
 pub(crate) fn compose_model_display(
@@ -37,7 +58,7 @@ pub(crate) fn compose_model_display(
 }
 
 pub(crate) fn compose_agents_summary(config: &Config) -> String {
-    match discover_project_doc_paths(config) {
+    match discover_local_project_doc_paths(config) {
         Ok(paths) => {
             let mut rels: Vec<String> = Vec::new();
             for p in paths {
@@ -46,14 +67,14 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
                     .map(|name| name.to_string_lossy().to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let display = if let Some(parent) = p.parent() {
-                    if parent == config.cwd.as_path() {
+                    if parent.as_path() == config.cwd.as_path() {
                         file_name.clone()
                     } else {
                         let mut cur = config.cwd.as_path();
                         let mut ups = 0usize;
                         let mut reached = false;
                         while let Some(c) = cur.parent() {
-                            if cur == parent {
+                            if cur == parent.as_path() {
                                 reached = true;
                                 break;
                             }
