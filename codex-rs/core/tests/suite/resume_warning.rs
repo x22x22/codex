@@ -27,7 +27,8 @@ fn resume_history(
     let turn_id = "resume-warning-seed-turn".to_string();
     let turn_ctx = TurnContextItem {
         turn_id: Some(turn_id.clone()),
-        cwd: config.cwd.clone(),
+        trace_id: None,
+        cwd: config.cwd.to_path_buf(),
         current_date: None,
         timezone: None,
         approval_policy: config.permissions.approval_policy.value(),
@@ -97,7 +98,7 @@ async fn emits_warning_when_resumed_model_differs() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, initial_history, auth_manager, false)
+        .resume_thread_with_history(config, initial_history, auth_manager, false, None)
         .await
         .expect("resume conversation");
 

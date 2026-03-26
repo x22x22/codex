@@ -1,5 +1,6 @@
 use crate::config_loader::NetworkConstraints;
 use async_trait::async_trait;
+use codex_execpolicy::Policy;
 use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
@@ -13,14 +14,17 @@ use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::build_config_state;
 use codex_network_proxy::host_and_port_from_network_addr;
+use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
 use codex_protocol::protocol::SandboxPolicy;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkProxySpec {
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
+    hard_deny_allowlist_misses: bool,
 }
 
 pub struct StartedNetworkProxy {
@@ -73,7 +77,7 @@ impl NetworkProxySpec {
     }
 
     pub fn proxy_host_and_port(&self) -> String {
-        host_and_port_from_network_addr(&self.config.network.proxy_url, 3128)
+        host_and_port_from_network_addr(&self.config.network.proxy_url, /*default_port*/ 3128)
     }
 
     pub fn socks_enabled(&self) -> bool {
@@ -84,9 +88,19 @@ impl NetworkProxySpec {
         config: NetworkProxyConfig,
         user_network: Option<&crate::config::permissions::NetworkToml>,
         requirements: Option<NetworkConstraints>,
+        sandbox_policy: &SandboxPolicy,
     ) -> std::io::Result<Self> {
+        let hard_deny_allowlist_misses = requirements
+            .as_ref()
+            .is_some_and(Self::managed_allowed_domains_only);
         let (config, constraints) = if let Some(requirements) = requirements {
-            Self::apply_requirements(config, user_network, &requirements)
+            Self::apply_requirements(
+                config,
+                user_network,
+                &requirements,
+                sandbox_policy,
+                hard_deny_allowlist_misses,
+            )
         } else {
             (config, NetworkProxyConstraints::default())
         };
@@ -99,6 +113,7 @@ impl NetworkProxySpec {
         Ok(Self {
             config,
             constraints,
+            hard_deny_allowlist_misses,
         })
     }
 
@@ -113,6 +128,7 @@ impl NetworkProxySpec {
         let state = self.build_state_with_audit_metadata(audit_metadata)?;
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
         if enable_network_approval_flow
+            && !self.hard_deny_allowlist_misses
             && matches!(
                 sandbox_policy,
                 SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
@@ -140,6 +156,21 @@ impl NetworkProxySpec {
         Ok(StartedNetworkProxy::new(proxy, handle))
     }
 
+    pub(crate) fn with_exec_policy_network_rules(
+        &self,
+        exec_policy: &Policy,
+    ) -> std::io::Result<Self> {
+        let mut spec = self.clone();
+        apply_exec_policy_network_rules(&mut spec.config, exec_policy);
+        validate_policy_against_constraints(&spec.config, &spec.constraints).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("network proxy constraints are invalid: {err}"),
+            )
+        })?;
+        Ok(spec)
+    }
+
     fn build_state_with_audit_metadata(
         &self,
         audit_metadata: NetworkProxyAuditMetadata,
@@ -160,8 +191,13 @@ impl NetworkProxySpec {
         mut config: NetworkProxyConfig,
         user_network: Option<&crate::config::permissions::NetworkToml>,
         requirements: &NetworkConstraints,
+        sandbox_policy: &SandboxPolicy,
+        hard_deny_allowlist_misses: bool,
     ) -> (NetworkProxyConfig, NetworkProxyConstraints) {
         let mut constraints = NetworkProxyConstraints::default();
+        let allowlist_expansion_enabled =
+            Self::allowlist_expansion_enabled(sandbox_policy, hard_deny_allowlist_misses);
+        let denylist_expansion_enabled = Self::denylist_expansion_enabled(sandbox_policy);
 
         if let Some(enabled) = requirements.enabled {
             if enabled {
@@ -194,15 +230,6 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_non_loopback_proxy =
                 Some(dangerously_allow_non_loopback_proxy);
         }
-        if let Some(dangerously_allow_non_loopback_admin) =
-            requirements.dangerously_allow_non_loopback_admin
-        {
-            if !dangerously_allow_non_loopback_admin {
-                config.network.dangerously_allow_non_loopback_admin = false;
-            }
-            constraints.dangerously_allow_non_loopback_admin =
-                Some(dangerously_allow_non_loopback_admin);
-        }
         if let Some(dangerously_allow_all_unix_sockets) =
             requirements.dangerously_allow_all_unix_sockets
         {
@@ -210,33 +237,48 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_all_unix_sockets =
                 Some(dangerously_allow_all_unix_sockets);
         }
-        if let Some(allowed_domains) = requirements.allowed_domains.clone() {
-            // Seed the managed allowlist when the user left the field
-            // unspecified. If the user configured an allowlist, keep that
-            // narrower value and enforce the managed list as a subset
-            // constraint during validation.
-            if user_network
-                .and_then(|network| network.allowed_domains.as_ref())
-                .is_none()
-            {
+        let managed_allowed_domains = if hard_deny_allowlist_misses {
+            Some(requirements.allowed_domains.clone().unwrap_or_default())
+        } else {
+            requirements.allowed_domains.clone()
+        };
+        if let Some(allowed_domains) = managed_allowed_domains {
+            if allowlist_expansion_enabled {
+                // Seed the managed allowlist when the user left the field
+                // unspecified. If the user configured an allowlist, keep that
+                // narrower value and enforce the managed list as a subset
+                // constraint during validation.
+                if user_network
+                    .and_then(|network| network.allowed_domains.as_ref())
+                    .is_none()
+                {
+                    config.network.allowed_domains = allowed_domains.clone();
+                }
+            } else {
                 config.network.allowed_domains = allowed_domains.clone();
-            }
+            };
             constraints.allowed_domains = Some(allowed_domains);
+            constraints.allowlist_expansion_enabled = Some(allowlist_expansion_enabled);
         }
         if let Some(denied_domains) = requirements.denied_domains.clone() {
-            // Managed denied domains are a floor. Preserve user-added entries,
-            // but ensure all managed entries are present.
-            for denied_domain in &denied_domains {
-                if !config
-                    .network
-                    .denied_domains
-                    .iter()
-                    .any(|existing| existing.eq_ignore_ascii_case(denied_domain))
-                {
-                    config.network.denied_domains.push(denied_domain.clone());
+            if denylist_expansion_enabled {
+                // Managed denied domains are a floor. Preserve user-added entries,
+                // but ensure all managed entries are present.
+                for denied_domain in &denied_domains {
+                    if !config
+                        .network
+                        .denied_domains
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(denied_domain))
+                    {
+                        config.network.denied_domains.push(denied_domain.clone());
+                    }
                 }
+            } else {
+                config.network.denied_domains = denied_domains.clone();
             }
             constraints.denied_domains = Some(denied_domains);
+            constraints.denylist_expansion_enabled = Some(denylist_expansion_enabled);
         }
         if let Some(allow_unix_sockets) = requirements.allow_unix_sockets.clone() {
             // Keep the user-configured socket allowlist if it is narrower.
@@ -253,273 +295,64 @@ impl NetworkProxySpec {
 
         (config, constraints)
     }
+
+    fn allowlist_expansion_enabled(
+        sandbox_policy: &SandboxPolicy,
+        hard_deny_allowlist_misses: bool,
+    ) -> bool {
+        matches!(
+            sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        ) && !hard_deny_allowlist_misses
+    }
+
+    fn managed_allowed_domains_only(requirements: &NetworkConstraints) -> bool {
+        requirements.managed_allowed_domains_only.unwrap_or(false)
+    }
+
+    fn denylist_expansion_enabled(sandbox_policy: &SandboxPolicy) -> bool {
+        matches!(
+            sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        )
+    }
+}
+
+fn apply_exec_policy_network_rules(config: &mut NetworkProxyConfig, exec_policy: &Policy) {
+    let (allowed_domains, denied_domains) = exec_policy.compiled_network_domains();
+    upsert_network_domains(
+        &mut config.network.allowed_domains,
+        &mut config.network.denied_domains,
+        allowed_domains,
+    );
+    upsert_network_domains(
+        &mut config.network.denied_domains,
+        &mut config.network.allowed_domains,
+        denied_domains,
+    );
+}
+
+fn upsert_network_domains(
+    target: &mut Vec<String>,
+    opposite: &mut Vec<String>,
+    hosts: Vec<String>,
+) {
+    let mut incoming = HashSet::new();
+    let mut deduped_hosts = Vec::new();
+    for host in hosts {
+        if incoming.insert(host.clone()) {
+            deduped_hosts.push(host);
+        }
+    }
+    if incoming.is_empty() {
+        return;
+    }
+
+    opposite.retain(|entry| !incoming.contains(&normalize_host(entry)));
+    target.retain(|entry| !incoming.contains(&normalize_host(entry)));
+    target.extend(deduped_hosts);
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_network_proxy::NetworkMode;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn build_state_with_audit_metadata_threads_metadata_to_state() {
-        let spec = NetworkProxySpec {
-            config: NetworkProxyConfig::default(),
-            constraints: NetworkProxyConstraints::default(),
-        };
-        let metadata = NetworkProxyAuditMetadata {
-            conversation_id: Some("conversation-1".to_string()),
-            app_version: Some("1.2.3".to_string()),
-            user_account_id: Some("acct-1".to_string()),
-            ..NetworkProxyAuditMetadata::default()
-        };
-
-        let state = spec
-            .build_state_with_audit_metadata(metadata.clone())
-            .expect("state should build");
-        assert_eq!(state.audit_metadata(), &metadata);
-    }
-
-    #[test]
-    fn managed_requirements_preserve_more_restrictive_user_network_settings() -> std::io::Result<()>
-    {
-        let mut user_config = NetworkProxyConfig::default();
-        user_config.network.enabled = false;
-        user_config.network.mode = NetworkMode::Limited;
-        user_config.network.allow_upstream_proxy = false;
-        user_config.network.dangerously_allow_non_loopback_proxy = false;
-        user_config.network.dangerously_allow_non_loopback_admin = false;
-        user_config.network.allowed_domains = vec!["api.openai.com".to_string()];
-        user_config.network.denied_domains =
-            vec!["tracker.com".to_string(), "evil.com".to_string()];
-        user_config.network.allow_unix_sockets = vec!["/tmp/a.sock".to_string()];
-        user_config.network.allow_local_binding = false;
-
-        let requirements = NetworkConstraints {
-            enabled: Some(true),
-            http_port: Some(43128),
-            socks_port: Some(43129),
-            allow_upstream_proxy: Some(true),
-            dangerously_allow_non_loopback_proxy: Some(true),
-            dangerously_allow_non_loopback_admin: Some(true),
-            dangerously_allow_all_unix_sockets: None,
-            allowed_domains: Some(vec!["*.openai.com".to_string()]),
-            denied_domains: Some(vec!["evil.com".to_string()]),
-            allow_unix_sockets: Some(vec!["/tmp/a.sock".to_string(), "/tmp/b.sock".to_string()]),
-            allow_local_binding: Some(true),
-        };
-
-        let user_network = crate::config::permissions::NetworkToml {
-            enabled: Some(false),
-            proxy_url: None,
-            admin_url: None,
-            enable_socks5: None,
-            socks_url: None,
-            enable_socks5_udp: None,
-            allow_upstream_proxy: Some(false),
-            dangerously_allow_non_loopback_proxy: Some(false),
-            dangerously_allow_non_loopback_admin: Some(false),
-            dangerously_allow_all_unix_sockets: None,
-            mode: Some(NetworkMode::Limited),
-            allowed_domains: Some(vec!["api.openai.com".to_string()]),
-            denied_domains: Some(vec!["tracker.com".to_string(), "evil.com".to_string()]),
-            allow_unix_sockets: Some(vec!["/tmp/a.sock".to_string()]),
-            allow_local_binding: Some(false),
-        };
-
-        let spec = NetworkProxySpec::from_config_and_constraints(
-            user_config,
-            Some(&user_network),
-            Some(requirements),
-        )?;
-
-        let mut expected_config = NetworkProxyConfig::default();
-        expected_config.network.enabled = false;
-        expected_config.network.proxy_url = "http://127.0.0.1:43128".to_string();
-        expected_config.network.mode = NetworkMode::Limited;
-        expected_config.network.allow_upstream_proxy = false;
-        expected_config.network.dangerously_allow_non_loopback_proxy = false;
-        expected_config.network.dangerously_allow_non_loopback_admin = false;
-        expected_config.network.enable_socks5 = true;
-        expected_config.network.socks_url = "http://127.0.0.1:43129".to_string();
-        expected_config.network.enable_socks5_udp = true;
-        expected_config.network.allowed_domains = vec!["api.openai.com".to_string()];
-        expected_config.network.denied_domains =
-            vec!["tracker.com".to_string(), "evil.com".to_string()];
-        expected_config.network.allow_unix_sockets = vec!["/tmp/a.sock".to_string()];
-        expected_config.network.allow_local_binding = false;
-
-        assert_eq!(spec.config, expected_config);
-        assert_eq!(
-            spec.constraints,
-            NetworkProxyConstraints {
-                enabled: Some(true),
-                mode: None,
-                allow_upstream_proxy: Some(true),
-                dangerously_allow_non_loopback_proxy: Some(true),
-                dangerously_allow_non_loopback_admin: Some(true),
-                dangerously_allow_all_unix_sockets: None,
-                allowed_domains: Some(vec!["*.openai.com".to_string()]),
-                denied_domains: Some(vec!["evil.com".to_string()]),
-                allow_unix_sockets: Some(vec![
-                    "/tmp/a.sock".to_string(),
-                    "/tmp/b.sock".to_string()
-                ]),
-                allow_local_binding: Some(true),
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn managed_requirements_clamp_and_union_user_network_settings() -> std::io::Result<()> {
-        let mut user_config = NetworkProxyConfig::default();
-        user_config.network.enabled = true;
-        user_config.network.mode = NetworkMode::Full;
-        user_config.network.allow_upstream_proxy = true;
-        user_config.network.dangerously_allow_non_loopback_proxy = true;
-        user_config.network.dangerously_allow_non_loopback_admin = true;
-        user_config.network.denied_domains = vec!["tracker.com".to_string()];
-        user_config.network.allow_local_binding = true;
-
-        let requirements = NetworkConstraints {
-            enabled: Some(false),
-            http_port: None,
-            socks_port: None,
-            allow_upstream_proxy: Some(false),
-            dangerously_allow_non_loopback_proxy: Some(false),
-            dangerously_allow_non_loopback_admin: Some(false),
-            dangerously_allow_all_unix_sockets: None,
-            allowed_domains: None,
-            denied_domains: Some(vec!["evil.com".to_string()]),
-            allow_unix_sockets: None,
-            allow_local_binding: Some(false),
-        };
-
-        let user_network = crate::config::permissions::NetworkToml {
-            enabled: Some(true),
-            proxy_url: None,
-            admin_url: None,
-            enable_socks5: None,
-            socks_url: None,
-            enable_socks5_udp: None,
-            allow_upstream_proxy: Some(true),
-            dangerously_allow_non_loopback_proxy: Some(true),
-            dangerously_allow_non_loopback_admin: Some(true),
-            dangerously_allow_all_unix_sockets: None,
-            mode: Some(NetworkMode::Full),
-            allowed_domains: None,
-            denied_domains: Some(vec!["tracker.com".to_string()]),
-            allow_unix_sockets: None,
-            allow_local_binding: Some(true),
-        };
-
-        let spec = NetworkProxySpec::from_config_and_constraints(
-            user_config,
-            Some(&user_network),
-            Some(requirements),
-        )?;
-
-        let mut expected_config = NetworkProxyConfig::default();
-        expected_config.network.enabled = false;
-        expected_config.network.mode = NetworkMode::Full;
-        expected_config.network.allow_upstream_proxy = false;
-        expected_config.network.dangerously_allow_non_loopback_proxy = false;
-        expected_config.network.dangerously_allow_non_loopback_admin = false;
-        expected_config.network.denied_domains =
-            vec!["tracker.com".to_string(), "evil.com".to_string()];
-        expected_config.network.allow_local_binding = false;
-
-        assert_eq!(spec.config, expected_config);
-        assert_eq!(
-            spec.constraints,
-            NetworkProxyConstraints {
-                enabled: Some(false),
-                mode: None,
-                allow_upstream_proxy: Some(false),
-                dangerously_allow_non_loopback_proxy: Some(false),
-                dangerously_allow_non_loopback_admin: Some(false),
-                dangerously_allow_all_unix_sockets: None,
-                allowed_domains: None,
-                denied_domains: Some(vec!["evil.com".to_string()]),
-                allow_unix_sockets: None,
-                allow_local_binding: Some(false),
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn managed_requirements_enable_proxy_when_user_omits_network_enabled() -> std::io::Result<()> {
-        let user_config = NetworkProxyConfig::default();
-        let requirements = NetworkConstraints {
-            enabled: Some(true),
-            http_port: None,
-            socks_port: None,
-            allow_upstream_proxy: None,
-            dangerously_allow_non_loopback_proxy: None,
-            dangerously_allow_non_loopback_admin: None,
-            dangerously_allow_all_unix_sockets: None,
-            allowed_domains: None,
-            denied_domains: None,
-            allow_unix_sockets: None,
-            allow_local_binding: None,
-        };
-
-        let spec =
-            NetworkProxySpec::from_config_and_constraints(user_config, None, Some(requirements))?;
-
-        let mut expected_config = NetworkProxyConfig::default();
-        expected_config.network.enabled = true;
-
-        assert_eq!(spec.config, expected_config);
-        assert_eq!(
-            spec.constraints,
-            NetworkProxyConstraints {
-                enabled: Some(true),
-                ..NetworkProxyConstraints::default()
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn managed_requirements_seed_allowlist_when_user_omits_it() -> std::io::Result<()> {
-        let user_config = NetworkProxyConfig::default();
-        let requirements = NetworkConstraints {
-            enabled: Some(true),
-            http_port: None,
-            socks_port: None,
-            allow_upstream_proxy: None,
-            dangerously_allow_non_loopback_proxy: None,
-            dangerously_allow_non_loopback_admin: None,
-            dangerously_allow_all_unix_sockets: None,
-            allowed_domains: Some(vec!["*.openai.com".to_string()]),
-            denied_domains: None,
-            allow_unix_sockets: None,
-            allow_local_binding: None,
-        };
-
-        let spec =
-            NetworkProxySpec::from_config_and_constraints(user_config, None, Some(requirements))?;
-
-        let mut expected_config = NetworkProxyConfig::default();
-        expected_config.network.enabled = true;
-        expected_config.network.allowed_domains = vec!["*.openai.com".to_string()];
-
-        assert_eq!(spec.config, expected_config);
-        assert_eq!(
-            spec.constraints,
-            NetworkProxyConstraints {
-                enabled: Some(true),
-                allowed_domains: Some(vec!["*.openai.com".to_string()]),
-                ..NetworkProxyConstraints::default()
-            }
-        );
-
-        Ok(())
-    }
-}
+#[path = "network_proxy_spec_tests.rs"]
+mod tests;

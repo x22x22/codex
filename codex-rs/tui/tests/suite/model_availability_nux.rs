@@ -112,6 +112,8 @@ trust_level = "trusted"
         "resume".to_string(),
         "--last".to_string(),
         "--no-alt-screen".to_string(),
+        "--disable".to_string(),
+        "tui_app_server".to_string(),
         "-C".to_string(),
         repo_root.display().to_string(),
         "-c".to_string(),
@@ -124,31 +126,42 @@ trust_level = "trusted"
         &repo_root,
         &env,
         &None,
+        codex_utils_pty::TerminalSize::default(),
     )
     .await?;
 
     let mut output = Vec::new();
-    let mut output_rx = spawned.output_rx;
-    let mut exit_rx = spawned.exit_rx;
-    let writer_tx = spawned.session.writer_sender();
+    let codex_utils_pty::SpawnedProcess {
+        session,
+        stdout_rx,
+        stderr_rx,
+        exit_rx,
+    } = spawned;
+    let mut output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
+    let mut exit_rx = exit_rx;
+    let writer_tx = session.writer_sender();
     let interrupt_writer = writer_tx.clone();
-    let interrupt_task = tokio::spawn(async move {
-        sleep(Duration::from_secs(2)).await;
-        for _ in 0..4 {
-            let _ = interrupt_writer.send(vec![3]).await;
-            sleep(Duration::from_millis(500)).await;
-        }
-    });
+    let mut startup_ready = false;
+    let mut answered_cursor_query = false;
 
     let exit_code_result = timeout(Duration::from_secs(15), async {
         loop {
             select! {
                 result = output_rx.recv() => match result {
                     Ok(chunk) => {
-                        if chunk.windows(4).any(|window| window == b"\x1b[6n") {
+                        let has_cursor_query = chunk.windows(4).any(|window| window == b"\x1b[6n");
+                        if has_cursor_query {
                             let _ = writer_tx.send(b"\x1b[1;1R".to_vec()).await;
+                            answered_cursor_query = true;
                         }
                         output.extend_from_slice(&chunk);
+                        if !startup_ready && answered_cursor_query && !has_cursor_query {
+                            startup_ready = true;
+                            for _ in 0..4 {
+                                let _ = interrupt_writer.send(vec![3]).await;
+                                sleep(Duration::from_millis(500)).await;
+                            }
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break exit_rx.await,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
@@ -159,20 +172,25 @@ trust_level = "trusted"
     })
     .await;
 
-    interrupt_task.abort();
-
     let exit_code = match exit_code_result {
         Ok(Ok(code)) => code,
         Ok(Err(err)) => return Err(err.into()),
         Err(_) => {
-            spawned.session.terminate();
+            session.terminate();
             anyhow::bail!("timed out waiting for codex resume to exit");
         }
     };
+    let output_text = String::from_utf8_lossy(&output);
+    let interrupt_only_output = {
+        let trimmed_output = output_text.trim();
+        !trimmed_output.is_empty()
+            && trimmed_output
+                .chars()
+                .all(|character| character == '^' || character == 'C' || character.is_whitespace())
+    };
     anyhow::ensure!(
-        exit_code == 0 || exit_code == 130,
-        "unexpected exit code from codex resume: {exit_code}; output: {}",
-        String::from_utf8_lossy(&output)
+        exit_code == 0 || exit_code == 130 || (exit_code == 1 && interrupt_only_output),
+        "unexpected exit code from codex resume: {exit_code}; output: {output_text}",
     );
 
     let config_contents = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
