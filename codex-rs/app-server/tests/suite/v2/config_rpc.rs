@@ -92,16 +92,15 @@ sandbox_mode = "workspace-write"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_read_includes_remote_control_config() -> Result<()> {
+async fn config_read_includes_chatgpt_base_url() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
         &codex_home,
         r#"
+chatgpt_base_url = "https://example.com/backend-api/"
+
 [features]
 remote_control = true
-
-[remote_control]
-base_url = "https://example.com/remote-control"
 "#,
     )?;
     write_chatgpt_auth(
@@ -132,13 +131,12 @@ base_url = "https://example.com/remote-control"
         layers,
     } = to_response(resp)?;
 
-    let remote_control = config.remote_control.expect("remote control config");
     assert_eq!(
-        remote_control.base_url,
-        "https://example.com/remote-control"
+        config.additional.get("chatgpt_base_url"),
+        Some(&json!("https://example.com/backend-api/"))
     );
     assert_eq!(
-        origins.get("remote_control.base_url").expect("origin").name,
+        origins.get("chatgpt_base_url").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }

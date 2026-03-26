@@ -11,8 +11,6 @@ use crate::config::types::MemoriesToml;
 use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
-use crate::config::types::RemoteControlConfig;
-use crate::config::types::RemoteControlConfigToml;
 use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::RequirementSource;
 use assert_matches::assert_matches;
@@ -4345,7 +4343,6 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             realtime: RealtimeConfig::default(),
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
-            remote_control: RemoteControlConfig::default(),
             base_instructions: None,
             developer_instructions: None,
             guardian_developer_instructions: None,
@@ -4489,7 +4486,6 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
-        remote_control: RemoteControlConfig::default(),
         base_instructions: None,
         developer_instructions: None,
         guardian_developer_instructions: None,
@@ -4631,7 +4627,6 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
-        remote_control: RemoteControlConfig::default(),
         base_instructions: None,
         developer_instructions: None,
         guardian_developer_instructions: None,
@@ -4759,7 +4754,6 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
-        remote_control: RemoteControlConfig::default(),
         base_instructions: None,
         developer_instructions: None,
         guardian_developer_instructions: None,
@@ -6079,70 +6073,6 @@ experimental_realtime_ws_startup_context = "startup context from config"
         config.experimental_realtime_ws_startup_context.as_deref(),
         Some("startup context from config")
     );
-    Ok(())
-}
-
-#[test]
-fn remote_control_config_loads_from_config_toml() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[features]
-remote_control = true
-
-[remote_control]
-base_url = "https://example.com/remote-control"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.remote_control,
-        Some(RemoteControlConfigToml {
-            base_url: "https://example.com/remote-control".to_string(),
-        })
-    );
-
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
-    )?;
-
-    assert_eq!(
-        config.remote_control,
-        RemoteControlConfig {
-            base_url: "https://example.com/remote-control".to_string(),
-        }
-    );
-    assert!(config.features.enabled(Feature::RemoteControl));
-    Ok(())
-}
-
-#[test]
-fn remote_control_config_uses_defaults() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[remote_control]
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.remote_control,
-        Some(RemoteControlConfigToml {
-            base_url: "https://chatgpt.com/backend-api/".to_string(),
-        })
-    );
-
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
-    )?;
-
-    assert_eq!(config.remote_control, RemoteControlConfig::default());
     Ok(())
 }
 

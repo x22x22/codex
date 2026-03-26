@@ -999,7 +999,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
         enroll_request.request_line,
-        "POST /backend-api/remote/control/server/enroll HTTP/1.1"
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
     );
     respond_with_json(enroll_request.stream, json!({ "server_id": "srv_e_test" })).await;
     let mut websocket = accept_remote_control_connection(&listener).await;
@@ -1254,7 +1254,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
         enroll_request.request_line,
-        "POST /backend-api/remote/control/server/enroll HTTP/1.1"
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
     );
     respond_with_json(enroll_request.stream, json!({ "server_id": "srv_e_test" })).await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
@@ -1330,7 +1330,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
         enroll_request.request_line,
-        "POST /backend-api/remote/control/server/enroll HTTP/1.1"
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
     );
     assert_eq!(
         enroll_request.headers.get("authorization"),
@@ -1535,7 +1535,7 @@ async fn enroll_remote_control_server_parse_failure_includes_response_body() {
     assert_eq!(
         err.to_string(),
         format!(
-            "failed to parse remote control enrollment response from `{enroll_url}`: HTTP 200 OK, body: {expected_body}, decode error: missing field `server_id` at line 1 column {}",
+            "failed to parse remote control enrollment response from `{enroll_url}`: HTTP 200 OK, headers: {{connection: close, content-length: 24, content-type: application/json}}, body: {expected_body}, decode error: missing field `server_id` at line 1 column {}",
             expected_body.len()
         )
     );
@@ -1665,7 +1665,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     let enroll_request = accept_http_request(&listener).await;
     assert_eq!(
         enroll_request.request_line,
-        "POST /backend-api/remote/control/server/enroll HTTP/1.1"
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
     );
     respond_with_json(
         enroll_request.stream,

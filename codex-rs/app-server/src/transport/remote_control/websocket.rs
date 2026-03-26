@@ -123,6 +123,7 @@ pub(super) async fn run_remote_control_websocket_loop(
                         continue;
                     }
                 };
+                info!("YOLO sending to codex backend: {payload}");
                 if websocket_writer
                     .send(tungstenite::Message::Text(payload.into()))
                     .await
@@ -145,6 +146,7 @@ pub(super) async fn run_remote_control_websocket_loop(
                                 continue;
                             }
                         };
+                        info!("YOLO sending to codex backend: {payload}");
                         if websocket_writer
                             .send(tungstenite::Message::Text(payload.into()))
                             .await

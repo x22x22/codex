@@ -30,7 +30,6 @@ pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
-pub const DEFAULT_REMOTE_CONTROL_BASE_URL: &str = "https://chatgpt.com/backend-api/";
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -484,49 +483,6 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .clamp(1, 48),
             extract_model: toml.extract_model,
             consolidation_model: toml.consolidation_model,
-        }
-    }
-}
-
-fn default_remote_control_base_url() -> String {
-    DEFAULT_REMOTE_CONTROL_BASE_URL.to_string()
-}
-
-/// Remote control settings loaded from config.toml.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct RemoteControlConfigToml {
-    /// Base URL for the remote control server.
-    #[serde(default = "default_remote_control_base_url")]
-    pub base_url: String,
-}
-
-impl Default for RemoteControlConfigToml {
-    fn default() -> Self {
-        Self {
-            base_url: default_remote_control_base_url(),
-        }
-    }
-}
-
-/// Effective remote control settings after defaults are applied.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteControlConfig {
-    pub base_url: String,
-}
-
-impl Default for RemoteControlConfig {
-    fn default() -> Self {
-        Self {
-            base_url: default_remote_control_base_url(),
-        }
-    }
-}
-
-impl From<RemoteControlConfigToml> for RemoteControlConfig {
-    fn from(toml: RemoteControlConfigToml) -> Self {
-        Self {
-            base_url: toml.base_url,
         }
     }
 }

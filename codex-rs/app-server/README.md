@@ -7,11 +7,10 @@ For remote-control-only deployments, use `codexd`. It runs the same app-server r
 Remote control is configured in `~/.codex/config.toml`:
 
 ```toml
+chatgpt_base_url = "https://chatgpt.com/backend-api/"
+
 [features]
 remote_control = true
-
-[remote_control]
-base_url = "https://chatgpt.com/backend-api/"
 ```
 
 ## Table of Contents

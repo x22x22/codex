@@ -590,11 +590,10 @@ pub async fn run_main_with_transport(
     );
     auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
 
-    let remote_control_config = config.remote_control.clone();
     if config.features.enabled(Feature::RemoteControl) {
         validate_remote_control_auth(auth_manager.as_ref()).await?;
         let accept_handle = start_remote_control(
-            remote_control_config.base_url,
+            config.chatgpt_base_url.clone(),
             state_db.clone(),
             auth_manager.clone(),
             transport_event_tx.clone(),

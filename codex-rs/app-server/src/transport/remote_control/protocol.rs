@@ -160,7 +160,7 @@ mod tests {
             RemoteControlTarget {
                 websocket_url: "ws://example.com/backend-api/wham/remote/control/server"
                     .to_string(),
-                enroll_url: "http://example.com/backend-api/remote/control/server/enroll"
+                enroll_url: "http://example.com/backend-api/wham/remote/control/server/enroll"
                     .to_string(),
             }
         );
@@ -170,7 +170,7 @@ mod tests {
             RemoteControlTarget {
                 websocket_url: "wss://example.com/backend-api/wham/remote/control/server"
                     .to_string(),
-                enroll_url: "https://example.com/backend-api/remote/control/server/enroll"
+                enroll_url: "https://example.com/backend-api/wham/remote/control/server/enroll"
                     .to_string(),
             }
         );
