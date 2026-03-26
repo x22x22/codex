@@ -546,6 +546,7 @@ impl MessageProcessor {
                 // shared thread when another connected client did not opt into
                 // experimental API). Proposed direction is instance-global first-write-wins
                 // with initialize-time mismatch rejection.
+                let analytics_initialize_params = params.clone();
                 let (experimental_api_enabled, opt_out_notification_methods) =
                     match params.capabilities {
                         Some(capabilities) => (
@@ -559,7 +560,6 @@ impl MessageProcessor {
                 session.experimental_api_enabled = experimental_api_enabled;
                 session.opted_out_notification_methods =
                     opt_out_notification_methods.into_iter().collect();
-                let analytics_initialize_params = params.clone();
                 let ClientInfo {
                     name,
                     title: _title,
