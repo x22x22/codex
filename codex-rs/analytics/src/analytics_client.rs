@@ -164,7 +164,7 @@ pub enum CustomAnalyticsFact {
     // This remains custom on this branch because app-server-protocol does not
     // yet expose a generic client response enum we can reduce over directly.
     ThreadInitialized(ThreadInitializeInput),
-    TurnStarted(TurnStartedInput),
+    TurnStarted(Box<TurnStartedInput>),
     TurnCompleted(TurnCompletedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
@@ -367,10 +367,10 @@ impl AnalyticsEventsClient {
 
     pub fn track_turn_started(&self, tracking: TrackEventsContext, turn_event: CodexTurnEvent) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnStarted(
-            TurnStartedInput {
+            Box::new(TurnStartedInput {
                 tracking,
                 turn_event,
-            },
+            }),
         )));
     }
 
@@ -609,7 +609,7 @@ impl AnalyticsReducer {
                     self.ingest_thread_initialized(input, out);
                 }
                 CustomAnalyticsFact::TurnStarted(input) => {
-                    self.ingest_turn_started(input);
+                    self.ingest_turn_started(*input);
                 }
                 CustomAnalyticsFact::TurnCompleted(input) => {
                     self.ingest_turn_completed(input, out);
