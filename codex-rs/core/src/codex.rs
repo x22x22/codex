@@ -4051,7 +4051,7 @@ impl Session {
         let active_turn_id = active_turn_id.clone();
         let tracking = build_track_events_context(
             task.turn_context.model_info.slug.clone(),
-            thread_id,
+            thread_id.clone(),
             task.turn_context.sub_id.clone(),
         );
 

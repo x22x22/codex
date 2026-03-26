@@ -245,6 +245,7 @@ struct ThreadState {
 
 struct TurnState {
     started_input: TurnStartedInput,
+    steer_count: usize,
 }
 
 #[derive(Clone)]
@@ -671,6 +672,7 @@ impl AnalyticsReducer {
             input.tracking.turn_id.clone(),
             TurnState {
                 started_input: input,
+                steer_count: 0,
             },
         );
     }
@@ -680,13 +682,18 @@ impl AnalyticsReducer {
         input: TurnCompletedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let Some(TurnState { started_input }) = self.turns.remove(&input.turn_id) else {
+        let Some(TurnState {
+            started_input,
+            steer_count,
+        }) = self.turns.remove(&input.turn_id)
+        else {
             return;
         };
         let TurnStartedInput {
             tracking,
-            turn_event,
+            mut turn_event,
         } = started_input;
+        turn_event.steer_count = Some(steer_count);
         out.push(TrackEventRequest::TurnEvent(Box::new(
             CodexTurnEventRequest {
                 event_type: "codex_turn_event",
@@ -700,6 +707,12 @@ impl AnalyticsReducer {
             tracking,
             turn_steer,
         } = input;
+        if matches!(turn_steer.result, TurnSteerResult::Accepted)
+            && let Some(accepted_turn_id) = turn_steer.accepted_turn_id.as_ref()
+            && let Some(turn_state) = self.turns.get_mut(accepted_turn_id)
+        {
+            turn_state.steer_count += 1;
+        }
         out.push(TrackEventRequest::TurnSteer(CodexTurnSteerEventRequest {
             event_type: "codex_turn_steer_event",
             event_params: codex_turn_steer_event_params(&tracking, turn_steer),
