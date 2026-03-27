@@ -2671,12 +2671,12 @@ impl CodexMessageProcessor {
         };
 
         let dependency_env = thread.dependency_env().await;
-        let contains = std::env::var(&key)
-            .ok()
-            .is_some_and(|value| !value.trim().is_empty())
-            || dependency_env
-                .get(&key)
-                .is_some_and(|value| !value.trim().is_empty());
+        let contains = match dependency_env.get(&key) {
+            Some(value) => !value.trim().is_empty(),
+            None => std::env::var(&key)
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty()),
+        };
         self.outgoing
             .send_response(request_id, ThreadEnvContainsResponse { contains })
             .await;
