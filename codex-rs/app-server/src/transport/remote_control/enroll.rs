@@ -196,7 +196,9 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
     use tempfile::TempDir;
+    use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncWriteExt;
+    use tokio::io::BufReader;
     use tokio::net::TcpListener;
     use tokio::net::TcpStream;
     use tokio::time::Duration;
@@ -360,10 +362,7 @@ mod tests {
         });
         let expected_body = response_body.to_string();
         let server_task = tokio::spawn(async move {
-            let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
-                .await
-                .expect("HTTP request should arrive in time")
-                .expect("listener accept should succeed");
+            let stream = accept_http_request(&listener).await;
             respond_with_json(stream, response_body).await;
         });
 
@@ -385,6 +384,32 @@ mod tests {
                 expected_body.len()
             )
         );
+    }
+
+    async fn accept_http_request(listener: &TcpListener) -> TcpStream {
+        let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("HTTP request should arrive in time")
+            .expect("listener accept should succeed");
+        let mut reader = BufReader::new(stream);
+
+        let mut request_line = String::new();
+        reader
+            .read_line(&mut request_line)
+            .await
+            .expect("request line should read");
+        loop {
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .await
+                .expect("header line should read");
+            if line == "\r\n" {
+                break;
+            }
+        }
+
+        reader.into_inner()
     }
 
     async fn respond_with_json(mut stream: TcpStream, body: serde_json::Value) {
