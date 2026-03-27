@@ -195,7 +195,6 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
-use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
@@ -961,12 +960,8 @@ impl CodexMessageProcessor {
     async fn login_v2(&mut self, request_id: ConnectionRequestId, params: LoginAccountParams) {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
-                self.login_api_key_v2(
-                    request_id,
-                    LoginApiKeyParams { api_key },
-                    self.config.cli_auth_credentials_store_mode,
-                )
-                .await;
+                self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
+                    .await;
             }
             LoginAccountParams::Chatgpt => {
                 self.login_chatgpt_v2(request_id).await;
@@ -999,7 +994,6 @@ impl CodexMessageProcessor {
     async fn login_api_key_common(
         &mut self,
         params: &LoginApiKeyParams,
-        store_mode: AuthCredentialsStoreMode,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         if self.auth_manager.is_external_auth_active() {
             return Err(self.external_auth_active_error());
@@ -1024,7 +1018,11 @@ impl CodexMessageProcessor {
             }
         }
 
-        match login_with_api_key(&self.config.codex_home, &params.api_key, store_mode) {
+        match login_with_api_key(
+            &self.config.codex_home,
+            &params.api_key,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
             Ok(()) => {
                 self.auth_manager.reload();
                 Ok(())
@@ -1041,9 +1039,8 @@ impl CodexMessageProcessor {
         &mut self,
         request_id: ConnectionRequestId,
         params: LoginApiKeyParams,
-        store_mode: AuthCredentialsStoreMode,
     ) {
-        match self.login_api_key_common(&params, store_mode).await {
+        match self.login_api_key_common(&params).await {
             Ok(()) => {
                 let response = codex_app_server_protocol::LoginAccountResponse::ApiKey {};
                 self.outgoing.send_response(request_id, response).await;

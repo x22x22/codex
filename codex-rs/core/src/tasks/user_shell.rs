@@ -15,6 +15,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::execute_exec_request;
+use crate::exec_env::apply_dependency_env;
 use crate::exec_env::create_env;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
@@ -130,15 +131,8 @@ pub(crate) async fn execute_user_shell_command(
         Some(session.conversation_id),
     );
     let dependency_env = session.dependency_env().await;
-    if !dependency_env.is_empty() {
-        env.extend(dependency_env.clone());
-    }
     let mut explicit_env_overrides = turn_context.shell_environment_policy.r#set.clone();
-    for key in dependency_env.keys() {
-        if let Some(value) = env.get(key) {
-            explicit_env_overrides.insert(key.clone(), value.clone());
-        }
-    }
+    apply_dependency_env(&mut env, &mut explicit_env_overrides, &dependency_env);
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
