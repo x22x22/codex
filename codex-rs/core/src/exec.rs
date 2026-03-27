@@ -108,7 +108,9 @@ pub(crate) struct WindowsRestrictedTokenFilesystemOverlay {
 ///
 /// Unlike the restricted-token path, elevated setup can provision explicit read
 /// and write roots up front, so we pass the exact split-policy roots and any
-/// extra deny-write carveouts into the setup/refresh path directly.
+/// extra deny-write carveouts into the setup/refresh path directly. Read-root
+/// overrides are layered on top of the baseline helper/platform roots from
+/// `gather_read_roots()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowsElevatedFilesystemOverrides {
     pub(crate) read_roots_override: Option<Vec<PathBuf>>,
