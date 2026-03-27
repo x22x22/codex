@@ -15,7 +15,6 @@ pub use analytics_client::PluginStateChangedInput;
 pub use analytics_client::PluginUsedInput;
 pub use analytics_client::SkillInvocation;
 pub use analytics_client::SkillInvokedInput;
-pub use analytics_client::ThreadInitializedInput;
 pub use analytics_client::TrackEventsContext;
 pub use analytics_client::TurnCompletedInput;
 pub use analytics_client::TurnStartedInput;

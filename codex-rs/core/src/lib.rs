@@ -136,8 +136,6 @@ pub use auth::CodexAuth;
 pub use codex_analytics::AnalyticsEventsClient;
 pub use codex_analytics::AnalyticsFact;
 pub use codex_analytics::CustomAnalyticsFact;
-pub use codex_analytics::InitializationMode;
-pub use codex_analytics::ThreadInitializedInput;
 mod default_client_forwarding;
 
 /// Default Codex HTTP client headers and reqwest construction.
