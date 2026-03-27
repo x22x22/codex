@@ -223,6 +223,7 @@ pub fn augment_tool_definition(mut definition: ToolDefinition) -> ToolDefinition
     definition
 }
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn enabled_tool_metadata(definition: &ToolDefinition) -> EnabledToolMetadata {
     EnabledToolMetadata {
         tool_name: definition.name.clone(),
@@ -232,6 +233,7 @@ pub fn enabled_tool_metadata(definition: &ToolDefinition) -> EnabledToolMetadata
     }
 }
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct EnabledToolMetadata {
     pub tool_name: String,

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
-use tempfile::Builder;
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 #[derive(Debug, Clone)]
 pub enum PasteImageError {
     ClipboardUnavailable(String),
@@ -48,6 +48,7 @@ pub struct PastedImageInfo {
 
 /// Capture image from system clipboard, encode to PNG, and return bytes + info.
 #[cfg(not(target_os = "android"))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     let _span = tracing::debug_span!("paste_image_as_png").entered();
     tracing::debug!("attempting clipboard image read");
@@ -110,6 +111,7 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
 
 /// Android/Termux does not support arboard; return a clear error.
 #[cfg(target_os = "android")]
+#[allow(dead_code)]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     Err(PasteImageError::ClipboardUnavailable(
         "clipboard image paste is unsupported on Android".into(),
@@ -123,7 +125,7 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
     match paste_image_as_png() {
         Ok((png, info)) => {
             // Create a unique temporary file with a .png suffix to avoid collisions.
-            let tmp = Builder::new()
+            let tmp = tempfile::Builder::new()
                 .prefix("codex-clipboard-")
                 .suffix(".png")
                 .tempfile()
