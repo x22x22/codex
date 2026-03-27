@@ -766,7 +766,7 @@ fn build_payload_roots(
     overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let write_roots = if let Some(roots) = overrides.write_roots.as_deref() {
-        canonical_existing(&roots)
+        canonical_existing(roots)
     } else {
         gather_write_roots(
             request.policy,
@@ -778,7 +778,7 @@ fn build_payload_roots(
     let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
     let mut read_roots = gather_read_roots(request.command_cwd, request.policy, request.codex_home);
     if let Some(roots) = overrides.read_roots.as_deref() {
-        read_roots.extend(canonical_existing(&roots));
+        read_roots.extend(canonical_existing(roots));
     }
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
