@@ -76,6 +76,8 @@ use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
@@ -2780,15 +2782,41 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    #[cfg(test)]
-    fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
-        let mut status = self.mcp_startup_status.take().unwrap_or_default();
-        if let McpStartupStatus::Failed { error } = &ev.status {
+    fn update_mcp_startup_status(
+        &mut self,
+        server: String,
+        status: McpStartupStatus,
+        complete_when_settled: bool,
+    ) {
+        let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
+        if let McpStartupStatus::Failed { error } = &status {
             self.on_warning(error);
         }
-        status.insert(ev.server, ev.status);
-        self.mcp_startup_status = Some(status);
+        startup_status.insert(server, status);
+        self.mcp_startup_status = Some(startup_status);
         self.update_task_running_state();
+        if complete_when_settled
+            && let Some(current) = &self.mcp_startup_status
+            && !current.is_empty()
+            && current
+                .values()
+                .all(|state| !matches!(state, McpStartupStatus::Starting))
+        {
+            let mut failed = Vec::new();
+            let mut cancelled = Vec::new();
+            for (name, state) in current {
+                match state {
+                    McpStartupStatus::Ready => {}
+                    McpStartupStatus::Failed { .. } => failed.push(name.clone()),
+                    McpStartupStatus::Cancelled => cancelled.push(name.clone()),
+                    McpStartupStatus::Starting => {}
+                }
+            }
+            failed.sort();
+            cancelled.sort();
+            self.finish_mcp_startup(failed, cancelled);
+            return;
+        }
         if let Some(current) = &self.mcp_startup_status {
             let total = current.len();
             let mut starting: Vec<_> = current
@@ -2828,17 +2856,20 @@ impl ChatWidget {
     }
 
     #[cfg(test)]
-    fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
-        let mut parts = Vec::new();
-        if !ev.failed.is_empty() {
-            let failed_servers: Vec<_> = ev.failed.iter().map(|f| f.server.clone()).collect();
-            parts.push(format!("failed: {}", failed_servers.join(", ")));
-        }
-        if !ev.cancelled.is_empty() {
+    fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
+        self.update_mcp_startup_status(ev.server, ev.status, /*complete_when_settled*/ false);
+    }
+
+    fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
+        if !cancelled.is_empty() {
             self.on_warning(format!(
                 "MCP startup interrupted. The following servers were not initialized: {}",
-                ev.cancelled.join(", ")
+                cancelled.join(", ")
             ));
+        }
+        let mut parts = Vec::new();
+        if !failed.is_empty() {
+            parts.push(format!("failed: {}", failed.join(", ")));
         }
         if !parts.is_empty() {
             self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
@@ -2848,6 +2879,30 @@ impl ChatWidget {
         self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
+    }
+
+    #[cfg(test)]
+    fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
+        let failed = ev.failed.into_iter().map(|f| f.server).collect();
+        self.finish_mcp_startup(failed, ev.cancelled);
+    }
+
+    fn on_mcp_server_status_updated(&mut self, notification: McpServerStatusUpdatedNotification) {
+        let status = match notification.status {
+            McpServerStartupState::Starting => McpStartupStatus::Starting,
+            McpServerStartupState::Ready => McpStartupStatus::Ready,
+            McpServerStartupState::Failed => McpStartupStatus::Failed {
+                error: notification.error.unwrap_or_else(|| {
+                    format!("MCP client for `{}` failed to start", notification.name)
+                }),
+            },
+            McpServerStartupState::Cancelled => McpStartupStatus::Cancelled,
+        };
+        self.update_mcp_startup_status(
+            notification.name,
+            status,
+            /*complete_when_settled*/ true,
+        );
     }
 
     /// Handle a turn aborted due to user interrupt (Esc).
@@ -6318,6 +6373,9 @@ impl ChatWidget {
                     .map(|details| format!("{}: {details}", notification.summary))
                     .unwrap_or(notification.summary),
             ),
+            ServerNotification::McpServerStatusUpdated(notification) => {
+                self.on_mcp_server_status_updated(notification)
+            }
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
                 self.on_guardian_review_notification(
                     notification.target_item_id,
@@ -6401,7 +6459,6 @@ impl ChatWidget {
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
             | ServerNotification::McpToolCallProgress(_)
-            | ServerNotification::McpServerStatusUpdated(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::FsChanged(_)

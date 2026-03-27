@@ -50,6 +50,8 @@ use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::MarketplaceInterface;
+use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::PatchApplyStatus as AppServerPatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::PluginAuthPolicy;
@@ -11516,6 +11518,92 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
 
     assert!(chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_indicator_visible());
+}
+
+#[tokio::test]
+async fn app_server_mcp_startup_failure_renders_warning_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+
+    for notification in [
+        McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        },
+        McpServerStatusUpdatedNotification {
+            name: "beta".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        },
+    ] {
+        chat.handle_server_notification(
+            ServerNotification::McpServerStatusUpdated(notification),
+            None,
+        );
+    }
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Failed,
+            error: Some("MCP client for `alpha` failed to start: handshake failed".to_string()),
+        }),
+        None,
+    );
+
+    let failure_cells = drain_insert_history(&mut rx);
+    let failure_text = failure_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(failure_text.contains("MCP client for `alpha` failed to start: handshake failed"));
+    assert!(!failure_text.contains("MCP startup incomplete"));
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "beta".to_string(),
+            status: McpServerStartupState::Ready,
+            error: None,
+        }),
+        None,
+    );
+
+    let summary_cells = drain_insert_history(&mut rx);
+    let summary_text = summary_cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_eq!(summary_text, "⚠ MCP startup incomplete (failed: alpha)\n");
+    assert!(!chat.bottom_pane.is_task_running());
+
+    let width: u16 = 120;
+    let ui_height: u16 = chat.desired_height(width);
+    let vt_height: u16 = 10;
+    let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
+
+    let backend = VT100Backend::new(width, vt_height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(viewport);
+
+    for lines in failure_cells.into_iter().chain(summary_cells) {
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
+    }
+
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .expect("draw MCP startup warning history");
+
+    assert_snapshot!(
+        "app_server_mcp_startup_failure_renders_warning_history",
+        term.backend().vt100().screen().contents()
+    );
 }
 
 #[tokio::test]
