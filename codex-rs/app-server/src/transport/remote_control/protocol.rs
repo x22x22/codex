@@ -99,18 +99,22 @@ pub(super) fn normalize_remote_control_url(
         io::Error::new(
             ErrorKind::InvalidInput,
             format!(
-                "invalid remote control URL `{remote_control_url}`; expected absolute HTTPS URL"
+                "invalid remote control URL `{remote_control_url}`; expected HTTPS URL for chatgpt.com or chatgpt-staging.com, or HTTP/HTTPS URL for localhost"
             ),
         )
     };
 
     let mut remote_control_url = Url::parse(remote_control_url).map_err(map_url_parse_error)?;
+    let host = remote_control_url.host_str();
+    let is_localhost = host == Some("localhost");
+    let is_allowed_chatgpt_host = host.is_some_and(|host| {
+        matches!(host, "chatgpt.com" | "chatgpt-staging.com")
+            || host.ends_with(".chatgpt.com")
+            || host.ends_with(".chatgpt-staging.com")
+    });
     match remote_control_url.scheme() {
-        "https" => {}
-        "http"
-            if remote_control_url
-                .host_str()
-                .is_some_and(|host| host.eq_ignore_ascii_case("localhost")) => {}
+        "https" if is_localhost || is_allowed_chatgpt_host => {}
+        "http" if is_localhost => {}
         _ => return Err(map_scheme_error(())),
     }
     if !remote_control_url.path().ends_with('/') {
@@ -148,21 +152,33 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn normalize_remote_control_url_accepts_https_urls() {
+    fn normalize_remote_control_url_accepts_chatgpt_https_urls() {
         assert_eq!(
-            normalize_remote_control_url("https://example.com/backend-api")
-                .expect("https URL should normalize"),
+            normalize_remote_control_url("https://chatgpt.com/backend-api")
+                .expect("chatgpt.com URL should normalize"),
             RemoteControlTarget {
-                websocket_url: "wss://example.com/backend-api/wham/remote/control/server"
+                websocket_url: "wss://chatgpt.com/backend-api/wham/remote/control/server"
                     .to_string(),
-                enroll_url: "https://example.com/backend-api/wham/remote/control/server/enroll"
+                enroll_url: "https://chatgpt.com/backend-api/wham/remote/control/server/enroll"
                     .to_string(),
+            }
+        );
+        assert_eq!(
+            normalize_remote_control_url("https://api.chatgpt-staging.com/backend-api")
+                .expect("chatgpt-staging.com subdomain URL should normalize"),
+            RemoteControlTarget {
+                websocket_url:
+                    "wss://api.chatgpt-staging.com/backend-api/wham/remote/control/server"
+                        .to_string(),
+                enroll_url:
+                    "https://api.chatgpt-staging.com/backend-api/wham/remote/control/server/enroll"
+                        .to_string(),
             }
         );
     }
 
     #[test]
-    fn normalize_remote_control_url_accepts_localhost_http_urls() {
+    fn normalize_remote_control_url_accepts_localhost_urls() {
         assert_eq!(
             normalize_remote_control_url("http://localhost:8080/backend-api")
                 .expect("localhost http URL should normalize"),
@@ -173,17 +189,38 @@ mod tests {
                     .to_string(),
             }
         );
+        assert_eq!(
+            normalize_remote_control_url("https://localhost:8443/backend-api")
+                .expect("localhost https URL should normalize"),
+            RemoteControlTarget {
+                websocket_url: "wss://localhost:8443/backend-api/wham/remote/control/server"
+                    .to_string(),
+                enroll_url: "https://localhost:8443/backend-api/wham/remote/control/server/enroll"
+                    .to_string(),
+            }
+        );
     }
 
     #[test]
-    fn normalize_remote_control_url_rejects_non_localhost_http_urls() {
-        let err = normalize_remote_control_url("http://example.com/backend-api")
-            .expect_err("non-localhost http URL should be rejected");
+    fn normalize_remote_control_url_rejects_unsupported_urls() {
+        for remote_control_url in [
+            "http://chatgpt.com/backend-api",
+            "http://example.com/backend-api",
+            "https://example.com/backend-api",
+            "https://chatgpt.com.evil.com/backend-api",
+            "https://evilchatgpt.com/backend-api",
+            "https://foo.localhost/backend-api",
+        ] {
+            let err = normalize_remote_control_url(remote_control_url)
+                .expect_err("unsupported URL should be rejected");
 
-        assert_eq!(err.kind(), ErrorKind::InvalidInput);
-        assert_eq!(
-            err.to_string(),
-            "invalid remote control URL `http://example.com/backend-api`; expected absolute HTTPS URL"
-        );
+            assert_eq!(err.kind(), ErrorKind::InvalidInput);
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "invalid remote control URL `{remote_control_url}`; expected HTTPS URL for chatgpt.com or chatgpt-staging.com, or HTTP/HTTPS URL for localhost"
+                )
+            );
+        }
     }
 }
