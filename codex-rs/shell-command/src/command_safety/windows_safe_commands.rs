@@ -340,6 +340,13 @@ mod tests {
         args.iter().map(ToString::to_string).collect()
     }
 
+    fn assert_unsafe_parsed_command(words: &[&str]) {
+        assert!(
+            !is_safe_powershell_command(&vec_str(words)),
+            "expected parsed command {words:?} to require approval",
+        );
+    }
+
     #[test]
     fn recognizes_safe_powershell_wrappers() {
         assert!(is_safe_command_windows(&vec_str(&[
@@ -441,136 +448,69 @@ mod tests {
 
     #[test]
     fn rejects_git_global_override_options() {
-        let Some(pwsh) = try_find_pwsh_executable_blocking() else {
-            return;
-        };
-
-        let pwsh: String = pwsh.as_path().to_str().unwrap().into();
-        for script in [
-            "git -c core.pager=cat show HEAD:foo.rs",
-            "git --config-env core.pager=PAGER show HEAD:foo.rs",
-            "git --config-env=core.pager=PAGER show HEAD:foo.rs",
-            "git --git-dir .evil-git diff HEAD~1..HEAD",
-            "git --git-dir=.evil-git diff HEAD~1..HEAD",
-            "git --work-tree . status",
-            "git --work-tree=. status",
-            "git --exec-path .git/helpers show HEAD:foo.rs",
-            "git --exec-path=.git/helpers show HEAD:foo.rs",
-            "git --namespace attacker show HEAD:foo.rs",
-            "git --namespace=attacker show HEAD:foo.rs",
-            "git --super-prefix attacker/ show HEAD:foo.rs",
-            "git --super-prefix=attacker/ show HEAD:foo.rs",
+        for words in [
+            &["git", "-c", "core.pager=cat", "show", "HEAD:foo.rs"][..],
+            &[
+                "git",
+                "--config-env",
+                "core.pager=PAGER",
+                "show",
+                "HEAD:foo.rs",
+            ][..],
+            &[
+                "git",
+                "--config-env=core.pager=PAGER",
+                "show",
+                "HEAD:foo.rs",
+            ][..],
+            &["git", "--git-dir", ".evil-git", "diff", "HEAD~1..HEAD"][..],
+            &["git", "--git-dir=.evil-git", "diff", "HEAD~1..HEAD"][..],
+            &["git", "--work-tree", ".", "status"][..],
+            &["git", "--work-tree=.", "status"][..],
+            &["git", "--exec-path", ".git/helpers", "show", "HEAD:foo.rs"][..],
+            &["git", "--exec-path=.git/helpers", "show", "HEAD:foo.rs"][..],
+            &["git", "--namespace", "attacker", "show", "HEAD:foo.rs"][..],
+            &["git", "--namespace=attacker", "show", "HEAD:foo.rs"][..],
+            &["git", "--super-prefix", "attacker/", "show", "HEAD:foo.rs"][..],
+            &["git", "--super-prefix=attacker/", "show", "HEAD:foo.rs"][..],
         ] {
-            assert!(
-                !is_safe_command_windows(&[
-                    pwsh.clone(),
-                    "-NoLogo".to_string(),
-                    "-NoProfile".to_string(),
-                    "-Command".to_string(),
-                    script.to_string(),
-                ]),
-                "expected {script:?} to require approval due to unsafe git global option",
-            );
+            assert_unsafe_parsed_command(words);
         }
     }
 
     #[test]
-    fn rejects_powershell_commands_with_side_effects() {
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-NoLogo",
-            "-Command",
-            "Remove-Item foo.txt",
-        ])));
+    fn rejects_parsed_powershell_commands_with_side_effects() {
+        for words in [
+            &["Remove-Item", "foo.txt"][..],
+            &["rg", "--pre", "cat"][..],
+            &["Set-Content", "foo.txt", "hello"][..],
+            &["Out-File", "y"][..],
+            &["Write-Output", "(Set-Content", "foo6.txt", "abc)"][..],
+            &["Write-Host", "(Remove-Item", "foo.txt)"][..],
+            &["Get-Content", "(New-Item", "bar.txt)"][..],
+        ] {
+            assert_unsafe_parsed_command(words);
+        }
+    }
 
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-NoProfile",
-            "-Command",
-            "rg --pre cat",
-        ])));
-
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
-            "Set-Content foo.txt 'hello'",
-        ])));
-
-        // Redirections are blocked
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
+    #[test]
+    fn rejects_parser_only_powershell_side_effect_patterns() {
+        for script in [
             "echo hi > out.txt",
-        ])));
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
             "Get-Content x | Out-File y",
-        ])));
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
             "Write-Output foo 2> err.txt",
-        ])));
-
-        // Call operator is blocked
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
             "& Remove-Item foo",
-        ])));
-
-        // Chained safe + unsafe must fail
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
             "Get-ChildItem; Remove-Item foo",
-        ])));
-        // Nested unsafe cmdlet inside safe command must fail
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
-            "Write-Output (Set-Content foo6.txt 'abc')",
-        ])));
-        // Additional nested unsafe cmdlet examples must fail
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
-            "Write-Host (Remove-Item foo.txt)",
-        ])));
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
-            "Get-Content (New-Item bar.txt)",
-        ])));
-
-        // Unsafe @ expansion.
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
-            "ls @(calc.exe)"
-        ])));
-
-        // Unsupported constructs that the AST parser refuses (no fallback to manual splitting).
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
-            "ls && pwd"
-        ])));
-
-        // Sub-expressions are rejected even if they contain otherwise safe commands.
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
-            "Write-Output $(Get-Content foo)"
-        ])));
-
-        // Empty words from the parser (e.g. '') are rejected.
-        assert!(!is_safe_command_windows(&vec_str(&[
-            "powershell.exe",
-            "-Command",
-            "''"
-        ])));
+            "ls @(calc.exe)",
+            "ls && pwd",
+            "Write-Output $(Get-Content foo)",
+            "''",
+        ] {
+            assert!(
+                !is_safe_command_windows(&vec_str(&["powershell.exe", "-Command", script,])),
+                "expected {script:?} to require approval",
+            );
+        }
     }
 
     #[test]
