@@ -2502,21 +2502,6 @@
       ],
       "type": "object"
     },
-    "ThreadDependencyEnvContainsParams": {
-      "properties": {
-        "key": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "threadId"
-      ],
-      "type": "object"
-    },
     "ThreadDependencyEnvSetParams": {
       "properties": {
         "threadId": {
@@ -2532,6 +2517,21 @@
       "required": [
         "threadId",
         "values"
+      ],
+      "type": "object"
+    },
+    "ThreadEnvContainsParams": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "threadId"
       ],
       "type": "object"
     },
@@ -3653,13 +3653,13 @@
         },
         "method": {
           "enum": [
-            "thread/dependencyEnv/contains"
+            "thread/env/contains"
           ],
-          "title": "Thread/dependencyEnv/containsRequestMethod",
+          "title": "Thread/env/containsRequestMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ThreadDependencyEnvContainsParams"
+          "$ref": "#/definitions/ThreadEnvContainsParams"
         }
       },
       "required": [
@@ -3667,7 +3667,7 @@
         "method",
         "params"
       ],
-      "title": "Thread/dependencyEnv/containsRequest",
+      "title": "Thread/env/containsRequest",
       "type": "object"
     },
     {

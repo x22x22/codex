@@ -12,6 +12,6 @@
     "key",
     "threadId"
   ],
-  "title": "ThreadDependencyEnvContainsParams",
+  "title": "ThreadEnvContainsParams",
   "type": "object"
 }

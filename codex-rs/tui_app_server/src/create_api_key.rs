@@ -3,11 +3,10 @@ use std::collections::HashMap;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadDependencyEnvContainsParams;
-use codex_app_server_protocol::ThreadDependencyEnvContainsResponse;
 use codex_app_server_protocol::ThreadDependencyEnvSetParams;
 use codex_app_server_protocol::ThreadDependencyEnvSetResponse;
-use codex_core::auth::read_openai_api_key_from_env;
+use codex_app_server_protocol::ThreadEnvContainsParams;
+use codex_app_server_protocol::ThreadEnvContainsResponse;
 use codex_login::CreatedApiKey;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::PendingCreateApiKey;
@@ -70,19 +69,15 @@ async fn is_openai_api_key_set_in_session(
     thread_id: ThreadId,
     request_handle: &AppServerRequestHandle,
 ) -> Result<bool, String> {
-    if read_openai_api_key_from_env().is_some() {
-        return Ok(true);
-    }
-
-    let request = ClientRequest::ThreadDependencyEnvContains {
+    let request = ClientRequest::ThreadEnvContains {
         request_id: create_api_key_request_id(),
-        params: ThreadDependencyEnvContainsParams {
+        params: ThreadEnvContainsParams {
             thread_id: thread_id.to_string(),
             key: OPENAI_API_KEY_ENV_VAR.to_string(),
         },
     };
     let response = request_handle
-        .request_typed::<ThreadDependencyEnvContainsResponse>(request)
+        .request_typed::<ThreadEnvContainsResponse>(request)
         .await
         .map_err(|err| err.to_string())?;
 

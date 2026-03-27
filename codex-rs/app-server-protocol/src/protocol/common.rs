@@ -249,9 +249,9 @@ client_request_definitions! {
         params: v2::ThreadDependencyEnvSetParams,
         response: v2::ThreadDependencyEnvSetResponse,
     },
-    ThreadDependencyEnvContains => "thread/dependencyEnv/contains" {
-        params: v2::ThreadDependencyEnvContainsParams,
-        response: v2::ThreadDependencyEnvContainsResponse,
+    ThreadEnvContains => "thread/env/contains" {
+        params: v2::ThreadEnvContainsParams,
+        response: v2::ThreadEnvContainsResponse,
     },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
