@@ -1,4 +1,5 @@
 use anyhow::Result;
+use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_exec_command_sse_response;
@@ -9,6 +10,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::ByteRange;
@@ -247,7 +249,11 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
     enable_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
