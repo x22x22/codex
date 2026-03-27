@@ -106,7 +106,7 @@ struct WebsocketState {
     next_seq_id: u64,
 }
 
-struct RemoteControlWebsocket {
+pub(crate) struct RemoteControlWebsocket {
     remote_control_target: RemoteControlTarget,
     state_db: Option<Arc<StateRuntime>>,
     auth_manager: Arc<AuthManager>,
@@ -121,13 +121,14 @@ struct RemoteControlWebsocket {
 }
 
 impl RemoteControlWebsocket {
-    fn new(
+    pub(crate) fn new(
         remote_control_target: RemoteControlTarget,
         state_db: Option<Arc<StateRuntime>>,
         auth_manager: Arc<AuthManager>,
         transport_event_tx: mpsc::Sender<TransportEvent>,
         shutdown_token: CancellationToken,
     ) -> Self {
+        let shutdown_token = shutdown_token.child_token();
         let (server_event_tx, server_event_rx) = mpsc::channel(super::CHANNEL_CAPACITY);
         let client_tracker =
             ClientTracker::new(server_event_tx, transport_event_tx, &shutdown_token);
@@ -153,7 +154,7 @@ impl RemoteControlWebsocket {
         }
     }
 
-    async fn run(mut self) {
+    pub(crate) async fn run(mut self) {
         loop {
             let shutdown_token = self.shutdown_token.child_token();
             let websocket_connection = match self.connect(&shutdown_token).await {
@@ -467,24 +468,6 @@ impl RemoteControlWebsocket {
             }
         }
     }
-}
-
-pub(super) async fn run_remote_control_websocket_loop(
-    remote_control_target: RemoteControlTarget,
-    state_db: Option<Arc<StateRuntime>>,
-    auth_manager: Arc<AuthManager>,
-    transport_event_tx: mpsc::Sender<TransportEvent>,
-    shutdown_token: CancellationToken,
-) {
-    RemoteControlWebsocket::new(
-        remote_control_target,
-        state_db,
-        auth_manager,
-        transport_event_tx,
-        shutdown_token,
-    )
-    .run()
-    .await;
 }
 
 fn remote_control_message_starts_connection(event: &ClientEvent) -> bool {
@@ -1023,13 +1006,20 @@ mod tests {
         let (transport_event_tx, transport_event_rx) = mpsc::channel(1);
         drop(transport_event_rx);
         let shutdown_token = CancellationToken::new();
-        let websocket_task = tokio::spawn(run_remote_control_websocket_loop(
-            remote_control_target,
-            None,
-            remote_control_auth_manager(),
-            transport_event_tx,
-            shutdown_token.clone(),
-        ));
+        let websocket_task = tokio::spawn({
+            let shutdown_token = shutdown_token.clone();
+            async move {
+                RemoteControlWebsocket::new(
+                    remote_control_target,
+                    None,
+                    remote_control_auth_manager(),
+                    transport_event_tx,
+                    shutdown_token,
+                )
+                .run()
+                .await
+            }
+        });
 
         tokio::time::sleep(Duration::from_millis(50)).await;
         shutdown_token.cancel();

@@ -3,12 +3,12 @@ mod enroll;
 mod protocol;
 mod websocket;
 
+use crate::transport::remote_control::websocket::RemoteControlWebsocket;
 use crate::transport::remote_control::websocket::load_remote_control_auth;
 
 pub use self::protocol::ClientId;
 use self::protocol::ServerEvent;
 use self::protocol::normalize_remote_control_url;
-use self::websocket::run_remote_control_websocket_loop;
 use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::next_connection_id;
@@ -38,13 +38,14 @@ pub(crate) async fn start_remote_control(
     validate_remote_control_auth(&auth_manager).await?;
 
     Ok(tokio::spawn(async move {
-        run_remote_control_websocket_loop(
+        RemoteControlWebsocket::new(
             remote_control_target,
             state_db,
             auth_manager,
             transport_event_tx,
-            shutdown_token.child_token(),
+            shutdown_token,
         )
+        .run()
         .await;
     }))
 }
