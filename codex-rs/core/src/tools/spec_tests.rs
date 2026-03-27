@@ -1,4 +1,3 @@
-use crate::client_common::tools::FreeformTool;
 use crate::config::test_config;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::model_info::with_config_overrides;
@@ -8,11 +7,14 @@ use crate::tools::ToolRouter;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
-use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_tools::AdditionalProperties;
+use codex_tools::FreeformTool;
+use codex_tools::ResponsesApiWebSearchFilters;
+use codex_tools::ResponsesApiWebSearchUserLocation;
+use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -65,28 +67,6 @@ fn search_capable_model_info() -> ModelInfo {
 }
 
 #[test]
-fn search_tool_deferred_tools_always_set_defer_loading_true() {
-    let tool = mcp_tool(
-        "lookup_order",
-        "Look up an order",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "order_id": {"type": "string"}
-            },
-            "required": ["order_id"],
-            "additionalProperties": false,
-        }),
-    );
-
-    let openai_tool =
-        mcp_tool_to_deferred_openai_tool("mcp__codex_apps__lookup_order".to_string(), tool)
-            .expect("convert deferred tool");
-
-    assert_eq!(openai_tool.defer_loading, Some(true));
-}
-
-#[test]
 fn deferred_responses_api_tool_serializes_with_defer_loading() {
     let tool = mcp_tool(
         "lookup_order",
@@ -102,7 +82,7 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
     );
 
     let serialized = serde_json::to_value(ToolSpec::Function(
-        mcp_tool_to_deferred_openai_tool("mcp__codex_apps__lookup_order".to_string(), tool)
+        mcp_tool_to_deferred_responses_api_tool("mcp__codex_apps__lookup_order".to_string(), &tool)
             .expect("convert deferred tool"),
     ))
     .expect("serialize deferred tool");
@@ -127,53 +107,8 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
     );
 }
 
-#[test]
-fn dynamic_tool_preserves_defer_loading() {
-    let tool = DynamicToolSpec {
-        name: "lookup_order".to_string(),
-        description: "Look up an order".to_string(),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "order_id": {"type": "string"}
-            },
-            "required": ["order_id"],
-            "additionalProperties": false,
-        }),
-        defer_loading: true,
-    };
-
-    let openai_tool = dynamic_tool_to_openai_tool(&tool).expect("convert dynamic tool");
-
-    assert_eq!(
-        openai_tool,
-        ResponsesApiTool {
-            name: "lookup_order".to_string(),
-            description: "Look up an order".to_string(),
-            strict: false,
-            defer_loading: Some(true),
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::from([(
-                    "order_id".to_string(),
-                    JsonSchema::String { description: None },
-                )]),
-                required: Some(vec!["order_id".to_string()]),
-                additional_properties: Some(false.into()),
-            },
-            output_schema: None,
-        }
-    );
-}
-
 fn tool_name(tool: &ToolSpec) -> &str {
-    match tool {
-        ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
-        ToolSpec::ToolSearch { .. } => "tool_search",
-        ToolSpec::LocalShell {} => "local_shell",
-        ToolSpec::ImageGeneration { .. } => "image_generation",
-        ToolSpec::WebSearch { .. } => "web_search",
-        ToolSpec::Freeform(FreeformTool { name, .. }) => name,
-    }
+    tool.name()
 }
 
 // Avoid order-based assertions; compare via set containment instead.
@@ -1137,10 +1072,10 @@ fn web_search_config_is_forwarded_to_tool_spec() {
             external_web_access: Some(true),
             filters: web_search_config
                 .filters
-                .map(crate::client_common::tools::ResponsesApiWebSearchFilters::from),
+                .map(ResponsesApiWebSearchFilters::from),
             user_location: web_search_config
                 .user_location
-                .map(crate::client_common::tools::ResponsesApiWebSearchUserLocation::from),
+                .map(ResponsesApiWebSearchUserLocation::from),
             search_context_size: web_search_config.search_context_size,
             search_content_types: None,
         }
