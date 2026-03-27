@@ -33,11 +33,67 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@1.93.0
+      - name: Set up Bazel CI
+        id: setup_bazel
+        uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
 
-      - name: build codex
-        run: cargo build --bin codex
-        working-directory: codex-rs
+      - name: Build codex with Bazel
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use the shared CI wrapper so fork PRs fall back cleanly when
+          # BuildBuddy credentials are unavailable.
+          ./.github/scripts/run-bazel-ci.sh \
+            -- \
+            build \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=TAG_job=sdk \
+            -- \
+            //codex-rs/cli:codex
+
+          # GitHub Actions runners do not reliably expose Bazel's convenience
+          # symlinks such as ./bazel-bin after remote builds, so ask Bazel for
+          # the real output directory instead of assuming the symlink exists.
+          bazel_startup_args=()
+          if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
+            bazel_startup_args+=("--output_user_root=${BAZEL_OUTPUT_USER_ROOT}")
+          fi
+
+          # Mirror the wrapper's auth/fallback behavior for this read-only
+          # `bazel info` call so the lookup works on both internal and fork PRs.
+          bazel_info_args=(--config=ci-linux)
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            bazel_info_args+=("--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}")
+          else
+            bazel_info_args+=(--remote_cache= --remote_executor=)
+          fi
+          bazel_bin_dir="$(
+            bazel \
+              "${bazel_startup_args[@]}" \
+              info \
+              "${bazel_info_args[@]}" \
+              bazel-bin \
+              | tail -n 1
+          )"
+
+          # Stage the binary into the workspace and point the SDK tests at that
+          # stable path. The tests spawn `codex` directly many times, so using a
+          # normal executable path is more reliable than invoking Bazel for each
+          # test process.
+          install_dir="${GITHUB_WORKSPACE}/.tmp/sdk-ci"
+          mkdir -p "${install_dir}"
+          install -m 755 "${bazel_bin_dir}/codex-rs/cli/codex" "${install_dir}/codex"
+          echo "CODEX_EXEC_PATH=${install_dir}/codex" >> "$GITHUB_ENV"
+
+      - name: Warm up Bazel-built codex
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${CODEX_EXEC_PATH}" --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -50,3 +106,12 @@ jobs:
 
       - name: Test SDK packages
         run: pnpm -r --filter ./sdk/typescript run test
+
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cache/bazel-repo-cache
+          key: bazel-cache-x86_64-unknown-linux-gnu-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
