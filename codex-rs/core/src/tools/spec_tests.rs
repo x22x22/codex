@@ -11,6 +11,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_tools::AdditionalProperties;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -467,15 +468,25 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_content_types: None,
         },
         create_view_image_tool(config.can_request_original_image_detail),
-        create_spawn_agent_tool(&config),
-        create_send_input_tool(),
-        if config.multi_agent_v2 {
-            create_wait_agent_tool_v2()
-        } else {
-            create_wait_agent_tool_v1()
-        },
-        create_close_agent_tool(),
     ] {
+        expected.insert(tool_name(&spec).to_string(), spec);
+    }
+    let collab_specs = if config.multi_agent_v2 {
+        vec![
+            create_spawn_agent_tool_v2(&config),
+            create_send_message_tool(),
+            create_wait_agent_tool_v2(),
+            create_close_agent_tool_v2(),
+        ]
+    } else {
+        vec![
+            create_spawn_agent_tool_v1(&config),
+            create_send_input_tool_v1(),
+            create_wait_agent_tool_v1(),
+            create_close_agent_tool_v1(),
+        ]
+    };
+    for spec in collab_specs {
         expected.insert(tool_name(&spec).to_string(), spec);
     }
     if !config.multi_agent_v2 {
@@ -773,28 +784,6 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
     };
     assert!(description.contains("only supported value is `original`"));
     assert!(description.contains("omit this field for default resized behavior"));
-}
-
-#[test]
-fn test_build_specs_artifact_tool_enabled() {
-    let mut config = test_config();
-    let runtime_root = tempfile::TempDir::new().expect("create temp codex home");
-    config.codex_home = runtime_root.path().to_path_buf();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::Artifact);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_contains_tool_names(&tools, &["artifacts"]);
 }
 
 #[test]
@@ -2102,12 +2091,12 @@ fn tool_suggest_can_be_registered_without_search_tool() {
     let ToolSpec::Function(ResponsesApiTool { description, .. }) = &tool_suggest.spec else {
         panic!("expected function tool");
     };
-    assert!(
-        description.contains(
-            "You've already tried to find a matching available tool for the user's request"
-        )
-    );
-    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains(
+        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
+    ));
+    assert!(description.contains(
+        "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
+    ));
 }
 
 #[test]
@@ -2355,6 +2344,9 @@ fn tool_suggest_description_lists_discoverable_tools() {
     else {
         panic!("expected function tool");
     };
+    assert!(description.contains(
+        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
+    ));
     assert!(description.contains("Google Calendar"));
     assert!(description.contains("Gmail"));
     assert!(description.contains("Sample Plugin"));
@@ -2367,10 +2359,21 @@ fn tool_suggest_description_lists_discoverable_tools() {
     );
     assert!(
         description.contains(
-            "You've already tried to find a matching available tool for the user's request"
+            "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
         )
     );
-    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains(
+        "For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely."
+    ));
+    assert!(description.contains(
+        "For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself."
+    ));
+    assert!(description.contains(
+        "Do not suggest a plugin just because one of its connectors or capabilities seems relevant."
+    ));
+    assert!(description.contains(
+        "Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard."
+    ));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     assert!(!description.contains("tool_search fails to find a good match"));
     let JsonSchema::Object { required, .. } = parameters else {
