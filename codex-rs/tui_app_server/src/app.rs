@@ -3869,21 +3869,12 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::StartApiProvision { cwd } => {
-                match crate::api_provision::start_command(
+            AppEvent::StartCreateApiKey { thread_id } => {
+                crate::create_api_key::start_command(
                     self.app_event_tx.clone(),
                     app_server.request_handle(),
-                    cwd,
-                    self.config.forced_login_method,
-                ) {
-                    Ok(start_message) => {
-                        self.chat_widget
-                            .add_info_message(start_message.message, start_message.hint);
-                    }
-                    Err(err) => {
-                        self.chat_widget.add_error_message(err);
-                    }
-                }
+                    thread_id,
+                );
             }
             AppEvent::OpenAppLink {
                 app_id,

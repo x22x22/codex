@@ -58,6 +58,8 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
+use codex_app_server_protocol::ThreadDependencyEnvContainsParams;
+use codex_app_server_protocol::ThreadDependencyEnvSetParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -364,6 +366,25 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/name/set", params).await
+    }
+
+    /// Send a `thread/dependencyEnv/set` JSON-RPC request.
+    pub async fn send_thread_dependency_env_set_request(
+        &mut self,
+        params: ThreadDependencyEnvSetParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/dependencyEnv/set", params).await
+    }
+
+    /// Send a `thread/dependencyEnv/contains` JSON-RPC request.
+    pub async fn send_thread_dependency_env_contains_request(
+        &mut self,
+        params: ThreadDependencyEnvContainsParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/dependencyEnv/contains", params)
+            .await
     }
 
     /// Send a `thread/metadata/update` JSON-RPC request.
@@ -827,18 +848,6 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = serde_json::json!({
             "type": "apiKey",
-            "apiKey": api_key,
-        });
-        self.send_request("account/login/start", Some(params)).await
-    }
-
-    /// Send an `account/login/start` JSON-RPC request for ephemeral API key login.
-    pub async fn send_login_account_ephemeral_api_key_request(
-        &mut self,
-        api_key: &str,
-    ) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "type": "ephemeralApiKey",
             "apiKey": api_key,
         });
         self.send_request("account/login/start", Some(params)).await

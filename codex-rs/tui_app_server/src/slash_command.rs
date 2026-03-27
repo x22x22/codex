@@ -34,7 +34,7 @@ pub enum SlashCommand {
     Agent,
     // Undo,
     Diff,
-    ApiProvision,
+    CreateApiKey,
     Copy,
     Mention,
     Status,
@@ -83,7 +83,9 @@ impl SlashCommand {
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
-            SlashCommand::ApiProvision => "provision an API key and save it to .env.local",
+            SlashCommand::CreateApiKey => {
+                "create an OpenAI API key and set it for this Codex session"
+            }
             SlashCommand::Copy => "copy the latest Codex output to your clipboard",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
@@ -157,7 +159,7 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Plan
-            | SlashCommand::ApiProvision
+            | SlashCommand::CreateApiKey
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
@@ -225,13 +227,13 @@ mod tests {
     }
 
     #[test]
-    fn api_provision_command_metadata() {
+    fn create_api_key_command_metadata() {
         assert_eq!(
-            SlashCommand::from_str("api-provision"),
-            Ok(SlashCommand::ApiProvision)
+            SlashCommand::from_str("create-api-key"),
+            Ok(SlashCommand::CreateApiKey)
         );
-        assert_eq!(SlashCommand::ApiProvision.command(), "api-provision");
-        assert!(!SlashCommand::ApiProvision.supports_inline_args());
-        assert!(!SlashCommand::ApiProvision.available_during_task());
+        assert_eq!(SlashCommand::CreateApiKey.command(), "create-api-key");
+        assert!(!SlashCommand::CreateApiKey.supports_inline_args());
+        assert!(!SlashCommand::CreateApiKey.available_during_task());
     }
 }

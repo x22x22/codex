@@ -245,6 +245,14 @@ client_request_definitions! {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
     },
+    ThreadDependencyEnvSet => "thread/dependencyEnv/set" {
+        params: v2::ThreadDependencyEnvSetParams,
+        response: v2::ThreadDependencyEnvSetResponse,
+    },
+    ThreadDependencyEnvContains => "thread/dependencyEnv/contains" {
+        params: v2::ThreadDependencyEnvContainsParams,
+        response: v2::ThreadDependencyEnvContainsResponse,
+    },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,
@@ -1295,28 +1303,6 @@ mod tests {
                 "id": 2,
                 "params": {
                     "type": "apiKey",
-                    "apiKey": "secret"
-                }
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_account_login_ephemeral_api_key() -> Result<()> {
-        let request = ClientRequest::LoginAccount {
-            request_id: RequestId::Integer(21),
-            params: v2::LoginAccountParams::EphemeralApiKey {
-                api_key: "secret".to_string(),
-            },
-        };
-        assert_eq!(
-            json!({
-                "method": "account/login/start",
-                "id": 21,
-                "params": {
-                    "type": "ephemeralApiKey",
                     "apiKey": "secret"
                 }
             }),

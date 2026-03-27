@@ -1141,27 +1141,6 @@
           "type": "object"
         },
         {
-          "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.",
-          "properties": {
-            "apiKey": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "ephemeralApiKey"
-              ],
-              "title": "EphemeralApiKeyLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "apiKey",
-            "type"
-          ],
-          "title": "EphemeralApiKeyLoginAccountParams",
-          "type": "object"
-        },
-        {
           "properties": {
             "type": {
               "enum": [
@@ -2523,6 +2502,39 @@
       ],
       "type": "object"
     },
+    "ThreadDependencyEnvContainsParams": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadDependencyEnvSetParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "threadId",
+        "values"
+      ],
+      "type": "object"
+    },
     "ThreadForkParams": {
       "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
       "properties": {
@@ -3608,6 +3620,54 @@
         "params"
       ],
       "title": "Thread/name/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/dependencyEnv/set"
+          ],
+          "title": "Thread/dependencyEnv/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadDependencyEnvSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/dependencyEnv/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/dependencyEnv/contains"
+          ],
+          "title": "Thread/dependencyEnv/containsRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadDependencyEnvContainsParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/dependencyEnv/containsRequest",
       "type": "object"
     },
     {
