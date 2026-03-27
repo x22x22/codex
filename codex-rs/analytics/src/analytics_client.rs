@@ -44,6 +44,8 @@ pub struct TrackEventsContext {
 #[derive(Clone)]
 pub struct TurnResolvedConfigFact {
     pub turn_id: String,
+    pub thread_id: String,
+    pub num_input_images: usize,
     pub submission_type: Option<TurnSubmissionType>,
     pub model: String,
     pub model_provider: String,
@@ -719,6 +721,8 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         let turn_id = input.turn_id.clone();
+        let thread_id = input.thread_id.clone();
+        let num_input_images = input.num_input_images;
         let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
             connection_id: None,
             thread_id: None,
@@ -727,6 +731,8 @@ impl AnalyticsReducer {
             started_at_ms: None,
             completed: None,
         });
+        turn_state.thread_id = Some(thread_id);
+        turn_state.num_input_images = Some(num_input_images);
         turn_state.resolved_config = Some(input);
         self.maybe_emit_turn_event(&turn_id, out);
     }
@@ -864,12 +870,6 @@ impl AnalyticsReducer {
         let Some(turn_state) = self.turns.get(turn_id) else {
             return;
         };
-        let Some(connection_id) = turn_state.connection_id else {
-            return;
-        };
-        let Some(connection_state) = self.connections.get(&connection_id) else {
-            return;
-        };
         let Some(thread_id) = turn_state.thread_id.clone() else {
             return;
         };
@@ -886,7 +886,11 @@ impl AnalyticsReducer {
             CodexTurnEventRequest {
                 event_type: "codex_turn_event",
                 event_params: codex_turn_event_params(
-                    connection_state.product_client_id.clone(),
+                    turn_state
+                        .connection_id
+                        .and_then(|connection_id| self.connections.get(&connection_id))
+                        .map(|connection_state| connection_state.product_client_id.clone())
+                        .unwrap_or_else(|| originator().value),
                     thread_id,
                     turn_id.to_string(),
                     num_input_images,
@@ -1025,6 +1029,8 @@ fn codex_turn_event_params(
 ) -> CodexTurnEventParams {
     let TurnResolvedConfigFact {
         turn_id: _resolved_turn_id,
+        thread_id: _resolved_thread_id,
+        num_input_images: _resolved_num_input_images,
         submission_type,
         model,
         model_provider,

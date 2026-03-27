@@ -5811,6 +5811,13 @@ pub(crate) async fn run_turn(
             .analytics_events_client
             .track_turn_resolved_config(TurnResolvedConfigFact {
                 turn_id: tracking.turn_id.clone(),
+                thread_id: tracking.thread_id.clone(),
+                num_input_images: input
+                    .iter()
+                    .filter(|item| {
+                        matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
+                    })
+                    .count(),
                 submission_type: None,
                 model: turn_context.model_info.slug.clone(),
                 model_provider: turn_context.config.model_provider_id.clone(),
