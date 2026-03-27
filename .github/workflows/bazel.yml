@@ -246,3 +246,77 @@ jobs:
           path: |
             ~/.cache/bazel-repo-cache
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+
+  clippy:
+    runs-on: ubuntu-24.04
+    name: Bazel clippy for codex-rs
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+
+      # Restore bazel repository cache so we don't have to redownload all the external dependencies
+      # on every CI run.
+      - name: Restore bazel repository cache
+        id: cache_bazel_repository_restore
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.cache/bazel-repo-cache
+          key: bazel-cache-x86_64-unknown-linux-gnu-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+          restore-keys: |
+            bazel-cache-x86_64-unknown-linux-gnu
+
+      - name: bazel build --config=clippy //codex-rs/...
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          set -o pipefail
+
+          bazel_args=(
+            build
+            --config=ci-linux
+            --config=clippy
+            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
+            --build_metadata=TAG_job=clippy
+          )
+
+          bazel_targets=(
+            //codex-rs/...
+            # Keep the initial Bazel clippy scope on codex-rs and out of the
+            # V8 proof-of-concept target for now.
+            -//codex-rs/v8-poc:all
+          )
+
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            echo "BuildBuddy API key is available; using remote Bazel configuration."
+            bazel $BAZEL_STARTUP_ARGS \
+              --noexperimental_remote_repo_contents_cache \
+              "${bazel_args[@]}" \
+              --remote_header="x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" \
+              -- \
+              "${bazel_targets[@]}"
+          else
+            echo "BuildBuddy API key is not available; using local Bazel configuration."
+            bazel $BAZEL_STARTUP_ARGS \
+              --noexperimental_remote_repo_contents_cache \
+              "${bazel_args[@]}" \
+              --remote_cache= \
+              --remote_executor= \
+              -- \
+              "${bazel_targets[@]}"
+          fi
+
+      # Save bazel repository cache explicitly; make non-fatal so cache uploading
+      # never fails the overall job. Only save when key wasn't hit.
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.cache_bazel_repository_restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cache/bazel-repo-cache
+          key: bazel-cache-x86_64-unknown-linux-gnu-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
