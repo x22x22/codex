@@ -38,6 +38,7 @@ struct ThreadInitializedInput {
     pub ephemeral: bool,
     pub session_source: SessionSource,
     pub initialization_mode: InitializationMode,
+    pub created_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -348,7 +349,7 @@ struct TrackEventsRequest {
 #[serde(untagged)]
 enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
-    CodexThreadInitialized(CodexThreadInitializedEvent),
+    ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
@@ -377,7 +378,7 @@ struct SkillInvocationEventParams {
 }
 
 #[derive(Serialize)]
-struct CodexThreadInitializedEventParams {
+struct ThreadInitializedEventParams {
     thread_id: String,
     product_client_id: String,
     client_name: Option<String>,
@@ -393,9 +394,9 @@ struct CodexThreadInitializedEventParams {
 }
 
 #[derive(Serialize)]
-struct CodexThreadInitializedEvent {
+struct ThreadInitializedEvent {
     event_type: &'static str,
-    event_params: CodexThreadInitializedEventParams,
+    event_params: ThreadInitializedEventParams,
 }
 
 #[derive(Serialize)]
@@ -516,8 +517,8 @@ impl AnalyticsReducer {
         let Some(connection_state) = self.connections.get(&input.connection_id) else {
             return;
         };
-        out.push(TrackEventRequest::CodexThreadInitialized(
-            codex_thread_initialized_event_request(connection_state, input),
+        out.push(TrackEventRequest::ThreadInitialized(
+            thread_initialized_event_request(connection_state, input),
         ));
     }
 
@@ -527,34 +528,30 @@ impl AnalyticsReducer {
         response: ClientResponse,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let input = match response {
-            ClientResponse::ThreadStart { response, .. } => ThreadInitializedInput {
-                connection_id,
-                thread_id: response.thread.id,
-                model: response.model,
-                ephemeral: response.thread.ephemeral,
-                session_source: response.thread.source.into(),
-                initialization_mode: InitializationMode::New,
-            },
-            ClientResponse::ThreadResume { response, .. } => ThreadInitializedInput {
-                connection_id,
-                thread_id: response.thread.id,
-                model: response.model,
-                ephemeral: response.thread.ephemeral,
-                session_source: response.thread.source.into(),
-                initialization_mode: InitializationMode::Resumed,
-            },
-            ClientResponse::ThreadFork { response, .. } => ThreadInitializedInput {
-                connection_id,
-                thread_id: response.thread.id,
-                model: response.model,
-                ephemeral: response.thread.ephemeral,
-                session_source: response.thread.source.into(),
-                initialization_mode: InitializationMode::Forked,
-            },
+        let (thread, model, initialization_mode) = match response {
+            ClientResponse::ThreadStart { response, .. } => {
+                (response.thread, response.model, InitializationMode::New)
+            }
+            ClientResponse::ThreadResume { response, .. } => {
+                (response.thread, response.model, InitializationMode::Resumed)
+            }
+            ClientResponse::ThreadFork { response, .. } => {
+                (response.thread, response.model, InitializationMode::Forked)
+            }
             _ => return,
         };
-        self.ingest_thread_initialized(input, out);
+        self.ingest_thread_initialized(
+            ThreadInitializedInput {
+                connection_id,
+                thread_id: thread.id,
+                model,
+                ephemeral: thread.ephemeral,
+                session_source: thread.source.into(),
+                initialization_mode,
+                created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+            },
+            out,
+        );
     }
 
     async fn ingest_skill_invoked(
@@ -673,21 +670,21 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
     }
 }
 
-fn codex_thread_initialized_event_request(
+fn thread_initialized_event_request(
     connection_state: &ConnectionState,
     input: ThreadInitializedInput,
-) -> CodexThreadInitializedEvent {
-    CodexThreadInitializedEvent {
+) -> ThreadInitializedEvent {
+    ThreadInitializedEvent {
         event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(connection_state, input),
+        event_params: thread_initialized_event_params(connection_state, input),
     }
 }
 
-fn codex_thread_initialized_event_params(
+fn thread_initialized_event_params(
     connection_state: &ConnectionState,
     input: ThreadInitializedInput,
-) -> CodexThreadInitializedEventParams {
-    CodexThreadInitializedEventParams {
+) -> ThreadInitializedEventParams {
+    ThreadInitializedEventParams {
         thread_id: input.thread_id,
         product_client_id: connection_state.product_client_id.clone(),
         client_name: connection_state.client_name.clone(),
@@ -699,7 +696,7 @@ fn codex_thread_initialized_event_params(
         initialization_mode: input.initialization_mode,
         subagent_source: None,
         parent_thread_id: None,
-        created_at: now_unix_timestamp_secs(),
+        created_at: input.created_at,
     }
 }
 
@@ -746,13 +743,6 @@ fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
         | SessionSource::Custom(_)
         | SessionSource::Unknown => None,
     }
-}
-
-fn now_unix_timestamp_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 async fn send_track_events(

@@ -14,8 +14,8 @@ use super::TrackEventsContext;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
-use super::codex_thread_initialized_event_request;
 use super::normalize_path_for_skill_id;
+use super::thread_initialized_event_request;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
@@ -262,7 +262,7 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
 
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
-    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
+    let event = TrackEventRequest::ThreadInitialized(thread_initialized_event_request(
         &super::ConnectionState {
             product_client_id: "codex-tui".to_string(),
             client_name: Some("codex-tui".to_string()),
@@ -276,6 +276,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             ephemeral: true,
             session_source: SessionSource::Exec,
             initialization_mode: InitializationMode::New,
+            created_at: 1,
         },
     ));
 
@@ -297,11 +298,10 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
-                "created_at": payload["event_params"]["created_at"]
+                "created_at": 1
             }
         })
     );
-    assert!(payload["event_params"]["created_at"].as_u64().is_some());
 }
 
 #[tokio::test]
