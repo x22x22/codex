@@ -1928,8 +1928,7 @@ mod tests {
         let docs =
             AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
         let expected_docs = AbsolutePathBuf::from_absolute_path(
-            cwd.path()
-                .canonicalize()
+            canonicalize_preserving_symlinks(cwd.path())
                 .expect("canonicalize cwd")
                 .join("docs"),
         )
