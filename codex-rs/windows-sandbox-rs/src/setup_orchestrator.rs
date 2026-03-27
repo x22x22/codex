@@ -332,10 +332,10 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
 
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            roots.push(dir.to_path_buf());
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        roots.push(dir.to_path_buf());
     }
     let helper_dir = helper_bin_dir(codex_home);
     let _ = std::fs::create_dir_all(&helper_dir);
@@ -503,10 +503,10 @@ pub(crate) fn offline_proxy_settings_from_env(
 pub(crate) fn proxy_ports_from_env(env_map: &HashMap<String, String>) -> Vec<u16> {
     let mut ports = BTreeSet::new();
     for key in PROXY_ENV_KEYS {
-        if let Some(value) = env_map.get(*key) {
-            if let Some(port) = loopback_proxy_port_from_url(value) {
-                ports.insert(port);
-            }
+        if let Some(value) = env_map.get(*key)
+            && let Some(port) = loopback_proxy_port_from_url(value)
+        {
+            ports.insert(port);
         }
     }
     ports.into_iter().collect()
@@ -570,12 +570,12 @@ fn quote_arg(arg: &str) -> String {
 }
 
 fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("codex-windows-sandbox-setup.exe");
-            if candidate.exists() {
-                return candidate;
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join("codex-windows-sandbox-setup.exe");
+        if candidate.exists() {
+            return candidate;
         }
     }
     PathBuf::from("codex-windows-sandbox-setup.exe")
