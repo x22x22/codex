@@ -106,7 +106,7 @@ pub(super) fn normalize_remote_control_url(
 
     let mut remote_control_url = Url::parse(remote_control_url).map_err(map_url_parse_error)?;
     let host = remote_control_url.host_str();
-    let is_localhost = host == Some("localhost");
+    let is_localhost = matches!(host, Some("localhost") | Some("127.0.0.1") | Some("::1"));
     let is_allowed_chatgpt_host = host.is_some_and(|host| {
         matches!(host, "chatgpt.com" | "chatgpt-staging.com")
             || host.ends_with(".chatgpt.com")
