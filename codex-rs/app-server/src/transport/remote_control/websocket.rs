@@ -380,7 +380,15 @@ impl RemoteControlWebsocket {
         loop {
             let incoming_message = tokio::select! {
                 _ = shutdown_token.cancelled() => return Ok(()),
-                _ = client_tracker.bookkeep_join_set() => continue,
+                client_id = client_tracker.bookkeep_join_set() => {
+                    let Some(client_id) = client_id else {
+                        continue;
+                    };
+                    if client_tracker.close_client(&client_id).await.is_err() {
+                        return Ok(());
+                    }
+                    continue;
+                }
                 _ = idle_sweep_interval.tick() => {
                     let expired_client_ids = match client_tracker.close_expired_clients().await {
                         Ok(expired_client_ids) => expired_client_ids,
