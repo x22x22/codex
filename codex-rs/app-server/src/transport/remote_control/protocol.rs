@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::io;
 use std::io::ErrorKind;
+use url::Host;
 use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +87,25 @@ pub(crate) struct ServerEnvelope {
     pub(crate) seq_id: u64,
 }
 
+fn is_allowed_chatgpt_host(host: &Option<Host<&str>>) -> bool {
+    let Some(Host::Domain(host)) = *host else {
+        return false;
+    };
+    host == "chatgpt.com"
+        || host == "chatgpt-staging.com"
+        || host.ends_with(".chatgpt.com")
+        || host.ends_with(".chatgpt-staging.com")
+}
+
+fn is_localhost(host: &Option<Host<&str>>) -> bool {
+    match host {
+        Some(Host::Domain("localhost")) => true,
+        Some(Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(Host::Ipv6(ip)) => ip.is_loopback(),
+        _ => false,
+    }
+}
+
 pub(super) fn normalize_remote_control_url(
     remote_control_url: &str,
 ) -> io::Result<RemoteControlTarget> {
@@ -105,36 +125,23 @@ pub(super) fn normalize_remote_control_url(
     };
 
     let mut remote_control_url = Url::parse(remote_control_url).map_err(map_url_parse_error)?;
-    let host = remote_control_url.host_str();
-    let is_localhost = matches!(host, Some("localhost") | Some("127.0.0.1") | Some("::1"));
-    let is_allowed_chatgpt_host = host.is_some_and(|host| {
-        matches!(host, "chatgpt.com" | "chatgpt-staging.com")
-            || host.ends_with(".chatgpt.com")
-            || host.ends_with(".chatgpt-staging.com")
-    });
-    match remote_control_url.scheme() {
-        "https" if is_localhost || is_allowed_chatgpt_host => {}
-        "http" if is_localhost => {}
-        _ => return Err(map_scheme_error(())),
-    }
     if !remote_control_url.path().ends_with('/') {
         let normalized_path = format!("{}/", remote_control_url.path());
         remote_control_url.set_path(&normalized_path);
     }
 
-    let mut enroll_url = remote_control_url
+    let enroll_url = remote_control_url
         .join("wham/remote/control/server/enroll")
         .map_err(map_url_parse_error)?;
     let mut websocket_url = remote_control_url
         .join("wham/remote/control/server")
         .map_err(map_url_parse_error)?;
-    match remote_control_url.scheme() {
-        "https" => {
-            enroll_url.set_scheme("https").map_err(map_scheme_error)?;
+    let host = enroll_url.host();
+    match enroll_url.scheme() {
+        "https" if is_localhost(&host) || is_allowed_chatgpt_host(&host) => {
             websocket_url.set_scheme("wss").map_err(map_scheme_error)?;
         }
-        "http" => {
-            enroll_url.set_scheme("http").map_err(map_scheme_error)?;
+        "http" if is_localhost(&host) => {
             websocket_url.set_scheme("ws").map_err(map_scheme_error)?;
         }
         _ => return Err(map_scheme_error(())),
