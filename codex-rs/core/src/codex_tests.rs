@@ -338,7 +338,7 @@ async fn preview_session_start_hooks(
     Ok(
         hooks.preview_session_start(&codex_hooks::SessionStartRequest {
             session_id: ThreadId::new(),
-            cwd: config.cwd.clone(),
+            cwd: config.cwd.clone().to_path_buf(),
             transcript_path: None,
             model: "gpt-5".to_string(),
             permission_mode: "default".to_string(),
