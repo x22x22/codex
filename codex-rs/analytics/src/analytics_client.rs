@@ -754,7 +754,7 @@ impl AnalyticsReducer {
                 request_id,
                 response,
             } => {
-                let turn_id = response.turn.id.clone();
+                let turn_id = response.turn.id;
                 let Some(RequestState::TurnStart(pending_request)) =
                     self.requests.remove(&(connection_id, request_id))
                 else {
@@ -786,17 +786,14 @@ impl AnalyticsReducer {
     ) {
         match notification {
             ServerNotification::TurnStarted(notification) => {
-                let turn_state =
-                    self.turns
-                        .entry(notification.turn.id.clone())
-                        .or_insert(TurnState {
-                            connection_id: None,
-                            thread_id: None,
-                            num_input_images: None,
-                            resolved_config: None,
-                            started_at_ms: None,
-                            completed: None,
-                        });
+                let turn_state = self.turns.entry(notification.turn.id).or_insert(TurnState {
+                    connection_id: None,
+                    thread_id: None,
+                    num_input_images: None,
+                    resolved_config: None,
+                    started_at_ms: None,
+                    completed: None,
+                });
                 turn_state.started_at_ms = Some(now_unix_timestamp_millis());
             }
             ServerNotification::TurnCompleted(notification) => {
