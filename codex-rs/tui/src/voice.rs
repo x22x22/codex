@@ -1050,7 +1050,10 @@ mod tests {
     #[test]
     fn convert_pcm16_downmixes_and_resamples_for_model_input() {
         let input = vec![100, 300, 200, 400, 500, 700, 600, 800];
-        let converted = convert_pcm16(&input, 48_000, 2, 24_000, 1);
+        let converted = convert_pcm16(
+            &input, /*input_sample_rate*/ 48_000, /*input_channels*/ 2,
+            /*output_sample_rate*/ 24_000, /*output_channels*/ 1,
+        );
         assert_eq!(converted, vec![200, 700]);
     }
 
@@ -1081,7 +1084,7 @@ mod tests {
         let playback_queued_samples = Arc::new(AtomicUsize::new(1024));
 
         assert!(should_send_realtime_input(
-            0,
+            /*peak*/ 0,
             &RealtimeInputBehavior::Ungated,
             &mut allow_input_until,
         ));
@@ -1098,12 +1101,12 @@ mod tests {
         };
 
         assert!(!should_send_realtime_input(
-            100,
+            /*peak*/ 100,
             &input_behavior,
             &mut allow_input_until,
         ));
         assert!(should_send_realtime_input(
-            5_000,
+            /*peak*/ 5_000,
             &input_behavior,
             &mut allow_input_until,
         ));

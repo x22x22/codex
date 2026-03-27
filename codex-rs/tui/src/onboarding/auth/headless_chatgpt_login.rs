@@ -351,7 +351,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let auth_manager = AuthManager::shared(
             temp_dir.path().to_path_buf(),
-            false,
+            /*enable_codex_api_key_env*/ false,
             AuthCredentialsStoreMode::File,
         );
 

@@ -1798,7 +1798,8 @@ mod tests {
         let config = build_config(&temp_dir).await?;
         let cwd = temp_dir.path().join("project");
 
-        let params = latest_session_lookup_params(false, &config, Some(cwd.as_path()));
+        let params =
+            latest_session_lookup_params(/*is_remote*/ false, &config, Some(cwd.as_path()));
 
         assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
         assert_eq!(params.cwd, Some(cwd.to_string_lossy().to_string()));
@@ -1812,7 +1813,8 @@ mod tests {
         let config = build_config(&temp_dir).await?;
         let cwd = temp_dir.path().join("project");
 
-        let params = latest_session_lookup_params(true, &config, Some(cwd.as_path()));
+        let params =
+            latest_session_lookup_params(/*is_remote*/ true, &config, Some(cwd.as_path()));
 
         assert_eq!(params.model_providers, None);
         assert_eq!(params.cwd, None);
@@ -1824,7 +1826,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
 
-        let cwd = read_session_cwd(&config, ThreadId::new(), None).await;
+        let cwd = read_session_cwd(&config, ThreadId::new(), /*path*/ None).await;
 
         assert_eq!(cwd, None);
         Ok(())
@@ -1836,7 +1838,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_enabled(false);
+        config.set_windows_sandbox_enabled(/*value*/ false);
 
         let should_show = should_show_trust_screen(&config);
         assert!(
@@ -1899,7 +1901,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_enabled(true);
+        config.set_windows_sandbox_enabled(/*value*/ true);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {
@@ -2201,7 +2203,7 @@ trust_level = "untrusted"
         .await
         .map_err(std::io::Error::other)?;
         runtime
-            .mark_backfill_complete(None)
+            .mark_backfill_complete(/*last_watermark*/ None)
             .await
             .map_err(std::io::Error::other)?;
 

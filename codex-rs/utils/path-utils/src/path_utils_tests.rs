@@ -71,7 +71,8 @@ mod native_workdir {
     #[test]
     fn non_windows_paths_are_unchanged() {
         let path = PathBuf::from(r"\\?\D:\c\x\worktrees\2508\swift-base");
-        let normalized = normalize_for_native_workdir_with_flag(path.clone(), false);
+        let normalized =
+            normalize_for_native_workdir_with_flag(path.clone(), /*is_windows*/ false);
 
         assert_eq!(normalized, path);
     }

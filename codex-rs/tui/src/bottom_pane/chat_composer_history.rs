@@ -332,10 +332,10 @@ mod tests {
 
         let mut history = ChatComposerHistory::new();
         // Pretend there are 3 persistent entries.
-        history.set_metadata(1, 3);
+        history.set_metadata(/*log_id*/ 1, /*entry_count*/ 3);
 
         // First Up should request offset 2 (latest) and await async data.
-        assert!(history.should_handle_navigation("", 0));
+        assert!(history.should_handle_navigation("", /*cursor*/ 0));
         assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
 
         // Verify that an AppEvent::CodexOp with the correct GetHistoryEntryRequest was sent.
@@ -354,7 +354,7 @@ mod tests {
         // Inject the async response.
         assert_eq!(
             Some(HistoryEntry::new("latest".to_string())),
-            history.on_entry_response(1, 2, Some("latest".into()))
+            history.on_entry_response(/*log_id*/ 1, /*offset*/ 2, Some("latest".into()))
         );
 
         // Next Up should move to offset 1.
@@ -375,7 +375,7 @@ mod tests {
 
         assert_eq!(
             Some(HistoryEntry::new("older".to_string())),
-            history.on_entry_response(1, 1, Some("older".into()))
+            history.on_entry_response(/*log_id*/ 1, /*offset*/ 1, Some("older".into()))
         );
     }
 
@@ -385,7 +385,7 @@ mod tests {
         let tx = AppEventSender::new(tx);
 
         let mut history = ChatComposerHistory::new();
-        history.set_metadata(1, 3);
+        history.set_metadata(/*log_id*/ 1, /*entry_count*/ 3);
         history
             .fetched_history
             .insert(1, HistoryEntry::new("command2".to_string()));
@@ -418,9 +418,9 @@ mod tests {
         history.record_local_submission(HistoryEntry::new("hello".to_string()));
         history.last_history_text = Some("hello".to_string());
 
-        assert!(history.should_handle_navigation("hello", 0));
+        assert!(history.should_handle_navigation("hello", /*cursor*/ 0));
         assert!(history.should_handle_navigation("hello", "hello".len()));
-        assert!(!history.should_handle_navigation("hello", 1));
-        assert!(!history.should_handle_navigation("other", 0));
+        assert!(!history.should_handle_navigation("hello", /*cursor*/ 1));
+        assert!(!history.should_handle_navigation("other", /*cursor*/ 0));
     }
 }

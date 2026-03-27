@@ -4858,12 +4858,18 @@ mod tests {
             App::should_wait_for_initial_session(&SessionSelection::StartFresh);
         assert_eq!(wait_for_initial_session, true);
         assert_eq!(
-            App::should_handle_active_thread_events(wait_for_initial_session, true),
+            App::should_handle_active_thread_events(
+                wait_for_initial_session,
+                /*has_active_thread_receiver*/ true
+            ),
             false
         );
 
         assert_eq!(
-            App::should_stop_waiting_for_initial_session(wait_for_initial_session, None),
+            App::should_stop_waiting_for_initial_session(
+                wait_for_initial_session,
+                /*primary_thread_id*/ None
+            ),
             false
         );
         if App::should_stop_waiting_for_initial_session(
@@ -4875,7 +4881,10 @@ mod tests {
         assert_eq!(wait_for_initial_session, false);
 
         assert_eq!(
-            App::should_handle_active_thread_events(wait_for_initial_session, true),
+            App::should_handle_active_thread_events(
+                wait_for_initial_session,
+                /*has_active_thread_receiver*/ true
+            ),
             true
         );
     }
@@ -4904,7 +4913,7 @@ mod tests {
             Ok(AppEvent::InsertHistoryCell(cell)) => cell,
             other => panic!("expected InsertHistoryCell event, got {other:?}"),
         };
-        let rendered = render_history_cell(cell.as_ref(), 120);
+        let rendered = render_history_cell(cell.as_ref(), /*width*/ 120);
 
         assert_snapshot!("startup_custom_prompt_deprecation_notice", rendered);
         assert!(rx.try_recv().is_err(), "expected only one startup notice");
@@ -4945,7 +4954,10 @@ mod tests {
             },
         ));
         assert_eq!(
-            App::should_handle_active_thread_events(wait_for_resume, true),
+            App::should_handle_active_thread_events(
+                wait_for_resume,
+                /*has_active_thread_receiver*/ true
+            ),
             true
         );
         let wait_for_fork = App::should_wait_for_initial_session(&SessionSelection::Fork(
@@ -4955,7 +4967,10 @@ mod tests {
             },
         ));
         assert_eq!(
-            App::should_handle_active_thread_events(wait_for_fork, true),
+            App::should_handle_active_thread_events(
+                wait_for_fork,
+                /*has_active_thread_receiver*/ true
+            ),
             true
         );
     }
@@ -5113,8 +5128,8 @@ mod tests {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
         app.thread_event_channels
-            .insert(thread_id, ThreadEventChannel::new(1));
-        app.set_thread_active(thread_id, true).await;
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+        app.set_thread_active(thread_id, /*active*/ true).await;
 
         let event = Event {
             id: String::new(),
@@ -5215,7 +5230,7 @@ mod tests {
             make_chatwidget_manual_with_sender().await;
         app.chat_widget = chat_widget;
 
-        app.replay_thread_snapshot(snapshot, true);
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ true);
 
         assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
         assert!(app.chat_widget.queued_user_message_texts().is_empty());
@@ -5298,7 +5313,7 @@ mod tests {
                 }],
                 input_state: Some(input_state),
             },
-            true,
+            /*resume_restored_queue*/ true,
         );
 
         match next_user_turn_op(&mut new_op_rx) {
@@ -5381,7 +5396,7 @@ mod tests {
                 }],
                 input_state: Some(input_state),
             },
-            false,
+            /*resume_restored_queue*/ false,
         );
 
         assert_eq!(
@@ -5456,7 +5471,7 @@ mod tests {
                 events: vec![],
                 input_state: Some(input_state),
             },
-            true,
+            /*resume_restored_queue*/ true,
         );
 
         assert_eq!(
@@ -5547,7 +5562,7 @@ mod tests {
                 ],
                 input_state: Some(input_state),
             },
-            true,
+            /*resume_restored_queue*/ true,
         );
 
         assert!(
@@ -5666,7 +5681,7 @@ mod tests {
         let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
             make_chatwidget_manual_with_sender().await;
         app.chat_widget = chat_widget;
-        app.replay_thread_snapshot(snapshot, true);
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ true);
 
         assert_eq!(app.chat_widget.composer_text_with_pending(), large);
 
@@ -5751,7 +5766,7 @@ mod tests {
                 events: vec![],
                 input_state: Some(input_state),
             },
-            true,
+            /*resume_restored_queue*/ true,
         );
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -5852,7 +5867,7 @@ mod tests {
                 events: vec![],
                 input_state: Some(input_state),
             },
-            true,
+            /*resume_restored_queue*/ true,
         );
 
         assert_eq!(
@@ -5934,7 +5949,7 @@ mod tests {
                 }],
                 input_state: Some(input_state),
             },
-            true,
+            /*resume_restored_queue*/ true,
         );
 
         assert_eq!(
@@ -5976,7 +5991,7 @@ mod tests {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
         app.thread_event_channels
-            .insert(thread_id, ThreadEventChannel::new(1));
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
         app.open_agent_picker().await;
 
@@ -5998,12 +6013,12 @@ mod tests {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
         app.thread_event_channels
-            .insert(thread_id, ThreadEventChannel::new(1));
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
         app.agent_navigation.upsert(
             thread_id,
             Some("Robie".to_string()),
             Some("explorer".to_string()),
-            false,
+            /*is_closed*/ false,
         );
 
         app.open_agent_picker().await;
@@ -6038,7 +6053,7 @@ mod tests {
             other => panic!("expected InsertHistoryCell event, got {other:?}"),
         };
         let rendered = cell
-            .display_lines(120)
+            .display_lines(/*width*/ 120)
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -6115,7 +6130,7 @@ mod tests {
             other => panic!("expected InsertHistoryCell event, got {other:?}"),
         };
         let rendered = cell
-            .display_lines(120)
+            .display_lines(/*width*/ 120)
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -6146,9 +6161,9 @@ mod tests {
             .with_user_config(&config_toml_path, user_config);
         app.config
             .features
-            .set_enabled(Feature::GuardianApproval, true)?;
+            .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
         app.chat_widget
-            .set_feature_enabled(Feature::GuardianApproval, true);
+            .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
         app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
         app.chat_widget
             .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
@@ -6206,7 +6221,7 @@ mod tests {
             other => panic!("expected InsertHistoryCell event, got {other:?}"),
         };
         let rendered = cell
-            .display_lines(120)
+            .display_lines(/*width*/ 120)
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -6305,9 +6320,9 @@ mod tests {
             .with_user_config(&config_toml_path, user_config);
         app.config
             .features
-            .set_enabled(Feature::GuardianApproval, true)?;
+            .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
         app.chat_widget
-            .set_feature_enabled(Feature::GuardianApproval, true);
+            .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
         app.config.approvals_reviewer = ApprovalsReviewer::User;
         app.chat_widget
             .set_approvals_reviewer(ApprovalsReviewer::User);
@@ -6445,9 +6460,9 @@ guardian_approval = true
             .with_user_config(&config_toml_path, user_config);
         app.config
             .features
-            .set_enabled(Feature::GuardianApproval, true)?;
+            .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
         app.chat_widget
-            .set_feature_enabled(Feature::GuardianApproval, true);
+            .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
         app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
         app.chat_widget
             .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
@@ -6488,7 +6503,7 @@ guardian_approval = true
             other => panic!("expected InsertHistoryCell event, got {other:?}"),
         };
         let rendered = cell
-            .display_lines(120)
+            .display_lines(/*width*/ 120)
             .into_iter()
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
@@ -6524,9 +6539,9 @@ guardian_approval = true
             .with_user_config(&config_toml_path, user_config);
         app.config
             .features
-            .set_enabled(Feature::GuardianApproval, true)?;
+            .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
         app.chat_widget
-            .set_feature_enabled(Feature::GuardianApproval, true);
+            .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
         app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
         app.chat_widget
             .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
@@ -6557,7 +6572,7 @@ guardian_approval = true
         assert!(
             !app_events.iter().any(|event| match event {
                 AppEvent::InsertHistoryCell(cell) => cell
-                    .display_lines(120)
+                    .display_lines(/*width*/ 120)
                     .iter()
                     .any(|line| line.to_string().contains("Permissions updated to")),
                 _ => false,
@@ -6582,7 +6597,7 @@ guardian_approval = true
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
         app.thread_event_channels
-            .insert(thread_id, ThreadEventChannel::new(1));
+            .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
         app.open_agent_picker().await;
         app.chat_widget
@@ -6606,9 +6621,9 @@ guardian_approval = true
         app.primary_thread_id = Some(main_thread_id);
         app.active_thread_id = Some(main_thread_id);
         app.thread_event_channels
-            .insert(main_thread_id, ThreadEventChannel::new(1));
+            .insert(main_thread_id, ThreadEventChannel::new(/*capacity*/ 1));
 
-        let agent_channel = ThreadEventChannel::new(1);
+        let agent_channel = ThreadEventChannel::new(/*capacity*/ 1);
         {
             let mut store = agent_channel.store.lock().await;
             store.push_event(Event {
@@ -6637,7 +6652,7 @@ guardian_approval = true
             agent_thread_id,
             Some("Robie".to_string()),
             Some("explorer".to_string()),
-            false,
+            /*is_closed*/ false,
         );
 
         app.refresh_pending_thread_approvals().await;
@@ -6662,11 +6677,11 @@ guardian_approval = true
         app.primary_thread_id = Some(main_thread_id);
         app.active_thread_id = Some(main_thread_id);
         app.thread_event_channels
-            .insert(main_thread_id, ThreadEventChannel::new(1));
+            .insert(main_thread_id, ThreadEventChannel::new(/*capacity*/ 1));
         app.thread_event_channels.insert(
             agent_thread_id,
             ThreadEventChannel::new_with_session_configured(
-                1,
+                /*capacity*/ 1,
                 Event {
                     id: String::new(),
                     msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -6694,7 +6709,7 @@ guardian_approval = true
             agent_thread_id,
             Some("Robie".to_string()),
             Some("explorer".to_string()),
-            false,
+            /*is_closed*/ false,
         );
 
         app.enqueue_thread_event(
@@ -6737,27 +6752,46 @@ guardian_approval = true
         let snapshot = [
             format!(
                 "{} | {}",
-                format_agent_picker_item_name(Some("Robie"), Some("explorer"), true),
+                format_agent_picker_item_name(
+                    Some("Robie"),
+                    Some("explorer"),
+                    /*is_primary*/ true
+                ),
                 thread_id
             ),
             format!(
                 "{} | {}",
-                format_agent_picker_item_name(Some("Robie"), Some("explorer"), false),
+                format_agent_picker_item_name(
+                    Some("Robie"),
+                    Some("explorer"),
+                    /*is_primary*/ false
+                ),
                 thread_id
             ),
             format!(
                 "{} | {}",
-                format_agent_picker_item_name(Some("Robie"), None, false),
+                format_agent_picker_item_name(
+                    Some("Robie"),
+                    /*agent_role*/ None,
+                    /*is_primary*/ false
+                ),
                 thread_id
             ),
             format!(
                 "{} | {}",
-                format_agent_picker_item_name(None, Some("explorer"), false),
+                format_agent_picker_item_name(
+                    /*agent_nickname*/ None,
+                    Some("explorer"),
+                    /*is_primary*/ false
+                ),
                 thread_id
             ),
             format!(
                 "{} | {}",
-                format_agent_picker_item_name(None, None, false),
+                format_agent_picker_item_name(
+                    /*agent_nickname*/ None, /*agent_role*/ None,
+                    /*is_primary*/ false
+                ),
                 thread_id
             ),
         ]
@@ -6885,7 +6919,7 @@ guardian_approval = true
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(AgentMessageCell::new(
                 vec![Line::from(text.to_string())],
-                true,
+                /*is_first_line*/ true,
             )) as Arc<dyn HistoryCell>
         };
         let make_header = |is_first| -> Arc<dyn HistoryCell> {
@@ -6912,9 +6946,9 @@ guardian_approval = true
                 app.chat_widget.current_model(),
                 event,
                 is_first,
-                None,
-                None,
-                false,
+                /*tooltip_override*/ None,
+                /*auth_plan*/ None,
+                /*show_fast_status*/ false,
             )) as Arc<dyn HistoryCell>
         };
 
@@ -6934,7 +6968,7 @@ guardian_approval = true
         app.has_emitted_history_lines = true;
 
         let rendered = app
-            .clear_ui_header_lines_with_version(80, "<VERSION>")
+            .clear_ui_header_lines_with_version(/*width*/ 80, "<VERSION>")
             .iter()
             .map(|line| {
                 line.spans
@@ -6992,7 +7026,7 @@ guardian_approval = true
         set_chatgpt_auth(&mut app.chat_widget);
 
         let rendered = app
-            .clear_ui_header_lines_with_version(80, "<VERSION>")
+            .clear_ui_header_lines_with_version(/*width*/ 80, "<VERSION>")
             .iter()
             .map(|line| {
                 line.spans
@@ -7149,11 +7183,11 @@ guardian_approval = true
             ThreadId::new(),
             model,
             model_info.slug.as_str(),
-            None,
-            None,
-            None,
+            /*account_id*/ None,
+            /*account_email*/ None,
+            /*auth_mode*/ None,
             "test_originator".to_string(),
-            false,
+            /*log_user_prompts*/ false,
             "test".to_string(),
             SessionSource::Cli,
         )
@@ -7671,7 +7705,7 @@ guardian_approval = true
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(AgentMessageCell::new(
                 vec![Line::from(text.to_string())],
-                true,
+                /*is_first_line*/ true,
             )) as Arc<dyn HistoryCell>
         };
 
@@ -7699,16 +7733,19 @@ guardian_approval = true
                 app.chat_widget.current_model(),
                 event,
                 is_first,
-                None,
-                None,
-                false,
+                /*tooltip_override*/ None,
+                /*auth_plan*/ None,
+                /*show_fast_status*/ false,
             )) as Arc<dyn HistoryCell>
         };
 
         let placeholder = "[Image #1]";
         let edited_text = format!("follow-up (edited) {placeholder}");
         let edited_range = edited_text.len().saturating_sub(placeholder.len())..edited_text.len();
-        let edited_text_elements = vec![TextElement::new(edited_range.into(), None)];
+        let edited_text_elements = vec![TextElement::new(
+            edited_range.into(),
+            /*placeholder*/ None,
+        )];
         let edited_local_image_paths = vec![PathBuf::from("/tmp/fake-image.png")];
 
         // Simulate a transcript with duplicated history (e.g., from prior backtracks)
@@ -8058,7 +8095,7 @@ guardian_approval = true
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after first")],
-                false,
+                /*is_first_line*/ false,
             )) as Arc<dyn HistoryCell>,
             Arc::new(UserHistoryCell {
                 message: "second".to_string(),
@@ -8068,7 +8105,7 @@ guardian_approval = true
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after second")],
-                false,
+                /*is_first_line*/ false,
             )) as Arc<dyn HistoryCell>,
         ];
         app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
@@ -8076,7 +8113,7 @@ guardian_approval = true
         app.backtrack.overlay_preview_active = true;
         app.backtrack.nth_user_message = 1;
 
-        let changed = app.apply_non_pending_thread_rollback(1);
+        let changed = app.apply_non_pending_thread_rollback(/*num_turns*/ 1);
 
         assert!(changed);
         assert!(app.backtrack_render_pending);
@@ -8225,7 +8262,14 @@ guardian_approval = true
 
     #[tokio::test]
     async fn session_summary_skip_zero_usage() {
-        assert!(session_summary(TokenUsage::default(), None, None).is_none());
+        assert!(
+            session_summary(
+                TokenUsage::default(),
+                /*thread_id*/ None,
+                /*thread_name*/ None
+            )
+            .is_none()
+        );
     }
 
     #[tokio::test]
@@ -8238,7 +8282,8 @@ guardian_approval = true
         };
         let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
 
-        let summary = session_summary(usage, Some(conversation), None).expect("summary");
+        let summary =
+            session_summary(usage, Some(conversation), /*thread_name*/ None).expect("summary");
         assert_eq!(
             summary.usage_line,
             "Token usage: total=12 input=10 output=2"

@@ -850,7 +850,7 @@ mod tests {
             login_status: LoginStatus::NotAuthenticated,
             auth_manager: AuthManager::shared(
                 codex_home_path,
-                false,
+                /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
             ),
             forced_chatgpt_workspace_id: None,

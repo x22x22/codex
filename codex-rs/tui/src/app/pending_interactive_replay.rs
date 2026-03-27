@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn thread_event_snapshot_keeps_pending_request_user_input() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         let request = Event {
             id: "ev-1".to_string(),
             msg: EventMsg::RequestUserInput(
@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn thread_event_snapshot_drops_resolved_request_user_input_after_user_answer() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         store.push_event(Event {
             id: "ev-1".to_string(),
             msg: EventMsg::RequestUserInput(
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn thread_event_snapshot_drops_resolved_exec_approval_after_outbound_approval_id() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         store.push_event(Event {
             id: "ev-1".to_string(),
             msg: EventMsg::ExecApprovalRequest(
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn thread_event_snapshot_drops_answered_request_user_input_for_multi_prompt_turn() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         store.push_event(Event {
             id: "ev-1".to_string(),
             msg: EventMsg::RequestUserInput(
@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn thread_event_snapshot_keeps_newer_request_user_input_pending_when_same_turn_has_queue() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         store.push_event(Event {
             id: "ev-1".to_string(),
             msg: EventMsg::RequestUserInput(
@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn thread_event_snapshot_drops_resolved_patch_approval_after_outbound_approval() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         store.push_event(Event {
             id: "ev-1".to_string(),
             msg: EventMsg::ApplyPatchApprovalRequest(
@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn thread_event_snapshot_drops_pending_approvals_when_turn_aborts() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         store.push_event(Event {
             id: "ev-1".to_string(),
             msg: EventMsg::ExecApprovalRequest(
@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn thread_event_snapshot_drops_resolved_elicitation_after_outbound_resolution() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         let request_id = codex_protocol::mcp::RequestId::String("request-1".to_string());
         store.push_event(Event {
             id: "ev-1".to_string(),
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn thread_event_store_reports_pending_thread_approvals() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         assert_eq!(store.has_pending_thread_approvals(), false);
 
         store.push_event(Event {
@@ -704,7 +704,7 @@ mod tests {
 
     #[test]
     fn request_user_input_does_not_count_as_pending_thread_approval() {
-        let mut store = ThreadEventStore::new(8);
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
         store.push_event(Event {
             id: "ev-1".to_string(),
             msg: EventMsg::RequestUserInput(

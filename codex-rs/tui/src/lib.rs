@@ -1650,7 +1650,7 @@ trust_level = "untrusted"
         .await
         .map_err(std::io::Error::other)?;
         runtime
-            .mark_backfill_complete(None)
+            .mark_backfill_complete(/*last_watermark*/ None)
             .await
             .map_err(std::io::Error::other)?;
 
