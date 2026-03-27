@@ -17,6 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -39,9 +40,9 @@ jobs:
           # - os: ubuntu-24.04-arm
           #   target: aarch64-unknown-linux-gnu
 
-          # TODO: Enable Windows once we fix the toolchain issues there.
-          #- os: windows-latest
-          #  target: x86_64-pc-windows-gnullvm
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
 
     # Configure a human readable name for each job
@@ -94,8 +95,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Use a very short path to reduce argv/path length issues.
-          "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Use a very short path to reduce argv/path length issues, but avoid the
+          # drive root because some Windows test launchers mis-handle MANIFEST paths there.
+          "BAZEL_STARTUP_ARGS=--output_user_root=D:\b" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Enable Git long paths (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
 
       - name: bazel test //...
         env:
@@ -153,6 +160,78 @@ jobs:
             # canary and release workflows should build `third_party/v8`.
             -//third_party/v8:all
           )
+          if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+            # This is intentionally a foothold rather than the final Windows
+            # Bazel suite. Keep a stable set of targets that are known not to
+            # pull in the unresolved V8 dependency so we can land meaningful CI
+            # coverage now and expand it once the V8 situation is understood.
+            bazel_targets=(
+              //codex-rs/analytics:analytics-unit-tests
+              //codex-rs/ansi-escape:ansi-escape-unit-tests
+              //codex-rs/app-server-protocol:app-server-protocol-schema_fixtures-test
+              //codex-rs/app-server-protocol:app-server-protocol-unit-tests
+              //codex-rs/apply-patch:apply-patch-all-test
+              //codex-rs/apply-patch:apply-patch-unit-tests
+              //codex-rs/async-utils:async-utils-unit-tests
+              //codex-rs/codex-api:codex-api-unit-tests
+              //codex-rs/codex-backend-openapi-models:codex-backend-openapi-models-unit-tests
+              //codex-rs/codex-client:codex-client-unit-tests
+              //codex-rs/codex-experimental-api-macros:codex-experimental-api-macros-unit-tests
+              //codex-rs/config:config-unit-tests
+              //codex-rs/connectors:connectors-unit-tests
+              //codex-rs/core-skills:core-skills-unit-tests
+              //codex-rs/exec-server:exec-server-unit-tests
+              //codex-rs/execpolicy-legacy:execpolicy-legacy-all-test
+              //codex-rs/execpolicy-legacy:execpolicy-legacy-unit-tests
+              //codex-rs/execpolicy:execpolicy-unit-tests
+              //codex-rs/features:features-unit-tests
+              //codex-rs/feedback:feedback-unit-tests
+              //codex-rs/file-search:file-search-unit-tests
+              //codex-rs/git-utils:git-utils-unit-tests
+              //codex-rs/hooks:hooks-unit-tests
+              //codex-rs/instructions:instructions-unit-tests
+              //codex-rs/keyring-store:keyring-store-unit-tests
+              //codex-rs/network-proxy:network-proxy-unit-tests
+              //codex-rs/otel:otel-unit-tests
+              //codex-rs/package-manager:package-manager-unit-tests
+              //codex-rs/plugin:plugin-unit-tests
+              //codex-rs/process-hardening:process-hardening-unit-tests
+              //codex-rs/protocol:protocol-unit-tests
+              //codex-rs/responses-api-proxy:responses-api-proxy-unit-tests
+              //codex-rs/rmcp-client:rmcp-client-unit-tests
+              //codex-rs/rollout:rollout-unit-tests
+              //codex-rs/sandboxing:sandboxing-unit-tests
+              //codex-rs/secrets:secrets-unit-tests
+              //codex-rs/shell-escalation:shell-escalation-unit-tests
+              //codex-rs/skills:skills-unit-tests
+              //codex-rs/state:state-unit-tests
+              //codex-rs/stdio-to-uds:stdio-to-uds-unit-tests
+              //codex-rs/terminal-detection:terminal-detection-unit-tests
+              //codex-rs/tools:tools-unit-tests
+              //codex-rs/utils/absolute-path:absolute-path-unit-tests
+              //codex-rs/utils/approval-presets:approval-presets-unit-tests
+              //codex-rs/utils/cache:cache-unit-tests
+              //codex-rs/utils/cargo-bin:cargo-bin-unit-tests
+              //codex-rs/utils/cli:cli-unit-tests
+              //codex-rs/utils/elapsed:elapsed-unit-tests
+              //codex-rs/utils/fuzzy-match:fuzzy-match-unit-tests
+              //codex-rs/utils/home-dir:home-dir-unit-tests
+              //codex-rs/utils/image:image-unit-tests
+              //codex-rs/utils/json-to-toml:json-to-toml-unit-tests
+              //codex-rs/utils/output-truncation:output-truncation-unit-tests
+              //codex-rs/utils/path-utils:path-utils-unit-tests
+              //codex-rs/utils/plugins:plugins-unit-tests
+              //codex-rs/utils/pty:pty-unit-tests
+              //codex-rs/utils/readiness:readiness-unit-tests
+              //codex-rs/utils/rustls-provider:rustls-provider-unit-tests
+              //codex-rs/utils/sleep-inhibitor:sleep-inhibitor-unit-tests
+              //codex-rs/utils/stream-parser:stream-parser-unit-tests
+              //codex-rs/utils/string:string-unit-tests
+              //codex-rs/utils/template:template-unit-tests
+              //codex-rs/windows-sandbox-rs:windows-sandbox-rs-unit-tests
+            )
+            echo "Windows smoke target count: ${#bazel_targets[@]}"
+          fi
 
           if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
             # Bazel test sandboxes on macOS may resolve an older Homebrew `node`
