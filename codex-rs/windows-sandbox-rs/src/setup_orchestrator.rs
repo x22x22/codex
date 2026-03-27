@@ -162,7 +162,7 @@ fn run_setup_refresh_inner(
     ) {
         return Ok(());
     }
-    let (read_roots, write_roots) = build_payload_roots(&request, overrides);
+    let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -734,7 +734,7 @@ pub fn run_elevated_setup(
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
-    let (read_roots, write_roots) = build_payload_roots(&request, overrides);
+    let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -763,9 +763,9 @@ pub fn run_elevated_setup(
 
 fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
-    overrides: SetupRootOverrides,
+    overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let write_roots = if let Some(roots) = overrides.write_roots {
+    let write_roots = if let Some(roots) = overrides.write_roots.as_deref() {
         canonical_existing(&roots)
     } else {
         gather_write_roots(
@@ -777,7 +777,7 @@ fn build_payload_roots(
     };
     let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
     let mut read_roots = gather_read_roots(request.command_cwd, request.policy, request.codex_home);
-    if let Some(roots) = overrides.read_roots {
+    if let Some(roots) = overrides.read_roots.as_deref() {
         read_roots.extend(canonical_existing(&roots));
     }
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
@@ -1139,7 +1139,7 @@ mod tests {
                 codex_home: &codex_home,
                 proxy_enforced: false,
             },
-            super::SetupRootOverrides::default(),
+            &super::SetupRootOverrides::default(),
         );
         let expected_helper =
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
@@ -1185,7 +1185,7 @@ mod tests {
                 codex_home: &codex_home,
                 proxy_enforced: false,
             },
-            super::SetupRootOverrides {
+            &super::SetupRootOverrides {
                 read_roots: Some(vec![readable_root.clone()]),
                 write_roots: None,
                 deny_write_paths: None,
