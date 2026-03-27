@@ -149,6 +149,9 @@ pub struct AnalyticsReducer {
 
 struct ConnectionState {
     product_client_id: String,
+    client_name: Option<String>,
+    client_version: Option<String>,
+    experimental_api_enabled: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -377,6 +380,9 @@ struct SkillInvocationEventParams {
 struct CodexThreadInitializedEventParams {
     thread_id: String,
     product_client_id: String,
+    client_name: Option<String>,
+    client_version: Option<String>,
+    experimental_api_enabled: Option<bool>,
     model: String,
     ephemeral: bool,
     session_source: Option<&'static str>,
@@ -492,7 +498,12 @@ impl AnalyticsReducer {
         self.connections.insert(
             connection_id,
             ConnectionState {
-                product_client_id: params.client_info.name,
+                product_client_id: params.client_info.name.clone(),
+                client_name: Some(params.client_info.name),
+                client_version: Some(params.client_info.version),
+                experimental_api_enabled: params
+                    .capabilities
+                    .map(|capabilities| capabilities.experimental_api),
             },
         );
     }
@@ -506,10 +517,7 @@ impl AnalyticsReducer {
             return;
         };
         out.push(TrackEventRequest::CodexThreadInitialized(
-            codex_thread_initialized_event_request(
-                connection_state.product_client_id.clone(),
-                input,
-            ),
+            codex_thread_initialized_event_request(connection_state, input),
         ));
     }
 
@@ -666,22 +674,25 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
 }
 
 fn codex_thread_initialized_event_request(
-    product_client_id: String,
+    connection_state: &ConnectionState,
     input: ThreadInitializedInput,
 ) -> CodexThreadInitializedEvent {
     CodexThreadInitializedEvent {
         event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(product_client_id, input),
+        event_params: codex_thread_initialized_event_params(connection_state, input),
     }
 }
 
 fn codex_thread_initialized_event_params(
-    product_client_id: String,
+    connection_state: &ConnectionState,
     input: ThreadInitializedInput,
 ) -> CodexThreadInitializedEventParams {
     CodexThreadInitializedEventParams {
         thread_id: input.thread_id,
-        product_client_id,
+        product_client_id: connection_state.product_client_id.clone(),
+        client_name: connection_state.client_name.clone(),
+        client_version: connection_state.client_version.clone(),
+        experimental_api_enabled: connection_state.experimental_api_enabled,
         model: input.model,
         ephemeral: input.ephemeral,
         session_source: session_source_name(&input.session_source),

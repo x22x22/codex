@@ -20,6 +20,7 @@ use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientResponse;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
@@ -262,7 +263,12 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
     let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        "codex-tui".to_string(),
+        &super::ConnectionState {
+            product_client_id: "codex-tui".to_string(),
+            client_name: Some("codex-tui".to_string()),
+            client_version: Some("1.0.0".to_string()),
+            experimental_api_enabled: Some(true),
+        },
         ThreadInitializedInput {
             connection_id: 1,
             thread_id: "thread-0".to_string(),
@@ -282,6 +288,9 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-0",
                 "product_client_id": "codex-tui",
+                "client_name": "codex-tui",
+                "client_version": "1.0.0",
+                "experimental_api_enabled": true,
                 "model": "gpt-5",
                 "ephemeral": true,
                 "session_source": "user",
@@ -325,7 +334,10 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                         title: None,
                         version: "1.0.0".to_string(),
                     },
-                    capabilities: None,
+                    capabilities: Some(InitializeCapabilities {
+                        experimental_api: false,
+                        opt_out_notification_methods: None,
+                    }),
                 },
             },
             &mut events,
@@ -347,6 +359,12 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_thread_initialized");
     assert_eq!(payload[0]["event_params"]["product_client_id"], "codex-tui");
+    assert_eq!(payload[0]["event_params"]["client_name"], "codex-tui");
+    assert_eq!(payload[0]["event_params"]["client_version"], "1.0.0");
+    assert_eq!(
+        payload[0]["event_params"]["experimental_api_enabled"],
+        false
+    );
     assert_eq!(payload[0]["event_params"]["initialization_mode"], "resumed");
     assert_eq!(payload[0]["event_params"]["session_source"], "user");
     assert_eq!(payload[0]["event_params"]["subagent_source"], json!(null));
