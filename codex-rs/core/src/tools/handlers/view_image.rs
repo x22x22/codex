@@ -10,7 +10,6 @@ use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 
-use crate::filesystem_deny_read::ensure_read_allowed;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::protocol::EventMsg;
@@ -94,11 +93,6 @@ impl ToolHandler for ViewImageHandler {
             AbsolutePathBuf::try_from(turn.resolve_path(Some(args.path))).map_err(|error| {
                 FunctionCallError::RespondToModel(format!("unable to resolve image path: {error}"))
             })?;
-        ensure_read_allowed(
-            abs_path.as_path(),
-            &turn.file_system_sandbox_policy,
-            &turn.cwd,
-        )?;
 
         let metadata = turn
             .environment
