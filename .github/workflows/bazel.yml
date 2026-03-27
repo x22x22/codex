@@ -17,6 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -39,9 +40,9 @@ jobs:
           # - os: ubuntu-24.04-arm
           #   target: aarch64-unknown-linux-gnu
 
-          # TODO: Enable Windows once we fix the toolchain issues there.
-          #- os: windows-latest
-          #  target: x86_64-pc-windows-gnullvm
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.os }}
 
     # Configure a human readable name for each job
@@ -94,8 +95,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Use a very short path to reduce argv/path length issues.
-          "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Use a very short path to reduce argv/path length issues, but avoid the
+          # drive root because some Windows test launchers mis-handle MANIFEST paths there.
+          "BAZEL_STARTUP_ARGS=--output_user_root=D:\b" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Enable Git long paths (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
 
       - name: bazel test //...
         env:
@@ -153,6 +160,64 @@ jobs:
             # canary and release workflows should build `third_party/v8`.
             -//third_party/v8:all
           )
+          if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+            # A `//...`-based query still loads `third_party/v8` on Windows even if
+            # we subtract the final labels, and Bazel 9 currently crashes during
+            # that analysis. Query within `//codex-rs/...` so the Windows smoke
+            # suite is discovered dynamically without touching the V8 packages.
+            #
+            # Match the common codex-rs Bazel test naming conventions here so the
+            # workflow keeps following the repo as new crates add `-unit-tests`
+            # or `-all-test` targets. Keep the exclusions package-scoped so
+            # every new test in an already-excluded package stays out
+            # automatically, while the rest of `//codex-rs/...` continues to
+            # grow dynamically.
+            #
+            # We intentionally avoid `rdeps(..., //codex-rs/code-mode:code-mode)`
+            # on Windows here. That query discovers the right set, but on a cold
+            # GitHub runner it materializes enough repos during analysis to fill
+            # the disk before the actual Bazel test run starts. The package list
+            # below is the current set whose tests still reach `code-mode`
+            # transitively. `v8-poc` contributes direct Windows targets, and
+            # `shell-command` still times out on the GitHub runner.
+            windows_target_query="
+              filter(
+                '(^|:).*(-all-test|-unit-tests|schema_fixtures-test)$',
+                tests(
+                  //codex-rs/...
+                  except //codex-rs/app-server/...
+                  except //codex-rs/app-server-client/...
+                  except //codex-rs/app-server-test-client/...
+                  except //codex-rs/arg0/...
+                  except //codex-rs/backend-client/...
+                  except //codex-rs/chatgpt/...
+                  except //codex-rs/cli/...
+                  except //codex-rs/cloud-requirements/...
+                  except //codex-rs/cloud-tasks/...
+                  except //codex-rs/cloud-tasks-client/...
+                  except //codex-rs/code-mode/...
+                  except //codex-rs/core/...
+                  except //codex-rs/exec/...
+                  except //codex-rs/linux-sandbox/...
+                  except //codex-rs/lmstudio/...
+                  except //codex-rs/login/...
+                  except //codex-rs/mcp-server/...
+                  except //codex-rs/ollama/...
+                  except //codex-rs/shell-command/...
+                  except //codex-rs/tui/...
+                  except //codex-rs/tui_app_server/...
+                  except //codex-rs/utils/oss/...
+                  except //codex-rs/utils/sandbox-summary/...
+                  except //codex-rs/v8-poc/...
+                )
+              )
+            "
+            mapfile -t bazel_targets < <(
+              bazel $BAZEL_STARTUP_ARGS query "$windows_target_query" --keep_going \
+                | sort -u
+            )
+            echo "Windows smoke target count: ${#bazel_targets[@]}"
+          fi
 
           if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
             # Bazel test sandboxes on macOS may resolve an older Homebrew `node`
