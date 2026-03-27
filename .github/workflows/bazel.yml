@@ -82,6 +82,52 @@ jobs:
         if: github.event_name != 'pull_request' || runner.os == 'Windows'
         uses: bazelbuild/setup-bazelisk@v3
 
+      - name: Reclaim disk space (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          function Show-DriveUsage {
+            Get-CimInstance Win32_LogicalDisk -Filter "DriveType = 3 AND (DeviceID = 'C:' OR DeviceID = 'D:')" |
+              Select-Object `
+                DeviceID,
+                @{Name = 'FreeGB'; Expression = { [math]::Round($_.FreeSpace / 1GB, 2) } },
+                @{Name = 'SizeGB'; Expression = { [math]::Round($_.Size / 1GB, 2) } } |
+              Format-Table -AutoSize
+          }
+
+          Write-Host 'Drive usage before cleanup:'
+          Show-DriveUsage
+
+          $toolcacheRoot = 'C:\hostedtoolcache\windows'
+          $toolcacheKeep = @('bazelisk', 'node')
+          if (Test-Path $toolcacheRoot) {
+            Get-ChildItem $toolcacheRoot -Directory |
+              Where-Object { $toolcacheKeep -notcontains $_.Name } |
+              ForEach-Object {
+                Write-Host "Removing $($_.FullName)"
+                Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+              }
+          }
+
+          $pathsToRemove = @(
+            'C:\Program Files\Android',
+            'C:\Program Files\dotnet',
+            'C:\ProgramData\chocolatey\lib',
+            'C:\Strawberry',
+            'C:\Users\runneradmin\.cargo',
+            'C:\Users\runneradmin\.rustup',
+            'C:\Users\runneradmin\AppData\Local\Temp\*'
+          )
+          foreach ($path in $pathsToRemove) {
+            if (Test-Path $path) {
+              Write-Host "Removing $path"
+              Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+          Write-Host 'Drive usage after cleanup:'
+          Show-DriveUsage
+
       - name: Check MODULE.bazel.lock is up to date
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
