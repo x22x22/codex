@@ -289,6 +289,7 @@ pub(crate) async fn execute_exec_request(
     let ExecRequest {
         command,
         cwd,
+        sandbox_policy_cwd: _sandbox_policy_cwd,
         env,
         network,
         expiration,
@@ -303,6 +304,7 @@ pub(crate) async fn execute_exec_request(
         arg0,
     } = exec_request;
     let _ = _sandbox_policy_from_env;
+    let _ = _sandbox_policy_cwd;
 
     let params = ExecParams {
         command,

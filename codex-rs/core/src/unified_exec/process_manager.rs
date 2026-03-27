@@ -50,7 +50,6 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
-use codex_protocol::protocol::SandboxPolicy;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -543,8 +542,6 @@ impl UnifiedExecProcessManager {
         env: &ExecRequest,
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
-        policy: Option<&SandboxPolicy>,
-        sandbox_policy_cwd: Option<&std::path::Path>,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let (program, args) = env
             .command
@@ -554,17 +551,7 @@ impl UnifiedExecProcessManager {
 
         #[cfg(target_os = "windows")]
         if env.sandbox == crate::exec::SandboxType::WindowsRestrictedToken {
-            let policy = policy.ok_or_else(|| {
-                UnifiedExecError::create_process(
-                    "missing Windows sandbox policy for unified exec".to_string(),
-                )
-            })?;
-            let sandbox_policy_cwd = sandbox_policy_cwd.ok_or_else(|| {
-                UnifiedExecError::create_process(
-                    "missing Windows sandbox cwd for unified exec".to_string(),
-                )
-            })?;
-            let policy_json = serde_json::to_string(policy).map_err(|err| {
+            let policy_json = serde_json::to_string(&env.sandbox_policy).map_err(|err| {
                 UnifiedExecError::create_process(format!(
                     "failed to serialize Windows sandbox policy: {err}"
                 ))
@@ -578,7 +565,7 @@ impl UnifiedExecProcessManager {
                 codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
                     codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
                         policy_json.as_str(),
-                        sandbox_policy_cwd,
+                        env.sandbox_policy_cwd.as_path(),
                         codex_home.as_ref(),
                         env.command.clone(),
                         env.cwd.as_path(),
@@ -593,7 +580,7 @@ impl UnifiedExecProcessManager {
                 _ => {
                     codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
                         policy_json.as_str(),
-                        sandbox_policy_cwd,
+                        env.sandbox_policy_cwd.as_path(),
                         codex_home.as_ref(),
                         env.command.clone(),
                         env.cwd.as_path(),
