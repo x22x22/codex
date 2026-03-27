@@ -79,8 +79,6 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
-use codex_core::config::types::McpServerConfig;
-use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config::types::Notifications;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
@@ -2075,6 +2073,7 @@ async fn make_chatwidget_manual(
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
         mcp_startup_status: None,
+        mcp_startup_expected_servers: None,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_partial_snapshot: None,
         plugin_install_apps_needing_auth: Vec::new(),
@@ -11526,52 +11525,7 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
 async fn app_server_mcp_startup_failure_renders_warning_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.show_welcome_banner = false;
-    chat.config.mcp_servers = Constrained::allow_any(HashMap::from([
-        (
-            "alpha".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::Stdio {
-                    command: "alpha".to_string(),
-                    args: Vec::new(),
-                    env: None,
-                    env_vars: Vec::new(),
-                    cwd: None,
-                },
-                enabled: true,
-                required: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
-        ),
-        (
-            "beta".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::Stdio {
-                    command: "beta".to_string(),
-                    args: Vec::new(),
-                    env: None,
-                    env_vars: Vec::new(),
-                    cwd: None,
-                },
-                enabled: true,
-                required: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
-        ),
-    ]));
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
 
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {

@@ -797,6 +797,8 @@ pub(crate) struct ChatWidget {
     /// bottom pane is treated as "running" while this is populated, even if no agent turn is
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    /// Expected MCP servers for the current startup round, seeded from the app-server runtime.
+    mcp_startup_expected_servers: Option<HashSet<String>>,
     connectors_cache: ConnectorsCacheState,
     connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
@@ -2797,8 +2799,11 @@ impl ChatWidget {
         self.update_task_running_state();
         if complete_when_settled
             && let Some(current) = &self.mcp_startup_status
+            && let Some(expected_servers) = &self.mcp_startup_expected_servers
             && !current.is_empty()
-            && current.len() >= self.enabled_mcp_server_count()
+            && expected_servers
+                .iter()
+                .all(|name| current.contains_key(name))
             && current
                 .values()
                 .all(|state| !matches!(state, McpStartupStatus::Starting))
@@ -2856,13 +2861,15 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn enabled_mcp_server_count(&self) -> usize {
-        self.config
-            .mcp_servers
-            .get()
-            .values()
-            .filter(|cfg| cfg.enabled)
-            .count()
+    pub(crate) fn needs_mcp_startup_expected_servers(&self) -> bool {
+        self.mcp_startup_expected_servers.is_none()
+    }
+
+    pub(crate) fn set_mcp_startup_expected_servers<I>(&mut self, server_names: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.mcp_startup_expected_servers = Some(server_names.into_iter().collect());
     }
 
     #[cfg(test)]
@@ -2886,6 +2893,7 @@ impl ChatWidget {
         }
 
         self.mcp_startup_status = None;
+        self.mcp_startup_expected_servers = None;
         self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
@@ -4617,6 +4625,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_turn_copyable_output: None,
+            mcp_startup_expected_servers: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,

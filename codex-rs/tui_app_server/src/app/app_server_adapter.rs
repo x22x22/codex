@@ -138,13 +138,29 @@ impl App {
 
     async fn handle_server_notification_event(
         &mut self,
-        _app_server_client: &AppServerSession,
+        app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
                 self.pending_app_server_requests
                     .resolve_notification(&notification.request_id);
+            }
+            ServerNotification::McpServerStatusUpdated(_) => {
+                if self.chat_widget.needs_mcp_startup_expected_servers() {
+                    match super::fetch_all_mcp_server_statuses(app_server_client.request_handle())
+                        .await
+                    {
+                        Ok(statuses) => {
+                            self.chat_widget.set_mcp_startup_expected_servers(
+                                statuses.into_iter().map(|status| status.name),
+                            );
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, "failed to seed expected MCP startup servers");
+                        }
+                    }
+                }
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(
