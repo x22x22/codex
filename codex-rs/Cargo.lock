@@ -2226,6 +2226,7 @@ dependencies = [
  "codex-terminal-detection",
  "codex-utils-template",
  "core_test_support",
+ "fd-lock",
  "keyring",
  "once_cell",
  "os_info",

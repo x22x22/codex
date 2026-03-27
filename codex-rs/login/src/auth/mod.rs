@@ -1,5 +1,6 @@
 pub mod default_client;
 pub mod error;
+mod refresh_lock;
 mod storage;
 mod util;
 

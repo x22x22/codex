@@ -19,6 +19,8 @@ use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::auth::error::RefreshTokenFailedError;
 use crate::auth::error::RefreshTokenFailedReason;
+use crate::auth::refresh_lock::AuthRefreshLockGuard;
+use crate::auth::refresh_lock::auth_refresh_lock_path;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
@@ -847,6 +849,12 @@ enum ReloadOutcome {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManagedRefreshOutcome {
+    ReloadedChanged,
+    Refreshed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UnauthorizedRecoveryMode {
     Managed,
     External,
@@ -1312,29 +1320,22 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
-        let auth_before_reload = self.auth_cached();
-        if auth_before_reload
-            .as_ref()
-            .is_some_and(CodexAuth::is_api_key_auth)
-        {
-            return Ok(());
-        }
-        let expected_account_id = auth_before_reload
-            .as_ref()
-            .and_then(CodexAuth::get_account_id);
+        let auth_before_reload = match self.auth_cached() {
+            Some(auth) => auth,
+            None => return Ok(()),
+        };
 
-        match self.reload_if_account_id_matches(expected_account_id.as_deref()) {
-            ReloadOutcome::ReloadedChanged => {
-                tracing::info!("Skipping token refresh because auth changed after guarded reload.");
+        match auth_before_reload {
+            CodexAuth::ApiKey(_) => Ok(()),
+            CodexAuth::Chatgpt(_) => {
+                let expected_account_id = auth_before_reload.get_account_id();
+                self.refresh_managed_auth(expected_account_id).await?;
                 Ok(())
             }
-            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority_impl().await,
-            ReloadOutcome::Skipped => {
-                Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
-                    RefreshTokenFailedReason::Other,
-                    REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
-                )))
+            CodexAuth::ChatgptAuthTokens(_) => {
+                let _refresh_guard = self.refresh_lock.lock().await;
+                self.refresh_external_auth(ExternalAuthRefreshReason::Unauthorized)
+                    .await
             }
         }
     }
@@ -1344,8 +1345,83 @@ impl AuthManager {
     /// observe refreshed token. If the token refresh fails, returns the error to
     /// the caller.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
+        let auth = match self.auth_cached() {
+            Some(auth) => auth,
+            None => return Ok(()),
+        };
+
+        match auth {
+            CodexAuth::ApiKey(_) => Ok(()),
+            CodexAuth::Chatgpt(_) => {
+                let expected_account_id = auth.get_account_id();
+                self.refresh_managed_auth(expected_account_id).await?;
+                Ok(())
+            }
+            CodexAuth::ChatgptAuthTokens(_) => {
+                let _refresh_guard = self.refresh_lock.lock().await;
+                self.refresh_external_auth(ExternalAuthRefreshReason::Unauthorized)
+                    .await
+            }
+        }
+    }
+
+    async fn refresh_managed_auth(
+        &self,
+        expected_account_id: Option<String>,
+    ) -> Result<ManagedRefreshOutcome, RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.lock().await;
-        self.refresh_token_from_authority_impl().await
+        let lock_path = auth_refresh_lock_path(&self.codex_home);
+        tracing::info!(
+            path = %lock_path.display(),
+            "Waiting for managed auth refresh inter-process lock."
+        );
+        let managed_refresh_guard = AuthRefreshLockGuard::acquire(&self.codex_home)
+            .await
+            .map_err(RefreshTokenError::Transient)?;
+        tracing::info!(
+            path = %lock_path.display(),
+            "Acquired managed auth refresh inter-process lock."
+        );
+
+        let result = self
+            .refresh_managed_auth_while_locked(expected_account_id.as_deref())
+            .await;
+        let release_result = managed_refresh_guard
+            .release()
+            .await
+            .map_err(RefreshTokenError::Transient);
+        tracing::info!(
+            path = %lock_path.display(),
+            "Released managed auth refresh inter-process lock."
+        );
+
+        match (result, release_result) {
+            (Err(err), _) => Err(err),
+            (Ok(_), Err(err)) => Err(err),
+            (Ok(outcome), Ok(())) => Ok(outcome),
+        }
+    }
+
+    async fn refresh_managed_auth_while_locked(
+        &self,
+        expected_account_id: Option<&str>,
+    ) -> Result<ManagedRefreshOutcome, RefreshTokenError> {
+        match self.reload_if_account_id_matches(expected_account_id) {
+            ReloadOutcome::ReloadedChanged => {
+                tracing::info!("Skipping token refresh because auth changed after guarded reload.");
+                Ok(ManagedRefreshOutcome::ReloadedChanged)
+            }
+            ReloadOutcome::ReloadedNoChange => {
+                self.refresh_token_from_authority_impl().await?;
+                Ok(ManagedRefreshOutcome::Refreshed)
+            }
+            ReloadOutcome::Skipped => {
+                Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                    RefreshTokenFailedReason::Other,
+                    REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
+                )))
+            }
+        }
     }
 
     async fn refresh_token_from_authority_impl(&self) -> Result<(), RefreshTokenError> {

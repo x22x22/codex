@@ -1,4 +1,5 @@
 use super::*;
+use crate::auth::refresh_lock::auth_refresh_lock_path;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
@@ -7,12 +8,20 @@ use crate::token_data::PlanType as InternalPlanType;
 use codex_protocol::account::PlanType as AccountPlanType;
 
 use base64::Engine;
+use chrono::Duration;
+use chrono::Utc;
 use codex_protocol::config_types::ForcedLoginMethod;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
+use tempfile::NamedTempFile;
 use tempfile::tempdir;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 #[tokio::test]
 async fn refresh_without_id_token() {
@@ -240,10 +249,207 @@ fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     assert_eq!(manager.refresh_failure_for_auth(&updated_auth), None);
 }
 
+#[tokio::test]
+#[serial(auth_refresh)]
+async fn managed_refresh_serializes_across_managers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_millis(200))
+                .set_body_json(json!({
+                    "access_token": "new-access-token",
+                    "refresh_token": "new-refresh-token"
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let context = RefreshTokenTestContext::new(&server);
+    context.write_auth(&managed_auth_dot_json(
+        "initial-access-token",
+        "initial-refresh-token",
+        "org_mine",
+    ));
+
+    let manager_a = AuthManager::shared(
+        context.codex_home.path().to_path_buf(),
+        false,
+        AuthCredentialsStoreMode::File,
+    );
+    let manager_b = AuthManager::shared(
+        context.codex_home.path().to_path_buf(),
+        false,
+        AuthCredentialsStoreMode::File,
+    );
+
+    let (result_a, result_b) = tokio::join!(manager_a.refresh_token(), manager_b.refresh_token());
+    result_a.expect("first refresh should succeed");
+    result_b.expect("second refresh should observe persisted auth");
+
+    let stored = context.load_auth();
+    let stored_tokens = stored.tokens.expect("stored tokens");
+    assert_eq!(stored_tokens.access_token, "new-access-token");
+    assert_eq!(stored_tokens.refresh_token, "new-refresh-token");
+
+    let cached_a = manager_a
+        .auth_cached()
+        .expect("first manager auth cached")
+        .get_token_data()
+        .expect("first manager token data");
+    let cached_b = manager_b
+        .auth_cached()
+        .expect("second manager auth cached")
+        .get_token_data()
+        .expect("second manager token data");
+    assert_eq!(cached_a, stored_tokens);
+    assert_eq!(cached_b, stored_tokens);
+
+    assert!(auth_refresh_lock_path(context.codex_home.path()).exists());
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(auth_refresh)]
+async fn managed_refresh_returns_transient_error_when_lock_file_cannot_be_opened() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let endpoint = format!("{}/oauth/token", server.uri());
+    let _guard = EnvVarGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, endpoint.as_str());
+    let codex_home = NamedTempFile::new().expect("temp file");
+    let auth = CodexAuth::from_auth_dot_json(
+        codex_home.path(),
+        managed_auth_dot_json("initial-access-token", "initial-refresh-token", "org_mine"),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("managed auth");
+    let manager =
+        AuthManager::from_auth_for_testing_with_home(auth, codex_home.path().to_path_buf());
+
+    let err = manager
+        .refresh_token()
+        .await
+        .expect_err("lock open should fail");
+    assert!(matches!(err, RefreshTokenError::Transient(_)));
+
+    server.verify().await;
+}
+
+#[test]
+fn managed_refresh_lock_path_is_shared_across_persistent_store_modes() {
+    let codex_home = tempdir().expect("tempdir");
+    let expected = auth_refresh_lock_path(codex_home.path());
+
+    assert_eq!(expected, codex_home.path().join("auth-refresh.lock"));
+    for mode in [
+        AuthCredentialsStoreMode::File,
+        AuthCredentialsStoreMode::Auto,
+        AuthCredentialsStoreMode::Keyring,
+    ] {
+        let _ = mode;
+        assert_eq!(auth_refresh_lock_path(codex_home.path()), expected);
+    }
+}
+
 struct AuthFileParams {
     openai_api_key: Option<String>,
     chatgpt_plan_type: Option<String>,
     chatgpt_account_id: Option<String>,
+}
+
+struct RefreshTokenTestContext {
+    codex_home: tempfile::TempDir,
+    _env_guard: EnvVarGuard,
+}
+
+impl RefreshTokenTestContext {
+    fn new(server: &MockServer) -> Self {
+        let codex_home = tempdir().expect("tempdir");
+        let endpoint = format!("{}/oauth/token", server.uri());
+        let env_guard = EnvVarGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, endpoint.as_str());
+        Self {
+            codex_home,
+            _env_guard: env_guard,
+        }
+    }
+
+    fn write_auth(&self, auth_dot_json: &AuthDotJson) {
+        save_auth(
+            self.codex_home.path(),
+            auth_dot_json,
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("save auth");
+    }
+
+    fn load_auth(&self) -> AuthDotJson {
+        load_auth_dot_json(self.codex_home.path(), AuthCredentialsStoreMode::File)
+            .expect("load auth")
+            .expect("auth should exist")
+    }
+}
+
+fn managed_auth_dot_json(access_token: &str, refresh_token: &str, account_id: &str) -> AuthDotJson {
+    let id_token = fake_id_token(Some("pro"), Some(account_id));
+    AuthDotJson {
+        auth_mode: Some(ApiAuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: crate::token_data::parse_chatgpt_jwt_claims(&id_token)
+                .expect("fake id token should parse"),
+            access_token: access_token.to_string(),
+            refresh_token: refresh_token.to_string(),
+            account_id: Some(account_id.to_string()),
+        }),
+        last_refresh: Some(Utc::now() - Duration::days(1)),
+    }
+}
+
+fn fake_id_token(chatgpt_plan_type: Option<&str>, chatgpt_account_id: Option<&str>) -> String {
+    #[derive(Serialize)]
+    struct Header {
+        alg: &'static str,
+        typ: &'static str,
+    }
+
+    let header = Header {
+        alg: "none",
+        typ: "JWT",
+    };
+    let mut auth_payload = serde_json::json!({
+        "chatgpt_user_id": "user-12345",
+        "user_id": "user-12345",
+    });
+    if let Some(chatgpt_plan_type) = chatgpt_plan_type {
+        auth_payload["chatgpt_plan_type"] =
+            serde_json::Value::String(chatgpt_plan_type.to_string());
+    }
+    if let Some(chatgpt_account_id) = chatgpt_account_id {
+        auth_payload["chatgpt_account_id"] =
+            serde_json::Value::String(chatgpt_account_id.to_string());
+    }
+
+    let payload = serde_json::json!({
+        "email": "user@example.com",
+        "email_verified": true,
+        "https://api.openai.com/auth": auth_payload,
+    });
+    let encode = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let header_b64 = encode(&serde_json::to_vec(&header).expect("serialize header"));
+    let payload_b64 = encode(&serde_json::to_vec(&payload).expect("serialize payload"));
+    let signature_b64 = encode(b"sig");
+    format!("{header_b64}.{payload_b64}.{signature_b64}")
 }
 
 fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
