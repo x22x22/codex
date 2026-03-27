@@ -95,10 +95,7 @@ pub enum AnalyticsFact {
         connection_id: u64,
         response: Box<ClientResponse>,
     },
-    Notification {
-        connection_id: u64,
-        notification: Box<ServerNotification>,
-    },
+    Notification(Box<ServerNotification>),
     // Facts that do not naturally exist on the app-server protocol surface, or
     // would require non-trivial protocol reshaping on this branch.
     Custom(CustomAnalyticsFact),
@@ -470,10 +467,7 @@ impl AnalyticsReducer {
             } => {
                 self.ingest_response(connection_id, *response, out);
             }
-            AnalyticsFact::Notification {
-                connection_id: _connection_id,
-                notification: _notification,
-            } => {}
+            AnalyticsFact::Notification(_notification) => {}
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
