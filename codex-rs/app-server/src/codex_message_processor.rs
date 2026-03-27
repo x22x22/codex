@@ -32,6 +32,7 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
@@ -185,13 +186,11 @@ use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::ForkSnapshot;
-use codex_core::InitializationMode;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
-use codex_core::ThreadInitializedInput;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::auth::AuthMode as CoreAuthMode;
@@ -2170,12 +2169,13 @@ impl CodexMessageProcessor {
                 };
                 listener_task_context
                     .analytics_events_client
-                    .track_thread_initialized(thread_initialize_input(
-                        request_id.connection_id,
-                        &thread,
-                        response.model.clone(),
-                        InitializationMode::New,
-                    ));
+                    .track_response(
+                        request_id.connection_id.0,
+                        ClientResponse::ThreadStart {
+                            request_id: request_id.request_id.clone(),
+                            response: response.clone(),
+                        },
+                    );
 
                 listener_task_context
                     .outgoing
@@ -3654,13 +3654,13 @@ impl CodexMessageProcessor {
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
-                self.analytics_events_client
-                    .track_thread_initialized(thread_initialize_input(
-                        request_id.connection_id,
-                        &response.thread,
-                        response.model.clone(),
-                        InitializationMode::Resumed,
-                    ));
+                self.analytics_events_client.track_response(
+                    request_id.connection_id.0,
+                    ClientResponse::ThreadResume {
+                        request_id: request_id.request_id.clone(),
+                        response: response.clone(),
+                    },
+                );
 
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -4268,13 +4268,13 @@ impl CodexMessageProcessor {
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
-        self.analytics_events_client
-            .track_thread_initialized(thread_initialize_input(
-                request_id.connection_id,
-                &thread,
-                response.model.clone(),
-                InitializationMode::Forked,
-            ));
+        self.analytics_events_client.track_response(
+            request_id.connection_id.0,
+            ClientResponse::ThreadFork {
+                request_id: request_id.request_id.clone(),
+                response: response.clone(),
+            },
+        );
 
         self.outgoing.send_response(request_id, response).await;
 
@@ -6179,6 +6179,16 @@ impl CodexMessageProcessor {
             return;
         }
 
+        let analytics_turn_start_params = params.clone();
+        self.analytics_events_client.track_request(
+            request_id.connection_id.0,
+            request_id.request_id.clone(),
+            ClientRequest::TurnStart {
+                request_id: request_id.request_id.clone(),
+                params: analytics_turn_start_params,
+            },
+        );
+
         let collaboration_modes_config = CollaborationModesConfig {
             default_mode_request_user_input: thread.enabled(Feature::DefaultModeRequestUserInput),
         };
@@ -6255,6 +6265,13 @@ impl CodexMessageProcessor {
                 };
 
                 let response = TurnStartResponse { turn };
+                self.analytics_events_client.track_response(
+                    request_id.connection_id.0,
+                    ClientResponse::TurnStart {
+                        request_id: request_id.request_id.clone(),
+                        response: response.clone(),
+                    },
+                );
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
@@ -6977,7 +6994,7 @@ impl CodexMessageProcessor {
             outgoing,
             thread_manager,
             thread_state_manager,
-            analytics_events_client: _,
+            analytics_events_client,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
@@ -7024,6 +7041,7 @@ impl CodexMessageProcessor {
                             conversation_id,
                             conversation.clone(),
                             thread_manager.clone(),
+                            analytics_events_client.clone(),
                             thread_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
@@ -7893,22 +7911,6 @@ fn cloud_requirements_load_error(err: &std::io::Error) -> Option<&CloudRequireme
         current = source.source();
     }
     None
-}
-
-fn thread_initialize_input(
-    connection_id: ConnectionId,
-    thread: &Thread,
-    model: String,
-    initialization_mode: InitializationMode,
-) -> ThreadInitializedInput {
-    ThreadInitializedInput {
-        connection_id: connection_id.0,
-        thread_id: thread.id.clone(),
-        model,
-        ephemeral: thread.ephemeral,
-        session_source: thread.source.clone().into(),
-        initialization_mode,
-    }
 }
 
 fn config_load_error(err: &std::io::Error) -> JSONRPCErrorError {
