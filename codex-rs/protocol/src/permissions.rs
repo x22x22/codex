@@ -86,16 +86,16 @@ pub enum FileSystemSpecialPath {
     /// Config-facing `:tmpdir` special path.
     ///
     /// This is the broader restricted-policy temp bundle used by filesystem
-    /// permission profiles. On macOS it expands to `$TMPDIR`, `/tmp`, and
-    /// `/tmp`'s canonical target so callers can grant write access to the tmp
-    /// namespace without depending on a single alias.
+    /// permission profiles. On Unix it expands to the temp env roots plus
+    /// `/tmp` and `/tmp`'s canonical target. On Windows it expands to the
+    /// platform temp env roots.
     Tmpdir,
-    /// Legacy `$TMPDIR`-only special path used when bridging old
+    /// Legacy env-backed temp roots used when bridging old
     /// `SandboxPolicy::WorkspaceWrite` semantics into split filesystem policy.
     ///
     /// Keep this narrower than [`FileSystemSpecialPath::Tmpdir`] so existing
     /// `exclude_tmpdir_env_var = false` behavior does not silently widen to the
-    /// full temp bundle.
+    /// full temp bundle on Unix.
     TmpdirEnvVar,
     SlashTmp,
     /// WARNING: `:special_path` tokens are part of config compatibility.
@@ -1061,7 +1061,7 @@ fn resolve_file_system_special_paths(
             }
         }
         FileSystemSpecialPath::Tmpdir => resolve_tmpdir_paths(),
-        FileSystemSpecialPath::TmpdirEnvVar => resolve_tmpdir_env_var_path().into_iter().collect(),
+        FileSystemSpecialPath::TmpdirEnvVar => resolve_temp_env_paths(),
         FileSystemSpecialPath::SlashTmp => resolve_slash_tmp_path().into_iter().collect(),
     }
 }
@@ -1074,16 +1074,13 @@ fn resolve_cwd_independent_special_paths(value: &FileSystemSpecialPath) -> Vec<A
         | FileSystemSpecialPath::ProjectRoots { .. }
         | FileSystemSpecialPath::Unknown { .. } => Vec::new(),
         FileSystemSpecialPath::Tmpdir => resolve_tmpdir_paths(),
-        FileSystemSpecialPath::TmpdirEnvVar => resolve_tmpdir_env_var_path().into_iter().collect(),
+        FileSystemSpecialPath::TmpdirEnvVar => resolve_temp_env_paths(),
         FileSystemSpecialPath::SlashTmp => resolve_slash_tmp_path().into_iter().collect(),
     }
 }
 
 fn resolve_tmpdir_paths() -> Vec<AbsolutePathBuf> {
-    let mut paths = Vec::new();
-    if let Some(tmpdir) = resolve_tmpdir_env_var_path() {
-        paths.push(tmpdir);
-    }
+    let mut paths = resolve_temp_env_paths();
     if let Some(slash_tmp) = resolve_slash_tmp_path() {
         paths.push(slash_tmp.clone());
         if let Ok(realpath) = slash_tmp.as_path().canonicalize()
@@ -1095,22 +1092,50 @@ fn resolve_tmpdir_paths() -> Vec<AbsolutePathBuf> {
     dedup_absolute_paths(paths, /*normalize_effective_paths*/ false)
 }
 
-fn resolve_tmpdir_env_var_path() -> Option<AbsolutePathBuf> {
-    let tmpdir = std::env::var_os("TMPDIR")?;
-    if tmpdir.is_empty() {
+pub(crate) fn resolve_temp_env_paths() -> Vec<AbsolutePathBuf> {
+    dedup_absolute_paths(
+        temp_env_var_keys()
+            .iter()
+            .filter_map(|key| resolve_temp_env_path(key))
+            .collect(),
+        /*normalize_effective_paths*/ false,
+    )
+}
+
+#[cfg(windows)]
+const fn temp_env_var_keys() -> &'static [&'static str] {
+    &["TEMP", "TMP"]
+}
+
+#[cfg(not(windows))]
+const fn temp_env_var_keys() -> &'static [&'static str] {
+    &["TMPDIR"]
+}
+
+fn resolve_temp_env_path(key: &str) -> Option<AbsolutePathBuf> {
+    let value = std::env::var_os(key)?;
+    if value.is_empty() {
         None
     } else {
-        AbsolutePathBuf::from_absolute_path(PathBuf::from(tmpdir)).ok()
+        AbsolutePathBuf::from_absolute_path(PathBuf::from(value)).ok()
     }
 }
 
 fn resolve_slash_tmp_path() -> Option<AbsolutePathBuf> {
-    #[allow(clippy::expect_used)]
-    let slash_tmp = AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
-    if !slash_tmp.as_path().is_dir() {
-        return None;
+    #[cfg(not(unix))]
+    {
+        None
     }
-    Some(slash_tmp)
+
+    #[cfg(unix)]
+    {
+        #[allow(clippy::expect_used)]
+        let slash_tmp = AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
+        if !slash_tmp.as_path().is_dir() {
+            return None;
+        }
+        Some(slash_tmp)
+    }
 }
 
 fn dedup_absolute_paths(

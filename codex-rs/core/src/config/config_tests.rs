@@ -832,6 +832,7 @@ fn permissions_profiles_allow_tmpdir_write_with_read_only_legacy_fallback() -> s
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn permissions_profiles_allow_slash_tmp_write_with_read_only_legacy_fallback() -> std::io::Result<()>
 {

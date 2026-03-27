@@ -79,6 +79,7 @@ pub use crate::permissions::FileSystemSandboxKind;
 pub use crate::permissions::FileSystemSandboxPolicy;
 pub use crate::permissions::FileSystemSpecialPath;
 pub use crate::permissions::NetworkSandboxPolicy;
+use crate::permissions::resolve_temp_env_paths;
 pub use crate::request_permissions::RequestPermissionsArgs;
 pub use crate::request_user_input::RequestUserInputEvent;
 
@@ -1047,28 +1048,12 @@ impl SandboxPolicy {
                     }
                 }
 
-                // Include $TMPDIR unless explicitly excluded. On macOS, TMPDIR
-                // is per-user, so writes to TMPDIR should not be readable by
-                // other users on the system.
-                //
-                // By comparison, TMPDIR is not guaranteed to be defined on
-                // Linux or Windows, but supporting it here gives users a way to
-                // provide the model with their own temporary directory without
-                // having to hardcode it in the config.
-                if !exclude_tmpdir_env_var
-                    && let Some(tmpdir) = std::env::var_os("TMPDIR")
-                    && !tmpdir.is_empty()
-                {
-                    match AbsolutePathBuf::from_absolute_path(PathBuf::from(&tmpdir)) {
-                        Ok(tmpdir_path) => {
-                            roots.push(tmpdir_path);
-                        }
-                        Err(e) => {
-                            error!(
-                                "Ignoring invalid TMPDIR value {tmpdir:?} for sandbox writable root: {e}",
-                            );
-                        }
-                    }
+                // Include platform temp env roots unless explicitly excluded.
+                // On Unix, this keeps the legacy TMPDIR behavior. On Windows,
+                // this picks up TEMP/TMP so legacy workspace-write policies
+                // keep matching the host temp directory.
+                if !exclude_tmpdir_env_var {
+                    roots.extend(resolve_temp_env_paths());
                 }
 
                 // For each root, compute subpaths that should remain read-only.
