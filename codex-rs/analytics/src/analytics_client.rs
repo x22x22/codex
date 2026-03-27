@@ -144,10 +144,10 @@ pub enum PluginState {
 
 #[derive(Default)]
 pub struct AnalyticsReducer {
-    clients: HashMap<u64, ClientState>,
+    connections: HashMap<u64, ConnectionState>,
 }
 
-struct ClientState {
+struct ConnectionState {
     product_client_id: String,
 }
 
@@ -489,9 +489,9 @@ impl AnalyticsReducer {
     }
 
     fn ingest_initialize(&mut self, connection_id: u64, params: InitializeParams) {
-        self.clients.insert(
+        self.connections.insert(
             connection_id,
-            ClientState {
+            ConnectionState {
                 product_client_id: params.client_info.name,
             },
         );
@@ -502,11 +502,14 @@ impl AnalyticsReducer {
         input: ThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let Some(client_state) = self.clients.get(&input.connection_id) else {
+        let Some(connection_state) = self.connections.get(&input.connection_id) else {
             return;
         };
         out.push(TrackEventRequest::CodexThreadInitialized(
-            codex_thread_initialized_event_request(client_state.product_client_id.clone(), input),
+            codex_thread_initialized_event_request(
+                connection_state.product_client_id.clone(),
+                input,
+            ),
         ));
     }
 
