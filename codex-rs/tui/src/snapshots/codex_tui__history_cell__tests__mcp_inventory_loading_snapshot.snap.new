@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell.rs
+assertion_line: 3508
+expression: rendered
+---
+• Loading MCP inventory…

@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 8483
+expression: before
+---
+  Apps
+  Loading installed and available apps...
+
+›    Loading apps...  This updates when the full list is ready.

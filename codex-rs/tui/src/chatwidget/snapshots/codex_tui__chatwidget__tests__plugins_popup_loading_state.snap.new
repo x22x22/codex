@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 8039
+expression: popup
+---
+  Plugins
+  Loading available plugins...
+  This first pass shows the ChatGPT marketplace only.
+
+›    Loading plugins...  This updates when the marketplace list is ready.
