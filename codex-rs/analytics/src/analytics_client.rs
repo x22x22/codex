@@ -82,6 +82,7 @@ struct ThreadInitializedInput {
     pub ephemeral: bool,
     pub session_source: SessionSource,
     pub initialization_mode: InitializationMode,
+    pub created_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -196,6 +197,9 @@ pub struct AnalyticsReducer {
 
 struct ConnectionState {
     product_client_id: String,
+    client_name: Option<String>,
+    client_version: Option<String>,
+    experimental_api_enabled: Option<bool>,
 }
 
 enum RequestState {
@@ -436,7 +440,7 @@ struct TrackEventsRequest {
 #[serde(untagged)]
 enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
-    CodexThreadInitialized(CodexThreadInitializedEvent),
+    ThreadInitialized(ThreadInitializedEvent),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     TurnEvent(Box<CodexTurnEventRequest>),
@@ -466,9 +470,12 @@ struct SkillInvocationEventParams {
 }
 
 #[derive(Serialize)]
-struct CodexThreadInitializedEventParams {
+struct ThreadInitializedEventParams {
     thread_id: String,
     product_client_id: String,
+    client_name: Option<String>,
+    client_version: Option<String>,
+    experimental_api_enabled: Option<bool>,
     model: String,
     ephemeral: bool,
     session_source: Option<&'static str>,
@@ -479,9 +486,9 @@ struct CodexThreadInitializedEventParams {
 }
 
 #[derive(Serialize)]
-struct CodexThreadInitializedEvent {
+struct ThreadInitializedEvent {
     event_type: &'static str,
-    event_params: CodexThreadInitializedEventParams,
+    event_params: ThreadInitializedEventParams,
 }
 
 #[derive(Serialize)]
@@ -642,7 +649,12 @@ impl AnalyticsReducer {
         self.connections.insert(
             connection_id,
             ConnectionState {
-                product_client_id: params.client_info.name,
+                product_client_id: params.client_info.name.clone(),
+                client_name: Some(params.client_info.name),
+                client_version: Some(params.client_info.version),
+                experimental_api_enabled: params
+                    .capabilities
+                    .map(|capabilities| capabilities.experimental_api),
             },
         );
         let ready_turn_ids = self
@@ -665,11 +677,11 @@ impl AnalyticsReducer {
         input: ThreadInitializedInput,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let Some(client_state) = self.connections.get(&input.connection_id) else {
+        let Some(connection_state) = self.connections.get(&input.connection_id) else {
             return;
         };
-        out.push(TrackEventRequest::CodexThreadInitialized(
-            codex_thread_initialized_event_request(client_state.product_client_id.clone(), input),
+        out.push(TrackEventRequest::ThreadInitialized(
+            thread_initialized_event_request(connection_state, input),
         ));
     }
 
@@ -725,31 +737,52 @@ impl AnalyticsReducer {
         response: ClientResponse,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let input = match response {
-            ClientResponse::ThreadStart { response, .. } => ThreadInitializedInput {
-                connection_id,
-                thread_id: response.thread.id,
-                model: response.model,
-                ephemeral: response.thread.ephemeral,
-                session_source: response.thread.source.into(),
-                initialization_mode: InitializationMode::New,
-            },
-            ClientResponse::ThreadResume { response, .. } => ThreadInitializedInput {
-                connection_id,
-                thread_id: response.thread.id,
-                model: response.model,
-                ephemeral: response.thread.ephemeral,
-                session_source: response.thread.source.into(),
-                initialization_mode: InitializationMode::Resumed,
-            },
-            ClientResponse::ThreadFork { response, .. } => ThreadInitializedInput {
-                connection_id,
-                thread_id: response.thread.id,
-                model: response.model,
-                ephemeral: response.thread.ephemeral,
-                session_source: response.thread.source.into(),
-                initialization_mode: InitializationMode::Forked,
-            },
+        match response {
+            ClientResponse::ThreadStart { response, .. } => {
+                let thread = response.thread;
+                self.ingest_thread_initialized(
+                    ThreadInitializedInput {
+                        connection_id,
+                        thread_id: thread.id,
+                        model: response.model,
+                        ephemeral: thread.ephemeral,
+                        session_source: thread.source.into(),
+                        initialization_mode: InitializationMode::New,
+                        created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                    },
+                    out,
+                );
+            }
+            ClientResponse::ThreadResume { response, .. } => {
+                let thread = response.thread;
+                self.ingest_thread_initialized(
+                    ThreadInitializedInput {
+                        connection_id,
+                        thread_id: thread.id,
+                        model: response.model,
+                        ephemeral: thread.ephemeral,
+                        session_source: thread.source.into(),
+                        initialization_mode: InitializationMode::Resumed,
+                        created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                    },
+                    out,
+                );
+            }
+            ClientResponse::ThreadFork { response, .. } => {
+                let thread = response.thread;
+                self.ingest_thread_initialized(
+                    ThreadInitializedInput {
+                        connection_id,
+                        thread_id: thread.id,
+                        model: response.model,
+                        ephemeral: thread.ephemeral,
+                        session_source: thread.source.into(),
+                        initialization_mode: InitializationMode::Forked,
+                        created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                    },
+                    out,
+                );
+            }
             ClientResponse::TurnStart {
                 request_id,
                 response,
@@ -772,11 +805,9 @@ impl AnalyticsReducer {
                 turn_state.thread_id = Some(pending_request.thread_id);
                 turn_state.num_input_images = Some(pending_request.num_input_images);
                 self.maybe_emit_turn_event(&turn_id, out);
-                return;
             }
-            _ => return,
-        };
-        self.ingest_thread_initialized(input, out);
+            _ => {}
+        }
     }
 
     fn ingest_notification(
@@ -1080,30 +1111,33 @@ fn personality_mode(personality: Option<Personality>) -> Option<String> {
     }
 }
 
-fn codex_thread_initialized_event_request(
-    product_client_id: String,
+fn thread_initialized_event_request(
+    connection_state: &ConnectionState,
     input: ThreadInitializedInput,
-) -> CodexThreadInitializedEvent {
-    CodexThreadInitializedEvent {
+) -> ThreadInitializedEvent {
+    ThreadInitializedEvent {
         event_type: "codex_thread_initialized",
-        event_params: codex_thread_initialized_event_params(product_client_id, input),
+        event_params: thread_initialized_event_params(connection_state, input),
     }
 }
 
-fn codex_thread_initialized_event_params(
-    product_client_id: String,
+fn thread_initialized_event_params(
+    connection_state: &ConnectionState,
     input: ThreadInitializedInput,
-) -> CodexThreadInitializedEventParams {
-    CodexThreadInitializedEventParams {
+) -> ThreadInitializedEventParams {
+    ThreadInitializedEventParams {
         thread_id: input.thread_id,
-        product_client_id,
+        product_client_id: connection_state.product_client_id.clone(),
+        client_name: connection_state.client_name.clone(),
+        client_version: connection_state.client_version.clone(),
+        experimental_api_enabled: connection_state.experimental_api_enabled,
         model: input.model,
         ephemeral: input.ephemeral,
         session_source: session_source_name(&input.session_source),
         initialization_mode: input.initialization_mode,
         subagent_source: None,
         parent_thread_id: None,
-        created_at: now_unix_timestamp_secs(),
+        created_at: input.created_at,
     }
 }
 

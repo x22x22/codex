@@ -19,9 +19,9 @@ use super::TurnStatus;
 use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
-use super::codex_thread_initialized_event_request;
 use super::codex_turn_event_params;
 use super::normalize_path_for_skill_id;
+use super::thread_initialized_event_request;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
@@ -723,8 +723,13 @@ async fn turn_completed_maps_completion_variants() {
 
 #[test]
 fn thread_initialized_event_serializes_expected_shape() {
-    let event = TrackEventRequest::CodexThreadInitialized(codex_thread_initialized_event_request(
-        "codex-tui".to_string(),
+    let event = TrackEventRequest::ThreadInitialized(thread_initialized_event_request(
+        &super::ConnectionState {
+            product_client_id: "codex-tui".to_string(),
+            client_name: Some("codex-tui".to_string()),
+            client_version: Some("1.0.0".to_string()),
+            experimental_api_enabled: Some(true),
+        },
         ThreadInitializedInput {
             connection_id: 1,
             thread_id: "thread-0".to_string(),
@@ -732,6 +737,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             ephemeral: true,
             session_source: SessionSource::Exec,
             initialization_mode: InitializationMode::New,
+            created_at: 1,
         },
     ));
 
@@ -744,17 +750,19 @@ fn thread_initialized_event_serializes_expected_shape() {
             "event_params": {
                 "thread_id": "thread-0",
                 "product_client_id": "codex-tui",
+                "client_name": "codex-tui",
+                "client_version": "1.0.0",
+                "experimental_api_enabled": true,
                 "model": "gpt-5",
                 "ephemeral": true,
                 "session_source": "user",
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
-                "created_at": payload["event_params"]["created_at"]
+                "created_at": 1
             }
         })
     );
-    assert!(payload["event_params"]["created_at"].as_u64().is_some());
 }
 
 #[tokio::test]
