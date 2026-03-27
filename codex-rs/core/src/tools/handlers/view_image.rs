@@ -94,7 +94,11 @@ impl ToolHandler for ViewImageHandler {
             AbsolutePathBuf::try_from(turn.resolve_path(Some(args.path))).map_err(|error| {
                 FunctionCallError::RespondToModel(format!("unable to resolve image path: {error}"))
             })?;
-        ensure_read_allowed(abs_path.as_path(), &turn.file_system_sandbox_policy, &turn.cwd)?;
+        ensure_read_allowed(
+            abs_path.as_path(),
+            &turn.file_system_sandbox_policy,
+            &turn.cwd,
+        )?;
 
         let metadata = turn
             .environment
