@@ -19,24 +19,6 @@ fn normalize_agents_display_path(path: &Path) -> String {
     dunce::simplified(path).display().to_string()
 }
 
-fn discover_local_project_doc_paths(config: &Config) -> io::Result<Vec<AbsolutePathBuf>> {
-    let config = config.clone();
-    let discover = move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        runtime.block_on(discover_project_doc_paths(&config, LOCAL_FS.as_ref()))
-    };
-
-    if tokio::runtime::Handle::try_current().is_ok() {
-        std::thread::spawn(discover)
-            .join()
-            .map_err(|_| io::Error::other("project doc discovery thread panicked"))?
-    } else {
-        discover()
-    }
-}
-
 pub(crate) fn compose_model_display(
     model_name: &str,
     entries: &[(&str, String)],
@@ -57,51 +39,52 @@ pub(crate) fn compose_model_display(
     (model_name.to_string(), details)
 }
 
-pub(crate) fn compose_agents_summary(config: &Config) -> String {
-    match discover_local_project_doc_paths(config) {
-        Ok(paths) => {
-            let mut rels: Vec<String> = Vec::new();
-            for p in paths {
-                let file_name = p
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
-                let display = if let Some(parent) = p.parent() {
-                    if parent.as_path() == config.cwd.as_path() {
-                        file_name.clone()
-                    } else {
-                        let mut cur = config.cwd.as_path();
-                        let mut ups = 0usize;
-                        let mut reached = false;
-                        while let Some(c) = cur.parent() {
-                            if cur == parent.as_path() {
-                                reached = true;
-                                break;
-                            }
-                            cur = c;
-                            ups += 1;
-                        }
-                        if reached {
-                            let up = format!("..{}", std::path::MAIN_SEPARATOR);
-                            format!("{}{}", up.repeat(ups), file_name)
-                        } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
-                            normalize_agents_display_path(stripped)
-                        } else {
-                            normalize_agents_display_path(&p)
-                        }
-                    }
-                } else {
-                    normalize_agents_display_path(&p)
-                };
-                rels.push(display);
-            }
-            if rels.is_empty() {
-                "<none>".to_string()
+pub(crate) async fn discover_agents_summary(config: &Config) -> io::Result<String> {
+    let paths = discover_project_doc_paths(config, LOCAL_FS.as_ref()).await?;
+    Ok(compose_agents_summary(config, &paths))
+}
+
+pub(crate) fn compose_agents_summary(config: &Config, paths: &[AbsolutePathBuf]) -> String {
+    let mut rels: Vec<String> = Vec::new();
+    for p in paths {
+        let file_name = p
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let display = if let Some(parent) = p.parent() {
+            if parent.as_path() == config.cwd.as_path() {
+                file_name.clone()
             } else {
-                rels.join(", ")
+                let mut cur = config.cwd.as_path();
+                let mut ups = 0usize;
+                let mut reached = false;
+                while let Some(c) = cur.parent() {
+                    if cur == parent.as_path() {
+                        reached = true;
+                        break;
+                    }
+                    cur = c;
+                    ups += 1;
+                }
+                if reached {
+                    let up = format!("..{}", std::path::MAIN_SEPARATOR);
+                    format!("{}{}", up.repeat(ups), file_name)
+                } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
+                    normalize_agents_display_path(stripped)
+                } else {
+                    normalize_agents_display_path(p)
+                }
             }
-        }
-        Err(_) => "<none>".to_string(),
+        } else {
+            normalize_agents_display_path(p)
+        };
+        rels.push(display);
+    }
+
+    if rels.is_empty() {
+        "<none>".to_string()
+    } else {
+        rels.join(", ")
     }
 }
 

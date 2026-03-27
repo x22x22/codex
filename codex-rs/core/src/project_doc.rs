@@ -217,6 +217,10 @@ pub async fn discover_project_doc_paths(
     config: &Config,
     fs: &dyn ExecutorFileSystem,
 ) -> io::Result<Vec<AbsolutePathBuf>> {
+    if config.project_doc_max_bytes == 0 {
+        return Ok(Vec::new());
+    }
+
     let mut dir = config.cwd.clone();
     if let Ok(canon) = normalize_path(&dir) {
         dir = AbsolutePathBuf::try_from(canon)?;

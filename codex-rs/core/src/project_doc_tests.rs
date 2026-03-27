@@ -169,6 +169,17 @@ async fn zero_byte_limit_disables_docs() {
 }
 
 #[tokio::test]
+async fn zero_byte_limit_disables_discovery() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
+
+    let discovery = discover_project_doc_paths(&make_config(&tmp, 0, None).await)
+        .await
+        .expect("discover paths");
+    assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
+}
+
+#[tokio::test]
 async fn js_repl_instructions_are_appended_when_enabled() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut cfg = make_config(&tmp, 4096, None).await;
