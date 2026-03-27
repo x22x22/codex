@@ -92,8 +92,6 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
             enforce_managed_network: false,
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
-            #[cfg(target_os = "macos")]
-            macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: None,
             linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
@@ -136,7 +134,6 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                         read: Some(vec![path]),
                         write: Some(Vec::new()),
                     }),
-                    ..Default::default()
                 }),
             },
             policy: &SandboxPolicy::ExternalSandbox {
@@ -148,8 +145,6 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             enforce_managed_network: false,
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
-            #[cfg(target_os = "macos")]
-            macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: None,
             linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
@@ -219,8 +214,6 @@ fn transform_additional_permissions_preserves_denied_entries() {
             enforce_managed_network: false,
             network: None,
             sandbox_policy_cwd: cwd.as_path(),
-            #[cfg(target_os = "macos")]
-            macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: None,
             linux_sandbox_detached_children: LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
