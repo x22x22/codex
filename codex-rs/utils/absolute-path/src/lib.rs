@@ -115,7 +115,7 @@ pub fn canonicalize_preserving_symlinks(path: &Path) -> std::io::Result<PathBuf>
         };
         metadata.file_type().is_symlink() && ancestor.parent().and_then(Path::parent).is_some()
     });
-    match std::fs::canonicalize(path) {
+    match dunce::canonicalize(path) {
         Ok(canonical) if preserve_logical_path && canonical != logical => Ok(logical),
         Ok(canonical) => Ok(canonical),
         Err(_) => Ok(logical),
@@ -359,5 +359,23 @@ mod tests {
             serde_json::from_str::<AbsolutePathBuf>(&input).expect("is valid abs path")
         };
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn canonicalize_preserving_symlinks_avoids_verbatim_prefixes() {
+        let temp_dir = tempdir().expect("temp dir");
+
+        let canonicalized =
+            canonicalize_preserving_symlinks(temp_dir.path()).expect("canonicalize");
+
+        assert_eq!(
+            canonicalized,
+            dunce::canonicalize(temp_dir.path()).expect("canonicalize temp dir")
+        );
+        assert!(
+            !canonicalized.to_string_lossy().starts_with(r"\\?\"),
+            "expected a non-verbatim Windows path, got {canonicalized:?}"
+        );
     }
 }
