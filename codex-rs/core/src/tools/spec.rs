@@ -46,8 +46,8 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_tools::parse_dynamic_tool;
 use codex_tools::parse_mcp_tool;
-pub use codex_tools::parse_tool_input_schema;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -2397,14 +2397,14 @@ pub(crate) fn mcp_tool_to_deferred_openai_tool(
 fn dynamic_tool_to_openai_tool(
     tool: &DynamicToolSpec,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
+    let parsed_tool = parse_dynamic_tool(tool)?;
 
     Ok(ResponsesApiTool {
         name: tool.name.clone(),
-        description: tool.description.clone(),
+        description: parsed_tool.description,
         strict: false,
-        defer_loading: None,
-        parameters: input_schema,
+        defer_loading: parsed_tool.defer_loading.then_some(true),
+        parameters: parsed_tool.input_schema,
         output_schema: None,
     })
 }

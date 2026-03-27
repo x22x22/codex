@@ -1,8 +1,11 @@
 //! Shared tool-schema parsing primitives that can live outside `codex-core`.
 
+mod dynamic_tool;
 mod json_schema;
 mod mcp_tool;
 
+pub use dynamic_tool::ParsedDynamicTool;
+pub use dynamic_tool::parse_dynamic_tool;
 pub use json_schema::AdditionalProperties;
 pub use json_schema::JsonSchema;
 pub use json_schema::parse_tool_input_schema;

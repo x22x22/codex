@@ -8,6 +8,7 @@ use crate::tools::ToolRouter;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
@@ -124,6 +125,27 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
             }
         })
     );
+}
+
+#[test]
+fn dynamic_tool_preserves_defer_loading() {
+    let tool = DynamicToolSpec {
+        name: "lookup_order".to_string(),
+        description: "Look up an order".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string"}
+            },
+            "required": ["order_id"],
+            "additionalProperties": false,
+        }),
+        defer_loading: true,
+    };
+
+    let openai_tool = dynamic_tool_to_openai_tool(&tool).expect("convert dynamic tool");
+
+    assert_eq!(openai_tool.defer_loading, Some(true));
 }
 
 fn tool_name(tool: &ToolSpec) -> &str {
