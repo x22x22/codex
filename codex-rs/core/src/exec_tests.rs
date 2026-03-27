@@ -627,6 +627,19 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
         },
     ]);
 
+    #[cfg(windows)]
+    let expected_deny_write_paths = vec![
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd.join(".codex"))
+            .expect("absolute .codex"),
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+            .expect("absolute docs"),
+    ];
+    #[cfg(not(windows))]
+    let expected_deny_write_paths = vec![
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+            .expect("absolute docs"),
+    ];
+
     assert_eq!(
         resolve_windows_restricted_token_filesystem_overlay(
             SandboxType::WindowsRestrictedToken,
@@ -637,10 +650,7 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
             WindowsSandboxLevel::RestrictedToken,
         ),
         Ok(Some(WindowsRestrictedTokenFilesystemOverlay {
-            additional_deny_write_paths: vec![
-                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
-                    .expect("absolute docs"),
-            ],
+            additional_deny_write_paths: expected_deny_write_paths,
         }))
     );
 }
