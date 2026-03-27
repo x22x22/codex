@@ -4181,7 +4181,7 @@ mod tests {
     }
 
     #[test]
-    fn file_system_policy_rejects_legacy_bridge_for_non_workspace_writes() {
+    fn file_system_policy_falls_back_to_read_only_legacy_bridge_for_non_workspace_writes() {
         let cwd = if cfg!(windows) {
             Path::new(r"C:\workspace")
         } else {
@@ -4199,14 +4199,19 @@ mod tests {
             access: FileSystemAccessMode::Write,
         }]);
 
-        let err = policy
+        let legacy_policy = policy
             .to_legacy_sandbox_policy(NetworkSandboxPolicy::Restricted, cwd)
-            .expect_err("non-workspace writes should be rejected");
+            .expect("non-workspace writes should fall back to read-only");
 
-        assert!(
-            err.to_string()
-                .contains("filesystem writes outside the workspace root"),
-            "{err}"
+        assert_eq!(
+            legacy_policy,
+            SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: false,
+                    readable_roots: Vec::new(),
+                },
+                network_access: false,
+            }
         );
     }
 
