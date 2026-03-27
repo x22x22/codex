@@ -1193,15 +1193,23 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
     let additional_deny_write_paths = if needs_direct_runtime_enforcement {
         let mut deny_paths = BTreeSet::new();
         for writable_root in &split_writable_roots {
-            let legacy_root = legacy_writable_roots
-                .iter()
-                .find(|candidate| candidate.root == writable_root.root);
+            let writable_root_path = normalize_path(writable_root.root.to_path_buf());
+            let legacy_root = legacy_writable_roots.iter().find(|candidate| {
+                normalize_path(candidate.root.to_path_buf()) == writable_root_path
+            });
             for read_only_subpath in &writable_root.read_only_subpaths {
+                let read_only_subpath_suffix = read_only_subpath
+                    .as_path()
+                    .strip_prefix(writable_root.root.as_path())
+                    .ok();
                 let already_denied_by_legacy = legacy_root.is_some_and(|legacy_root| {
-                    legacy_root
-                        .read_only_subpaths
-                        .iter()
-                        .any(|candidate| candidate == read_only_subpath)
+                    legacy_root.read_only_subpaths.iter().any(|candidate| {
+                        candidate
+                            .as_path()
+                            .strip_prefix(legacy_root.root.as_path())
+                            .ok()
+                            == read_only_subpath_suffix
+                    })
                 });
                 if !already_denied_by_legacy {
                     deny_paths.insert(normalize_path(read_only_subpath.to_path_buf()));

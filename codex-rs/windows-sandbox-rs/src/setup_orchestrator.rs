@@ -812,8 +812,8 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::build_payload_roots;
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
+    use super::build_payload_roots;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
@@ -1122,8 +1122,10 @@ mod tests {
         let policy = SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::Restricted {
                 include_platform_defaults: false,
-                readable_roots: vec![AbsolutePathBuf::from_absolute_path(&readable_root)
-                    .expect("absolute readable root")],
+                readable_roots: vec![
+                    AbsolutePathBuf::from_absolute_path(&readable_root)
+                        .expect("absolute readable root"),
+                ],
             },
             network_access: false,
         };
@@ -1149,9 +1151,11 @@ mod tests {
         assert!(read_roots.contains(&expected_helper));
         assert!(read_roots.contains(&expected_cwd));
         assert!(read_roots.contains(&expected_readable));
-        assert!(canonical_windows_platform_default_roots()
-            .into_iter()
-            .all(|path| !read_roots.contains(&path)));
+        assert!(
+            canonical_windows_platform_default_roots()
+                .into_iter()
+                .all(|path| !read_roots.contains(&path))
+        );
     }
 
     #[test]
@@ -1195,9 +1199,11 @@ mod tests {
         assert_eq!(write_roots, Vec::<PathBuf>::new());
         assert!(read_roots.contains(&expected_helper));
         assert!(read_roots.contains(&expected_readable));
-        assert!(canonical_windows_platform_default_roots()
-            .into_iter()
-            .all(|path| read_roots.contains(&path)));
+        assert!(
+            canonical_windows_platform_default_roots()
+                .into_iter()
+                .all(|path| read_roots.contains(&path))
+        );
     }
 
     #[test]
