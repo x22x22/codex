@@ -35,6 +35,16 @@ use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GuardianApprovalReview;
 use codex_app_server_protocol::GuardianApprovalReviewStatus;
 use codex_app_server_protocol::GuardianRiskLevel as AppServerGuardianRiskLevel;
+use codex_app_server_protocol::HookCompletedNotification as AppServerHookCompletedNotification;
+use codex_app_server_protocol::HookEventName as AppServerHookEventName;
+use codex_app_server_protocol::HookExecutionMode as AppServerHookExecutionMode;
+use codex_app_server_protocol::HookHandlerType as AppServerHookHandlerType;
+use codex_app_server_protocol::HookOutputEntry as AppServerHookOutputEntry;
+use codex_app_server_protocol::HookOutputEntryKind as AppServerHookOutputEntryKind;
+use codex_app_server_protocol::HookRunStatus as AppServerHookRunStatus;
+use codex_app_server_protocol::HookRunSummary as AppServerHookRunSummary;
+use codex_app_server_protocol::HookScope as AppServerHookScope;
+use codex_app_server_protocol::HookStartedNotification as AppServerHookStartedNotification;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
@@ -2047,6 +2057,7 @@ async fn make_chatwidget_manual(
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_copyable_output: None,
+        pending_turn_copyable_output: None,
         running_commands: HashMap::new(),
         collab_agent_metadata: HashMap::new(),
         pending_collab_spawn_requests: HashMap::new(),
@@ -7168,10 +7179,17 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_
 }
 
 #[tokio::test]
-async fn slash_copy_is_unavailable_when_legacy_agent_message_item_is_not_repeated_on_turn_complete()
-{
+async fn slash_copy_uses_agent_message_item_when_turn_complete_omits_final_text() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
     complete_assistant_message(&mut chat, "msg-1", "Legacy item final message", None);
     let _ = drain_insert_history(&mut rx);
     chat.handle_codex_event(Event {
@@ -7189,10 +7207,14 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_item_is_not_repeate
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains(
+        !rendered.contains(
             "`/copy` is unavailable before the first Codex output or right after a rollback."
         ),
-        "expected unavailable message, got {rendered:?}"
+        "expected copy state to be available, got {rendered:?}"
+    );
+    assert_eq!(
+        chat.last_copyable_output,
+        Some("Legacy item final message".to_string())
     );
 }
 
@@ -7202,9 +7224,19 @@ async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    complete_assistant_message(&mut chat, "msg-1", "Reply that will be rolled back", None);
+    let _ = drain_insert_history(&mut rx);
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
         msg: EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
-            last_agent_message: Some("Reply that will be rolled back".to_string()),
+            last_agent_message: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -12711,6 +12743,75 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_snapshot!(combined);
+}
+
+#[tokio::test]
+async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::HookStarted(AppServerHookStartedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: Some("turn-1".to_string()),
+            run: AppServerHookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::UserPromptSubmit,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: AppServerHookRunStatus::Running,
+                status_message: Some("checking go-workflow input policy".to_string()),
+                started_at: 1,
+                completed_at: None,
+                duration_ms: None,
+                entries: Vec::new(),
+            },
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::HookCompleted(AppServerHookCompletedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: Some("turn-1".to_string()),
+            run: AppServerHookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::UserPromptSubmit,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: AppServerHookRunStatus::Stopped,
+                status_message: Some("checking go-workflow input policy".to_string()),
+                started_at: 1,
+                completed_at: Some(11),
+                duration_ms: Some(10),
+                entries: vec![
+                    AppServerHookOutputEntry {
+                        kind: AppServerHookOutputEntryKind::Warning,
+                        text: "go-workflow must start from PlanMode".to_string(),
+                    },
+                    AppServerHookOutputEntry {
+                        kind: AppServerHookOutputEntryKind::Stop,
+                        text: "prompt blocked".to_string(),
+                    },
+                ],
+            },
+        }),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!(
+        "user_prompt_submit_app_server_hook_notifications_render_snapshot",
+        combined
+    );
 }
 
 #[tokio::test]
