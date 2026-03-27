@@ -1660,6 +1660,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-windows-sandbox",
+ "futures",
  "http 1.4.0",
  "libc",
  "owo-colors",
@@ -1672,10 +1673,13 @@ dependencies = [
  "supports-color 3.0.2",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]

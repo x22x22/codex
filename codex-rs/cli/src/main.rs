@@ -35,6 +35,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+mod android_cmd;
 #[cfg(target_os = "macos")]
 mod app_cmd;
 #[cfg(target_os = "macos")]
@@ -106,6 +107,9 @@ enum Subcommand {
 
     /// Start Codex as an MCP server (stdio).
     McpServer,
+
+    /// Control Android Agent and Genie sessions over adb.
+    Android(android_cmd::AndroidCli),
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
@@ -528,7 +532,7 @@ struct FeatureToggles {
 struct InteractiveRemoteOptions {
     /// Connect the app-server-backed TUI to a remote app server websocket endpoint.
     ///
-    /// Accepted forms: `ws://host:port` or `wss://host:port`.
+    /// Accepted forms: `ws://host:port[/path]` or `wss://host:port[/path]`.
     #[arg(long = "remote", value_name = "ADDR")]
     remote: Option<String>,
 
@@ -666,6 +670,23 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 "mcp-server",
             )?;
             codex_mcp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
+        }
+        Some(Subcommand::Android(android_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "android",
+            )?;
+            if let Some(exit_info) = android_cmd::run(
+                android_cli,
+                root_config_overrides.clone(),
+                interactive,
+                arg0_paths.clone(),
+            )
+            .await?
+            {
+                handle_app_exit(exit_info)?;
+            }
         }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1247,9 +1268,24 @@ fn read_remote_auth_token_from_env_var(env_var_name: &str) -> anyhow::Result<Str
 }
 
 async fn run_interactive_tui(
-    mut interactive: TuiCli,
+    interactive: TuiCli,
     remote: Option<String>,
     remote_auth_token_env: Option<String>,
+    arg0_paths: Arg0DispatchPaths,
+) -> std::io::Result<AppExitInfo> {
+    let remote_auth_token = remote_auth_token_env
+        .as_deref()
+        .map(read_remote_auth_token_from_env_var)
+        .transpose()
+        .map_err(std::io::Error::other)?;
+    run_interactive_tui_with_remote_auth_token(interactive, remote, remote_auth_token, arg0_paths)
+        .await
+}
+
+async fn run_interactive_tui_with_remote_auth_token(
+    mut interactive: TuiCli,
+    remote: Option<String>,
+    remote_auth_token: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
     if let Some(prompt) = interactive.prompt.take() {
@@ -1281,7 +1317,7 @@ async fn run_interactive_tui(
         .map(codex_tui_app_server::normalize_remote_addr)
         .transpose()
         .map_err(std::io::Error::other)?;
-    if remote_auth_token_env.is_some() && normalized_remote.is_none() {
+    if remote_auth_token.is_some() && normalized_remote.is_none() {
         return Ok(AppExitInfo::fatal(
             "`--remote-auth-token-env` requires `--remote`.",
         ));
@@ -1292,11 +1328,6 @@ async fn run_interactive_tui(
         ));
     }
     if use_app_server_tui {
-        let remote_auth_token = remote_auth_token_env
-            .as_deref()
-            .map(read_remote_auth_token_from_env_var)
-            .transpose()
-            .map_err(std::io::Error::other)?;
         codex_tui_app_server::run_main(
             into_app_server_tui_cli(interactive),
             arg0_paths,
@@ -1924,6 +1955,20 @@ mod tests {
             panic!("expected resume subcommand");
         };
         assert_eq!(remote.remote.as_deref(), Some("ws://127.0.0.1:4500"));
+    }
+
+    #[test]
+    fn android_sessions_attach_subcommand_parses() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "android",
+            "sessions",
+            "attach",
+            "session-123",
+            "--no-alt-screen",
+        ])
+        .expect("parse");
+        assert!(matches!(cli.subcommand, Some(Subcommand::Android(_))));
     }
 
     #[test]

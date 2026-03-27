@@ -7,6 +7,7 @@ import android.content.Context
 import android.os.Binder
 import android.os.Process
 import android.util.Log
+import com.openai.codex.bridge.DesktopSessionBootstrap
 import com.openai.codex.bridge.DetachedTargetCompat
 import com.openai.codex.bridge.FrameworkSessionTransportCompat
 import com.openai.codex.bridge.SessionExecutionSettings
@@ -156,24 +157,86 @@ class AgentSessionController(context: Context) {
         objective: String,
         executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
     ): PendingDirectSessionStart {
+        val parentSessionId = createDirectSessionDraft(executionSettings)
+        try {
+            return prepareDirectSessionDraftForStart(
+                sessionId = parentSessionId,
+                objective = objective,
+                executionSettings = executionSettings,
+            )
+        } catch (err: RuntimeException) {
+            runCatching { cancelSession(parentSessionId) }
+            executionSettingsStore.removeSettings(parentSessionId)
+            throw err
+        }
+    }
+
+    fun createDirectSessionDraft(executionSettings: SessionExecutionSettings = SessionExecutionSettings.default): String {
         val manager = requireAgentManager()
-        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
-            ?: throw IllegalStateException("No GENIE role holder configured")
         val parentSession = manager.createDirectSession(currentUserId())
         try {
             executionSettingsStore.saveSettings(parentSession.sessionId, executionSettings)
-            manager.publishTrace(
-                parentSession.sessionId,
-                "Planning Codex direct session for objective: $objective",
-            )
-            manager.updateSessionState(parentSession.sessionId, AgentSessionInfo.STATE_RUNNING)
-            return PendingDirectSessionStart(
-                parentSessionId = parentSession.sessionId,
-                geniePackage = geniePackage,
-            )
+            return parentSession.sessionId
         } catch (err: RuntimeException) {
             runCatching { manager.cancelSession(parentSession.sessionId) }
             executionSettingsStore.removeSettings(parentSession.sessionId)
+            throw err
+        }
+    }
+
+    fun prepareDirectSessionDraftForStart(
+        sessionId: String,
+        objective: String,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+    ): PendingDirectSessionStart {
+        val manager = requireAgentManager()
+        val session = manager.getSessions(currentUserId()).firstOrNull { it.sessionId == sessionId }
+            ?: throw IllegalArgumentException("Unknown direct draft session: $sessionId")
+        check(isDirectParentSession(session)) {
+            "Session $sessionId is not an AGENT parent draft"
+        }
+        check(session.state == AgentSessionInfo.STATE_CREATED) {
+            "Session $sessionId is not in CREATED state"
+        }
+        check(
+            manager.getSessions(currentUserId()).none { childSession ->
+                childSession.parentSessionId == sessionId
+            },
+        ) {
+            "Session $sessionId already has child sessions"
+        }
+        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
+            ?: throw IllegalStateException("No GENIE role holder configured")
+        executionSettingsStore.saveSettings(sessionId, executionSettings)
+        manager.publishTrace(
+            sessionId,
+            "Planning Codex direct session for objective: $objective",
+        )
+        manager.updateSessionState(sessionId, AgentSessionInfo.STATE_RUNNING)
+        return PendingDirectSessionStart(
+            parentSessionId = sessionId,
+            geniePackage = geniePackage,
+        )
+    }
+
+    fun createHomeSessionDraft(
+        targetPackage: String,
+        finalPresentationPolicy: SessionFinalPresentationPolicy,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+    ): String {
+        val manager = requireAgentManager()
+        check(canStartSessionForTarget(targetPackage)) {
+            "Target package $targetPackage is not eligible for session start"
+        }
+        val session = manager.createAppScopedSession(targetPackage, currentUserId())
+        try {
+            presentationPolicyStore.savePolicy(session.sessionId, finalPresentationPolicy)
+            executionSettingsStore.saveSettings(session.sessionId, executionSettings)
+            return session.sessionId
+        } catch (err: RuntimeException) {
+            presentationPolicyStore.removePolicy(session.sessionId)
+            executionSettingsStore.removeSettings(session.sessionId)
+            runCatching { manager.cancelSession(session.sessionId) }
             throw err
         }
     }
@@ -299,6 +362,18 @@ class AgentSessionController(context: Context) {
         executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
     ): SessionStartResult {
         val manager = requireAgentManager()
+        val session = manager.getSessions(currentUserId()).firstOrNull { it.sessionId == sessionId }
+            ?: throw IllegalArgumentException("Unknown HOME draft session: $sessionId")
+        check(
+            session.anchor == AgentSessionInfo.ANCHOR_HOME &&
+                session.parentSessionId == null &&
+                session.targetPackage == targetPackage,
+        ) {
+            "Session $sessionId is not a HOME draft for $targetPackage"
+        }
+        check(session.state == AgentSessionInfo.STATE_CREATED) {
+            "Session $sessionId is not in CREATED state"
+        }
         check(canStartSessionForTarget(targetPackage)) {
             "Target package $targetPackage is not eligible for session start"
         }
@@ -322,6 +397,59 @@ class AgentSessionController(context: Context) {
                         finalPresentationPolicy = finalPresentationPolicy,
                     ),
                 ),
+                allowDetachedMode,
+            )
+            return SessionStartResult(
+                parentSessionId = sessionId,
+                childSessionIds = listOf(sessionId),
+                plannedTargets = listOf(targetPackage),
+                geniePackage = geniePackage,
+                anchor = AgentSessionInfo.ANCHOR_HOME,
+            )
+        } catch (err: RuntimeException) {
+            presentationPolicyStore.removePolicy(sessionId)
+            executionSettingsStore.removeSettings(sessionId)
+            throw err
+        }
+    }
+
+    fun startExistingHomeSessionIdle(
+        sessionId: String,
+        targetPackage: String,
+        allowDetachedMode: Boolean,
+        finalPresentationPolicy: SessionFinalPresentationPolicy,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+    ): SessionStartResult {
+        val manager = requireAgentManager()
+        val session = manager.getSessions(currentUserId()).firstOrNull { it.sessionId == sessionId }
+            ?: throw IllegalArgumentException("Unknown HOME draft session: $sessionId")
+        check(
+            session.anchor == AgentSessionInfo.ANCHOR_HOME &&
+                session.parentSessionId == null &&
+                session.targetPackage == targetPackage,
+        ) {
+            "Session $sessionId is not a HOME draft for $targetPackage"
+        }
+        check(session.state == AgentSessionInfo.STATE_CREATED) {
+            "Session $sessionId is not in CREATED state"
+        }
+        check(canStartSessionForTarget(targetPackage)) {
+            "Target package $targetPackage is not eligible for session start"
+        }
+        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
+            ?: throw IllegalStateException("No GENIE role holder configured")
+        presentationPolicyStore.savePolicy(sessionId, finalPresentationPolicy)
+        executionSettingsStore.saveSettings(sessionId, executionSettings)
+        try {
+            provisionSessionNetworkConfig(sessionId)
+            manager.publishTrace(
+                sessionId,
+                "Starting idle Codex app-scoped desktop attach session for $targetPackage.",
+            )
+            manager.startGenieSession(
+                sessionId,
+                geniePackage,
+                DesktopSessionBootstrap.idleAttachPrompt(),
                 allowDetachedMode,
             )
             return SessionStartResult(

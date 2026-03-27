@@ -22,6 +22,7 @@ import org.json.JSONObject
 object AgentPlannerRuntimeManager {
     private const val TAG = "AgentPlannerRuntime"
     private val activePlannerSessions = ConcurrentHashMap<String, Boolean>()
+    private val desktopPlannerSessions = ConcurrentHashMap<String, AgentPlannerDesktopSessionHost>()
 
     fun requestText(
         context: Context,
@@ -56,6 +57,52 @@ object AgentPlannerRuntimeManager {
         } finally {
             activePlannerSessions.remove(plannerSessionId)
         }
+    }
+
+    fun ensureIdleDesktopSession(
+        context: Context,
+        sessionController: AgentSessionController,
+        sessionId: String,
+    ) {
+        check(!activePlannerSessions.containsKey(sessionId)) {
+            "Planner runtime already active for parent session $sessionId"
+        }
+        desktopPlannerSessions.computeIfAbsent(sessionId) {
+            AgentPlannerDesktopSessionHost(
+                context = context.applicationContext,
+                sessionController = sessionController,
+                sessionId = sessionId,
+                onClosed = {
+                    desktopPlannerSessions.remove(sessionId)
+                },
+            ).also(AgentPlannerDesktopSessionHost::start)
+        }
+    }
+
+    fun activeThreadId(sessionId: String): String? = desktopPlannerSessions[sessionId]?.activeThreadId()
+
+    fun openDesktopProxy(
+        sessionId: String,
+        onMessage: (String) -> Unit,
+        onClosed: (String?) -> Unit,
+    ): String? = desktopPlannerSessions[sessionId]?.openDesktopProxy(onMessage, onClosed)
+
+    fun sendDesktopProxyInput(
+        sessionId: String,
+        connectionId: String,
+        message: String,
+    ): Boolean = desktopPlannerSessions[sessionId]?.sendDesktopProxyInput(connectionId, message) ?: false
+
+    fun closeDesktopProxy(
+        sessionId: String,
+        connectionId: String,
+        reason: String? = null,
+    ) {
+        desktopPlannerSessions[sessionId]?.closeDesktopProxy(connectionId, reason)
+    }
+
+    fun closeSession(sessionId: String) {
+        desktopPlannerSessions.remove(sessionId)?.close()
     }
 
     private class AgentPlannerRuntime(
@@ -173,7 +220,6 @@ object AgentPlannerRuntimeManager {
             val params = JSONObject()
                 .put("approvalPolicy", "never")
                 .put("sandbox", "read-only")
-                .put("ephemeral", true)
                 .put("cwd", context.filesDir.absolutePath)
                 .put("serviceName", "android_agent_planner")
                 .put("baseInstructions", instructions)

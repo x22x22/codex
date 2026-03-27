@@ -7,6 +7,12 @@ import kotlin.concurrent.thread
 import org.json.JSONArray
 import org.json.JSONObject
 
+data class CreateSessionRequest(
+    val targetPackage: String?,
+    val model: String?,
+    val reasoningEffort: String?,
+)
+
 data class LaunchSessionRequest(
     val prompt: String,
     val targetPackage: String?,
@@ -15,7 +21,43 @@ data class LaunchSessionRequest(
     val existingSessionId: String? = null,
 )
 
+data class StartSessionRequest(
+    val sessionId: String,
+    val prompt: String,
+)
+
+data class SessionDraftResult(
+    val sessionId: String,
+    val anchor: Int,
+)
+
 object AgentSessionLauncher {
+    fun createSessionDraft(
+        request: CreateSessionRequest,
+        sessionController: AgentSessionController,
+    ): SessionDraftResult {
+        val executionSettings = SessionExecutionSettings(
+            model = request.model?.trim()?.ifEmpty { null },
+            reasoningEffort = request.reasoningEffort?.trim()?.ifEmpty { null },
+        )
+        val targetPackage = request.targetPackage?.trim()?.ifEmpty { null }
+        return if (targetPackage == null) {
+            SessionDraftResult(
+                sessionId = sessionController.createDirectSessionDraft(executionSettings),
+                anchor = AgentSessionInfo.ANCHOR_AGENT,
+            )
+        } else {
+            SessionDraftResult(
+                sessionId = sessionController.createHomeSessionDraft(
+                    targetPackage = targetPackage,
+                    finalPresentationPolicy = SessionFinalPresentationPolicy.AGENT_CHOICE,
+                    executionSettings = executionSettings,
+                ),
+                anchor = AgentSessionInfo.ANCHOR_HOME,
+            )
+        }
+    }
+
     fun startSessionAsync(
         context: Context,
         request: LaunchSessionRequest,
@@ -36,8 +78,67 @@ object AgentSessionLauncher {
                 requestUserInputHandler = requestUserInputHandler,
             )
         }
-        val pendingSession = sessionController.createPendingDirectSession(
-            objective = request.prompt,
+        val draftSession = createSessionDraft(
+            request = CreateSessionRequest(
+                targetPackage = null,
+                model = executionSettings.model,
+                reasoningEffort = executionSettings.reasoningEffort,
+            ),
+            sessionController = sessionController,
+        )
+        return startSessionDraftAsync(
+            context = context,
+            request = StartSessionRequest(
+                sessionId = draftSession.sessionId,
+                prompt = request.prompt,
+            ),
+            sessionController = sessionController,
+            requestUserInputHandler = requestUserInputHandler,
+        )
+    }
+
+    fun startSessionDraftAsync(
+        context: Context,
+        request: StartSessionRequest,
+        sessionController: AgentSessionController,
+        requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
+    ): SessionStartResult {
+        val sessionId = request.sessionId.trim()
+        require(sessionId.isNotEmpty()) { "Missing session id" }
+        val prompt = request.prompt.trim()
+        require(prompt.isNotEmpty()) { "Missing prompt" }
+        val snapshot = sessionController.loadSnapshot(sessionId)
+        val session = snapshot.sessions.firstOrNull { it.sessionId == sessionId }
+            ?: throw IllegalArgumentException("Unknown session: $sessionId")
+        if (
+            session.anchor == AgentSessionInfo.ANCHOR_HOME &&
+            session.parentSessionId == null &&
+            !session.targetPackage.isNullOrBlank()
+        ) {
+            return sessionController.startExistingHomeSession(
+                sessionId = sessionId,
+                targetPackage = checkNotNull(session.targetPackage),
+                prompt = prompt,
+                allowDetachedMode = true,
+                finalPresentationPolicy = session.requiredFinalPresentationPolicy
+                    ?: SessionFinalPresentationPolicy.AGENT_CHOICE,
+                executionSettings = sessionController.executionSettingsForSession(sessionId),
+            )
+        }
+        check(
+            session.anchor == AgentSessionInfo.ANCHOR_AGENT &&
+                session.parentSessionId == null &&
+                session.targetPackage == null,
+        ) {
+            "Session $sessionId is not a startable draft"
+        }
+        check(AgentPlannerRuntimeManager.activeThreadId(sessionId) == null) {
+            "Session $sessionId is already attached to an idle planner runtime; send the first prompt through the attached client"
+        }
+        val executionSettings = sessionController.executionSettingsForSession(sessionId)
+        val pendingSession = sessionController.prepareDirectSessionDraftForStart(
+            sessionId = sessionId,
+            objective = prompt,
             executionSettings = executionSettings,
         )
         val applicationContext = context.applicationContext
@@ -45,7 +146,7 @@ object AgentSessionLauncher {
             runCatching {
                 AgentTaskPlanner.planSession(
                     context = applicationContext,
-                    userObjective = request.prompt,
+                    userObjective = prompt,
                     executionSettings = executionSettings,
                     sessionController = sessionController,
                     requestUserInputHandler = null,

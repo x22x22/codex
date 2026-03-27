@@ -3689,9 +3689,9 @@ impl CodexMessageProcessor {
                 return true;
             }
 
-            let rollout_path = if let Some(path) = existing_thread.rollout_path() {
+            let active_rollout_path = if let Some(path) = existing_thread.rollout_path() {
                 if path.exists() {
-                    path
+                    Some(path)
                 } else {
                     match find_thread_path_by_id_str(
                         &self.config.codex_home,
@@ -3699,15 +3699,7 @@ impl CodexMessageProcessor {
                     )
                     .await
                     {
-                        Ok(Some(path)) => path,
-                        Ok(None) => {
-                            self.send_invalid_request_error(
-                                request_id,
-                                format!("no rollout found for thread id {existing_thread_id}"),
-                            )
-                            .await;
-                            return true;
-                        }
+                        Ok(path) => path,
                         Err(err) => {
                             self.send_invalid_request_error(
                                 request_id,
@@ -3725,15 +3717,7 @@ impl CodexMessageProcessor {
                 )
                 .await
                 {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("no rollout found for thread id {existing_thread_id}"),
-                        )
-                        .await;
-                        return true;
-                    }
+                    Ok(path) => path,
                     Err(err) => {
                         self.send_invalid_request_error(
                             request_id,
@@ -3746,14 +3730,17 @@ impl CodexMessageProcessor {
             };
 
             if let Some(requested_path) = params.path.as_ref()
-                && requested_path != &rollout_path
+                && active_rollout_path.as_ref() != Some(requested_path)
             {
+                let active_label = active_rollout_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "<none>".to_string());
                 self.send_invalid_request_error(
                     request_id,
                     format!(
-                        "cannot resume running thread {existing_thread_id} with mismatched path: requested `{}`, active `{}`",
+                        "cannot resume running thread {existing_thread_id} with mismatched path: requested `{}`, active `{active_label}`",
                         requested_path.display(),
-                        rollout_path.display()
                     ),
                 )
                 .await;
@@ -3781,20 +3768,28 @@ impl CodexMessageProcessor {
                     mismatch_details.join("; ")
                 );
             }
-            let thread_summary = match load_thread_summary_for_rollout(
-                &self.config,
-                existing_thread_id,
-                rollout_path.as_path(),
-                config_snapshot.model_provider_id.as_str(),
-                /*persisted_metadata*/ None,
-            )
-            .await
-            {
-                Ok(thread) => thread,
-                Err(message) => {
-                    self.send_internal_error(request_id, message).await;
-                    return true;
+            let thread_summary = if let Some(rollout_path) = active_rollout_path.as_ref() {
+                match load_thread_summary_for_rollout(
+                    &self.config,
+                    existing_thread_id,
+                    rollout_path.as_path(),
+                    config_snapshot.model_provider_id.as_str(),
+                    /*persisted_metadata*/ None,
+                )
+                .await
+                {
+                    Ok(thread) => thread,
+                    Err(message) => {
+                        self.send_internal_error(request_id, message).await;
+                        return true;
+                    }
                 }
+            } else {
+                build_thread_from_snapshot(
+                    existing_thread_id,
+                    &config_snapshot,
+                    existing_thread.rollout_path(),
+                )
             };
 
             let listener_command_tx = {
@@ -3816,7 +3811,7 @@ impl CodexMessageProcessor {
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
-                    rollout_path: rollout_path.clone(),
+                    rollout_path: active_rollout_path,
                     config_snapshot,
                     thread_summary,
                 }),
@@ -7450,24 +7445,31 @@ async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
-    if let Err(message) = populate_thread_turns(
-        &mut thread,
-        ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
-        active_turn.as_ref(),
-    )
-    .await
-    {
-        outgoing
-            .send_error(
-                request_id,
-                JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message,
-                    data: None,
-                },
-            )
-            .await;
-        return;
+    if let Some(rollout_path) = pending.rollout_path.as_deref() {
+        if let Err(message) = populate_thread_turns(
+            &mut thread,
+            ThreadTurnSource::RolloutPath(rollout_path),
+            active_turn.as_ref(),
+        )
+        .await
+        {
+            outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message,
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+    } else {
+        thread.turns.clear();
+        if let Some(active_turn) = active_turn {
+            merge_turn_history_with_active_turn(&mut thread.turns, active_turn);
+        }
     }
 
     let thread_status = thread_watch_manager

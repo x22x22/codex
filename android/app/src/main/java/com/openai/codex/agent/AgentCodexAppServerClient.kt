@@ -322,7 +322,6 @@ object AgentCodexAppServerClient {
         val params = JSONObject()
             .put("approvalPolicy", "never")
             .put("sandbox", "read-only")
-            .put("ephemeral", true)
             .put("cwd", context.filesDir.absolutePath)
             .put("serviceName", "android_agent")
             .put("baseInstructions", instructions)

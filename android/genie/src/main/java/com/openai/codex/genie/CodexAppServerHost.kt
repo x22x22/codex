@@ -5,6 +5,7 @@ import android.app.agent.GenieRequest
 import android.app.agent.GenieService
 import android.content.Context
 import android.util.Log
+import com.openai.codex.bridge.DesktopSessionBootstrap
 import com.openai.codex.bridge.HostedCodexConfig
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.BufferedWriter
@@ -33,13 +34,27 @@ class CodexAppServerHost(
         private const val REQUEST_TIMEOUT_MS = 30_000L
         private const val POLL_TIMEOUT_MS = 250L
         private const val DEFAULT_HOSTED_MODEL = "gpt-5.3-codex"
+        private const val REMOTE_REQUEST_ID_PREFIX = "remote:"
+        private const val REMOTE_SERVER_VERSION = "0.1.0"
     }
+
+    private data class RemoteProxyState(
+        val connectionId: String,
+        val optOutNotificationMethods: Set<String>,
+    )
+
+    private data class RemotePendingRequest(
+        val connectionId: String,
+        val remoteRequestId: Any,
+    )
 
     private val requestIdSequence = AtomicInteger(1)
     private val pendingResponses = ConcurrentHashMap<String, LinkedBlockingQueue<JSONObject>>()
+    private val remotePendingRequests = ConcurrentHashMap<String, RemotePendingRequest>()
     private val inboundMessages = LinkedBlockingQueue<JSONObject>()
     private val writerLock = Any()
     private val streamedAgentMessages = mutableMapOf<String, StringBuilder>()
+    private val remoteProxyLock = Any()
 
     private lateinit var process: Process
     private lateinit var writer: BufferedWriter
@@ -49,18 +64,55 @@ class CodexAppServerHost(
     private var stderrThread: Thread? = null
     private var finalAgentMessage: String? = null
     private var resultPublished = false
+    @Volatile
+    private var activeThreadId: String? = null
+    @Volatile
+    private var remoteProxyState: RemoteProxyState? = null
+    private val idleDesktopAttachSession = DesktopSessionBootstrap.isIdleAttachPrompt(request.prompt)
+
     fun run() {
         startProcess()
         initialize()
+        bridgeClient.setAppServerProxyHandler(
+            object : AgentBridgeClient.AppServerProxyHandler {
+                override fun onMessage(message: String) {
+                    handleRemoteProxyMessage(message)
+                }
+
+                override fun onClosed(reason: String?) {
+                    remoteProxyState = null
+                    if (!reason.isNullOrBlank()) {
+                        runCatching {
+                            callback.publishTrace(request.sessionId, "Desktop attach closed: $reason")
+                        }.onFailure { err ->
+                            Log.w(TAG, "Failed to publish desktop attach close trace for ${request.sessionId}", err)
+                        }
+                    }
+                }
+            },
+        )
         executionSettings = bridgeClient.readSessionExecutionSettings()
         val model = resolveModel()
         val threadId = startThread(model)
-        startTurn(threadId, model)
-        callback.publishTrace(request.sessionId, "Hosted codex app-server thread $threadId for ${request.targetPackage}.")
+        activeThreadId = threadId
+        bridgeClient.registerAppServerThread(threadId)
+        if (!idleDesktopAttachSession) {
+            startTurn(threadId, model)
+        }
+        callback.publishTrace(
+            request.sessionId,
+            if (idleDesktopAttachSession) {
+                "Hosted idle codex app-server thread $threadId for ${request.targetPackage}."
+            } else {
+                "Hosted codex app-server thread $threadId for ${request.targetPackage}."
+            },
+        )
         eventLoop()
     }
 
     override fun close() {
+        bridgeClient.closeRemoteAppServer("Genie session ended")
+        bridgeClient.setAppServerProxyHandler(null)
         stdoutThread?.interrupt()
         stderrThread?.interrupt()
         synchronized(writerLock) {
@@ -115,7 +167,7 @@ class CodexAppServerHost(
                                 Log.w(TAG, "Failed to parse codex app-server stdout line", err)
                                 return@forEach
                             }
-                        routeInbound(message)
+                        routeInbound(line, message)
                     }
                 }
             } catch (_: InterruptedIOException) {
@@ -158,10 +210,25 @@ class CodexAppServerHost(
         }
     }
 
-    private fun routeInbound(message: JSONObject) {
+    private fun routeInbound(
+        rawMessage: String,
+        message: JSONObject,
+    ) {
         if (message.has("id") && !message.has("method")) {
-            pendingResponses[message.get("id").toString()]?.offer(message)
+            val requestId = message.get("id").toString()
+            pendingResponses[requestId]?.offer(message)
+            val remoteRequest = remotePendingRequests.remove(requestId)
+            if (remoteRequest != null) {
+                bridgeClient.sendRemoteAppServerMessage(
+                    JSONObject(message.toString())
+                        .put("id", remoteRequest.remoteRequestId)
+                        .toString(),
+                )
+            }
             return
+        }
+        if (message.has("method") && !message.has("id")) {
+            forwardRemoteNotification(rawMessage, message)
         }
         inboundMessages.offer(message)
     }
@@ -189,7 +256,6 @@ class CodexAppServerHost(
         val params = JSONObject()
             .put("approvalPolicy", "never")
             .put("sandbox", "read-only")
-            .put("ephemeral", true)
             .put("cwd", context.filesDir.absolutePath)
             .put("serviceName", "android_genie")
             .put("baseInstructions", buildBaseInstructions())
@@ -343,6 +409,8 @@ class CodexAppServerHost(
         val params = message.optJSONObject("params") ?: JSONObject()
         return when (method) {
             "turn/started" -> {
+                finalAgentMessage = null
+                streamedAgentMessages.clear()
                 callback.publishTrace(request.sessionId, "codex turn started for ${request.targetPackage}.")
                 false
             }
@@ -364,7 +432,6 @@ class CodexAppServerHost(
             }
             "turn/completed" -> {
                 finishTurn(params)
-                true
             }
             else -> false
         }
@@ -465,7 +532,7 @@ class CodexAppServerHost(
             ?: item.optJSONArray("command")?.join(" ")
     }
 
-    private fun finishTurn(params: JSONObject) {
+    private fun finishTurn(params: JSONObject): Boolean {
         val turn = params.optJSONObject("turn") ?: JSONObject()
         Log.i(TAG, "turn/completed status=${turn.optString("status")} error=${turn.opt("error")}")
         when (turn.optString("status")) {
@@ -473,19 +540,41 @@ class CodexAppServerHost(
                 val resultText = finalAgentMessage?.takeIf(String::isNotBlank)
                     ?: "Genie completed without a final assistant message."
                 publishResultOnce(resultText)
+                if (shouldKeepSessionOpenAfterTurn()) {
+                    callback.publishTrace(
+                        request.sessionId,
+                        "Turn completed; desktop attach remains active for follow-up control.",
+                    )
+                    return false
+                }
                 callback.updateState(request.sessionId, AgentSessionInfo.STATE_COMPLETED)
+                return true
             }
             "interrupted" -> {
+                if (shouldKeepSessionOpenAfterTurn()) {
+                    callback.publishTrace(
+                        request.sessionId,
+                        "Turn interrupted; desktop attach remains active for follow-up control.",
+                    )
+                    return false
+                }
                 callback.publishError(request.sessionId, "Genie turn interrupted")
                 callback.updateState(request.sessionId, AgentSessionInfo.STATE_CANCELLED)
+                return true
             }
             else -> {
                 val errorDetail = turn.opt("error")?.toString()
                     ?: "Genie turn failed with status ${turn.optString("status", "unknown")}" 
                 callback.publishError(request.sessionId, errorDetail)
                 callback.updateState(request.sessionId, AgentSessionInfo.STATE_FAILED)
+                return true
             }
         }
+    }
+
+    private fun shouldKeepSessionOpenAfterTurn(): Boolean {
+        val proxyState = remoteProxyState ?: return false
+        return proxyState.connectionId == bridgeClient.currentRemoteConnectionId()
     }
 
     private fun publishResultOnce(text: String) {
@@ -500,7 +589,7 @@ class CodexAppServerHost(
         method: String,
         params: JSONObject,
     ): JSONObject {
-        val requestId = requestIdSequence.getAndIncrement().toString()
+        val requestId = "host-${requestIdSequence.getAndIncrement()}"
         val responseQueue = LinkedBlockingQueue<JSONObject>(1)
         pendingResponses[requestId] = responseQueue
         try {
@@ -569,6 +658,147 @@ class CodexAppServerHost(
         }
     }
 
+    private fun handleRemoteProxyMessage(message: String) {
+        val json = runCatching { JSONObject(message) }
+            .getOrElse { err ->
+                bridgeClient.sendRemoteAppServerMessage(
+                    errorResponse(
+                        requestId = null,
+                        code = -32700,
+                        message = err.message ?: "Invalid remote JSON-RPC message",
+                    ),
+                )
+                return
+            }
+        when {
+            json.has("method") && json.has("id") -> handleRemoteProxyRequest(json)
+            json.has("method") -> handleRemoteProxyNotification(json)
+            else -> Unit
+        }
+    }
+
+    private fun handleRemoteProxyRequest(message: JSONObject) {
+        val method = message.optString("method")
+        val remoteRequestId = message.opt("id")
+        if (remoteRequestId == null) {
+            return
+        }
+        when (method) {
+            "initialize" -> {
+                val params = message.optJSONObject("params") ?: JSONObject()
+                val optOut = params
+                    .optJSONObject("capabilities")
+                    ?.optJSONArray("optOutNotificationMethods")
+                    ?.toStringSet()
+                    .orEmpty()
+                val connectionId = checkNotNull(bridgeClient.currentRemoteConnectionId()) {
+                    "Remote connection id unavailable during initialize"
+                }
+                remoteProxyState = RemoteProxyState(
+                    connectionId = connectionId,
+                    optOutNotificationMethods = optOut,
+                )
+                bridgeClient.sendRemoteAppServerMessage(
+                    JSONObject()
+                        .put("id", remoteRequestId)
+                        .put(
+                            "result",
+                            JSONObject()
+                                .put("userAgent", "android_genie_bridge/$REMOTE_SERVER_VERSION")
+                                .put("codexHome", codexHome.absolutePath)
+                                .put("platformFamily", "unix")
+                                .put("platformOs", "android"),
+                        )
+                        .toString(),
+                )
+            }
+            "account/read" -> {
+                bridgeClient.sendRemoteAppServerMessage(
+                    JSONObject()
+                        .put("id", remoteRequestId)
+                        .put("result", buildRemoteAccountReadResult())
+                        .toString(),
+                )
+            }
+            else -> {
+                val connectionId = bridgeClient.currentRemoteConnectionId()
+                if (connectionId.isNullOrBlank()) {
+                    bridgeClient.sendRemoteAppServerMessage(
+                        errorResponse(remoteRequestId, -32000, "Remote desktop session is not attached"),
+                    )
+                    return
+                }
+                val forwardedRequestId = "$REMOTE_REQUEST_ID_PREFIX$connectionId:${message.get("id")}"
+                remotePendingRequests[forwardedRequestId] = RemotePendingRequest(
+                    connectionId = connectionId,
+                    remoteRequestId = remoteRequestId,
+                )
+                sendMessage(
+                    JSONObject(message.toString())
+                        .put("id", forwardedRequestId),
+                )
+            }
+        }
+    }
+
+    private fun buildRemoteAccountReadResult(): JSONObject {
+        val account = if (runtimeStatus.authenticated) {
+            JSONObject().put("type", "apiKey")
+        } else {
+            JSONObject.NULL
+        }
+        return JSONObject()
+            .put("account", account)
+            .put("requiresOpenaiAuth", true)
+    }
+
+    private fun handleRemoteProxyNotification(message: JSONObject) {
+        when (message.optString("method")) {
+            "initialized" -> Unit
+            else -> sendMessage(JSONObject(message.toString()))
+        }
+    }
+
+    private fun forwardRemoteNotification(
+        rawMessage: String,
+        message: JSONObject,
+    ) {
+        val proxyState = remoteProxyState ?: return
+        if (proxyState.connectionId != bridgeClient.currentRemoteConnectionId()) {
+            return
+        }
+        val method = message.optString("method")
+        if (proxyState.optOutNotificationMethods.contains(method)) {
+            return
+        }
+        bridgeClient.sendRemoteAppServerMessage(rawMessage)
+    }
+
+    private fun errorResponse(
+        requestId: Any?,
+        code: Int,
+        message: String,
+    ): String {
+        val response = JSONObject().put(
+            "error",
+            JSONObject()
+                .put("code", code)
+                .put("message", message),
+        )
+        if (requestId != null) {
+            response.put("id", requestId)
+        }
+        return response.toString()
+    }
+
+    private fun org.json.JSONArray.toStringSet(): Set<String> {
+        val values = mutableSetOf<String>()
+        for (index in 0 until length()) {
+            optString(index).takeIf(String::isNotBlank)?.let(values::add)
+        }
+        return values
+    }
+
     private fun buildBaseInstructions(): String {
         val detachedSessionInstructions = if (request.isDetachedModeAllowed) {
             DetachedSessionGuard.instructions(request.targetPackage)
@@ -602,6 +832,9 @@ class CodexAppServerHost(
     }
 
     private fun buildDelegatedPrompt(): String {
+        check(!idleDesktopAttachSession) {
+            "Idle desktop-attach sessions do not have an initial delegated prompt"
+        }
         val detachedSessionPrompt = if (request.isDetachedModeAllowed) {
             """
             

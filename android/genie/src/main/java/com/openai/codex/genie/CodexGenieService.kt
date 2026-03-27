@@ -4,6 +4,7 @@ import android.app.agent.AgentSessionInfo
 import android.app.agent.GenieRequest
 import android.app.agent.GenieService
 import android.util.Log
+import com.openai.codex.bridge.DesktopSessionBootstrap
 import com.openai.codex.bridge.DetachedTargetCompat
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -44,10 +45,17 @@ class CodexGenieService : GenieService() {
         val sessionId = request.sessionId
         try {
             callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
-            callback.publishTrace(
-                sessionId,
-                "Codex Genie started for target=${request.targetPackage} prompt=${request.prompt}",
-            )
+            if (DesktopSessionBootstrap.isIdleAttachPrompt(request.prompt)) {
+                callback.publishTrace(
+                    sessionId,
+                    "Codex Genie started for target=${request.targetPackage} in idle desktop-attach mode.",
+                )
+            } else {
+                callback.publishTrace(
+                    sessionId,
+                    "Codex Genie started for target=${request.targetPackage} prompt=${request.prompt}",
+                )
+            }
             callback.publishTrace(
                 sessionId,
                 "Genie is headless. It hosts codex app-server locally, routes model traffic through the Agent bridge, uses normal Android shell commands for package/app driving, and reserves dynamic tools for framework-only target controls.",

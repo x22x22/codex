@@ -273,7 +273,7 @@ async fn validate_snapshot(shell: &Shell, snapshot_path: &Path, cwd: &Path) -> R
         &script,
         SNAPSHOT_TIMEOUT,
         /*use_login_shell*/ false,
-        None,
+        /*env_overrides*/ None,
         cwd,
     )
     .await
@@ -286,7 +286,7 @@ async fn run_shell_script(shell: &Shell, script: &str, cwd: &Path) -> Result<Str
         script,
         SNAPSHOT_TIMEOUT,
         /*use_login_shell*/ true,
-        None,
+        /*env_overrides*/ None,
         cwd,
     )
     .await

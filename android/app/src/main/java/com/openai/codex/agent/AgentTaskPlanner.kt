@@ -116,6 +116,8 @@ object AgentTaskPlanner {
             .put("required", JSONArray().put("targets").put("reason").put("allowDetachedMode"))
             .put("additionalProperties", false)
 
+    internal fun plannerInstructions(): String = PLANNER_INSTRUCTIONS
+
     fun startSession(
         context: Context,
         userObjective: String,

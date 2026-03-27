@@ -63,5 +63,13 @@
             android:name=".SessionDetailActivity"
             android:exported="false"
             android:launchMode="singleTop" />
+
+        <activity
+            android:name=".DesktopBridgeBootstrapActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>

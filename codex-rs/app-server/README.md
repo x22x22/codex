@@ -241,6 +241,8 @@ Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `
 
 To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, including `approvalsReviewer`.
 
+If the target thread is still running but has not materialized a rollout file yet (for example, a fresh persistent thread before its first user turn), `thread/resume` still succeeds while that runtime is alive. In that case the resumed thread returns an empty `turns` list until the first turn starts. If the runtime exits before any turn materializes, there is still nothing persisted to resume later.
+
 By default, resume uses the latest persisted `model` and `reasoningEffort` values associated with the thread. Supplying any of `model`, `modelProvider`, `config.model`, or `config.model_reasoning_effort` disables that persisted fallback and uses the explicit overrides plus normal config resolution instead.
 
 Example:

@@ -334,14 +334,14 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
         Ok(parsed) => parsed,
         Err(_) => {
             color_eyre::eyre::bail!(
-                "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+                "invalid remote address `{addr}`; expected `ws://host:port[/path]` or `wss://host:port[/path]`"
             );
         }
     };
     if matches!(parsed.scheme(), "ws" | "wss")
         && parsed.host_str().is_some()
         && remote_addr_has_explicit_port(addr, &parsed)
-        && parsed.path() == "/"
+        && !parsed.path().is_empty()
         && parsed.query().is_none()
         && parsed.fragment().is_none()
     {
@@ -349,7 +349,7 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
     }
 
     color_eyre::eyre::bail!(
-        "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+        "invalid remote address `{addr}`; expected `ws://host:port[/path]` or `wss://host:port[/path]`"
     );
 }
 
@@ -1683,16 +1683,16 @@ mod tests {
     use tokio::time::Duration;
     use tokio::time::timeout;
 
-    struct ThreadManagerTestModeGuard;
+    struct ThreadLookupTestModeGuard;
 
-    impl ThreadManagerTestModeGuard {
+    impl ThreadLookupTestModeGuard {
         fn enable() -> Self {
             set_thread_manager_test_mode(/*enabled*/ true);
             Self
         }
     }
 
-    impl Drop for ThreadManagerTestModeGuard {
+    impl Drop for ThreadLookupTestModeGuard {
         fn drop(&mut self) {
             set_thread_manager_test_mode(/*enabled*/ false);
         }
@@ -1747,6 +1747,15 @@ mod tests {
     }
 
     #[test]
+    fn normalize_remote_addr_accepts_websocket_url_with_path() {
+        assert_eq!(
+            normalize_remote_addr("ws://127.0.0.1:4500/session/abc123")
+                .expect("ws URL with path should normalize"),
+            "ws://127.0.0.1:4500/session/abc123"
+        );
+    }
+
+    #[test]
     fn normalize_remote_addr_rejects_websocket_url_without_explicit_port() {
         for addr in [
             "ws://127.0.0.1",
@@ -1757,7 +1766,7 @@ mod tests {
                 .expect_err("websocket URLs without an explicit port should be rejected");
             assert!(
                 err.to_string()
-                    .contains("expected `ws://host:port` or `wss://host:port`")
+                    .contains("expected `ws://host:port[/path]` or `wss://host:port[/path]`")
             );
         }
     }
@@ -1768,7 +1777,7 @@ mod tests {
             .expect_err("https URLs should be rejected");
         assert!(
             err.to_string()
-                .contains("expected `ws://host:port` or `wss://host:port`")
+                .contains("expected `ws://host:port[/path]` or `wss://host:port[/path]`")
         );
     }
 
@@ -1778,7 +1787,7 @@ mod tests {
             normalize_remote_addr("127.0.0.1:4500").expect_err("host:port should be rejected");
         assert!(
             err.to_string()
-                .contains("expected `ws://host:port` or `wss://host:port`")
+                .contains("expected `ws://host:port[/path]` or `wss://host:port[/path]`")
         );
     }
 
@@ -1866,7 +1875,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn embedded_app_server_supports_thread_start_rpc() -> color_eyre::Result<()> {
-        let _thread_manager_test_mode = ThreadManagerTestModeGuard::enable();
+        let _thread_lookup_test_mode = ThreadLookupTestModeGuard::enable();
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
         let app_server = timeout(

@@ -53,6 +53,9 @@ class CodexAgentService : AgentService() {
                 AgentSessionBridgeServer.closeSession(session.sessionId)
             }
         }
+        if (isTerminalSessionState(session.state)) {
+            AgentPlannerRuntimeManager.closeSession(session.sessionId)
+        }
         if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER) {
             AgentQuestionNotifier.cancel(this, session.sessionId)
             return
@@ -72,6 +75,7 @@ class CodexAgentService : AgentService() {
     override fun onSessionRemoved(sessionId: String) {
         Log.i(TAG, "onSessionRemoved sessionId=$sessionId")
         AgentSessionBridgeServer.closeSession(sessionId)
+        AgentPlannerRuntimeManager.closeSession(sessionId)
         AgentQuestionNotifier.cancel(this, sessionId)
         presentationPolicyStore.removePolicy(sessionId)
         handledGenieQuestions.removeIf { it.startsWith("$sessionId:") }

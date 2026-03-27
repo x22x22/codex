@@ -536,7 +536,7 @@ impl OauthLoginFlow {
         let (tx, rx) = oneshot::channel();
 
         tokio::spawn(async move {
-            let result = self.finish(true).await;
+            let result = self.finish(/*emit_browser_url*/ true).await;
 
             if let Err(err) = &result {
                 eprintln!(
