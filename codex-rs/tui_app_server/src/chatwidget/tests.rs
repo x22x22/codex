@@ -79,6 +79,8 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config::types::McpServerConfig;
+use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config::types::Notifications;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
@@ -11524,24 +11526,61 @@ async fn mcp_startup_complete_does_not_clear_running_task() {
 async fn app_server_mcp_startup_failure_renders_warning_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.show_welcome_banner = false;
+    chat.config.mcp_servers = Constrained::allow_any(HashMap::from([
+        (
+            "alpha".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "alpha".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            },
+        ),
+        (
+            "beta".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::Stdio {
+                    command: "beta".to_string(),
+                    args: Vec::new(),
+                    env: None,
+                    env_vars: Vec::new(),
+                    cwd: None,
+                },
+                enabled: true,
+                required: false,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+                oauth_resource: None,
+                tools: HashMap::new(),
+            },
+        ),
+    ]));
 
-    for notification in [
-        McpServerStatusUpdatedNotification {
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             name: "alpha".to_string(),
             status: McpServerStartupState::Starting,
             error: None,
-        },
-        McpServerStatusUpdatedNotification {
-            name: "beta".to_string(),
-            status: McpServerStartupState::Starting,
-            error: None,
-        },
-    ] {
-        chat.handle_server_notification(
-            ServerNotification::McpServerStatusUpdated(notification),
-            None,
-        );
-    }
+        }),
+        None,
+    );
 
     assert!(drain_insert_history(&mut rx).is_empty());
     assert!(chat.bottom_pane.is_task_running());
@@ -11562,6 +11601,18 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
         .collect::<String>();
     assert!(failure_text.contains("MCP client for `alpha` failed to start: handshake failed"));
     assert!(!failure_text.contains("MCP startup incomplete"));
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "beta".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        }),
+        None,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
     assert!(chat.bottom_pane.is_task_running());
 
     chat.handle_server_notification(

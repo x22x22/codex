@@ -2798,6 +2798,7 @@ impl ChatWidget {
         if complete_when_settled
             && let Some(current) = &self.mcp_startup_status
             && !current.is_empty()
+            && current.len() >= self.enabled_mcp_server_count()
             && current
                 .values()
                 .all(|state| !matches!(state, McpStartupStatus::Starting))
@@ -2853,6 +2854,15 @@ impl ChatWidget {
             }
         }
         self.request_redraw();
+    }
+
+    fn enabled_mcp_server_count(&self) -> usize {
+        self.config
+            .mcp_servers
+            .get()
+            .values()
+            .filter(|cfg| cfg.enabled)
+            .count()
     }
 
     #[cfg(test)]
