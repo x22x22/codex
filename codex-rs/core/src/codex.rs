@@ -2629,6 +2629,7 @@ impl Session {
             msg,
         };
         self.send_event_raw(event).await;
+        self.maybe_start_parent_turn_completion_notification(turn_context, &legacy_source);
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
         self.maybe_clear_realtime_handoff_for_event(&legacy_source)
@@ -2642,6 +2643,45 @@ impl Session {
             };
             self.send_event_raw(legacy_event).await;
         }
+    }
+
+    fn maybe_start_parent_turn_completion_notification(
+        &self,
+        turn_context: &TurnContext,
+        msg: &EventMsg,
+    ) {
+        let Some(status @ (AgentStatus::Completed(_) | AgentStatus::Errored(_))) =
+            agent_status_from_event(msg)
+        else {
+            return;
+        };
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            agent_path,
+            ..
+        }) = &turn_context.session_source
+        else {
+            return;
+        };
+        let child_reference = agent_path
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| self.conversation_id.to_string());
+        let agent_control = self.services.agent_control.clone();
+        let parent_thread_id = *parent_thread_id;
+        let child_thread_id = self.conversation_id;
+        let child_agent_path = agent_path.clone();
+        tokio::spawn(async move {
+            agent_control
+                .forward_child_completion_to_parent(
+                    parent_thread_id,
+                    child_thread_id,
+                    child_reference,
+                    child_agent_path,
+                    status,
+                )
+                .await;
+        });
     }
 
     async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {

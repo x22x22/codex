@@ -3,7 +3,6 @@ use crate::agent::registry::AgentMetadata;
 use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
-use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::context_manager::is_user_turn_boundary;
 use crate::error::CodexErr;
@@ -271,17 +270,6 @@ impl AgentControl {
         .await;
 
         self.send_input(new_thread.thread_id, items).await?;
-        let child_reference = agent_metadata
-            .agent_path
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| new_thread.thread_id.to_string());
-        self.maybe_start_completion_watcher(
-            new_thread.thread_id,
-            notification_source,
-            child_reference,
-            agent_metadata.agent_path.clone(),
-        );
 
         Ok(LiveAgent {
             thread_id: new_thread.thread_id,
@@ -443,17 +431,6 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        let child_reference = agent_metadata
-            .agent_path
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| resumed_thread.thread_id.to_string());
-        self.maybe_start_completion_watcher(
-            resumed_thread.thread_id,
-            Some(notification_source.clone()),
-            child_reference,
-            agent_metadata.agent_path.clone(),
-        );
         self.persist_thread_spawn_edge_for_source(
             resumed_thread.thread.as_ref(),
             resumed_thread.thread_id,
@@ -780,83 +757,53 @@ impl AgentControl {
         Ok(agents)
     }
 
-    /// Starts a detached watcher for sub-agents spawned from another thread.
-    ///
-    /// This is only enabled for `SubAgentSource::ThreadSpawn`, where a parent thread exists and
-    /// can receive completion notifications.
-    fn maybe_start_completion_watcher(
+    pub(crate) async fn forward_child_completion_to_parent(
         &self,
+        parent_thread_id: ThreadId,
         child_thread_id: ThreadId,
-        session_source: Option<SessionSource>,
         child_reference: String,
         child_agent_path: Option<AgentPath>,
+        status: AgentStatus,
     ) {
-        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        })) = session_source
-        else {
+        let Ok(state) = self.upgrade() else {
             return;
         };
-        let control = self.clone();
-        tokio::spawn(async move {
-            let status = match control.subscribe_status(child_thread_id).await {
-                Ok(mut status_rx) => {
-                    let mut status = status_rx.borrow().clone();
-                    while !is_final(&status) {
-                        if status_rx.changed().await.is_err() {
-                            status = control.get_status(child_thread_id).await;
-                            break;
-                        }
-                        status = status_rx.borrow().clone();
-                    }
-                    status
-                }
-                Err(_) => control.get_status(child_thread_id).await,
-            };
-            if !is_final(&status) {
-                return;
-            }
-
-            let Ok(state) = control.upgrade() else {
+        let child_thread = state.get_thread(child_thread_id).await.ok();
+        let message = format_subagent_notification_message(child_reference.as_str(), &status);
+        if child_agent_path.is_some()
+            && child_thread
+                .as_ref()
+                .map(|thread| thread.enabled(Feature::MultiAgentV2))
+                .unwrap_or(true)
+        {
+            let Some(child_agent_path) = child_agent_path else {
                 return;
             };
-            let child_thread = state.get_thread(child_thread_id).await.ok();
-            let message = format_subagent_notification_message(child_reference.as_str(), &status);
-            if child_agent_path.is_some()
-                && child_thread
-                    .as_ref()
-                    .map(|thread| thread.enabled(Feature::MultiAgentV2))
-                    .unwrap_or(true)
-            {
-                let Some(child_agent_path) = child_agent_path.clone() else {
-                    return;
-                };
-                let Some(parent_agent_path) = child_agent_path
-                    .as_str()
-                    .rsplit_once('/')
-                    .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
-                else {
-                    return;
-                };
-                let communication = InterAgentCommunication::new(
-                    child_agent_path,
-                    parent_agent_path,
-                    Vec::new(),
-                    message,
-                    /*trigger_turn*/ false,
-                );
-                let _ = control
-                    .send_inter_agent_communication(parent_thread_id, communication)
-                    .await;
-                return;
-            }
-            let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
+            let Some(parent_agent_path) = child_agent_path
+                .as_str()
+                .rsplit_once('/')
+                .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
+            else {
                 return;
             };
-            parent_thread
-                .inject_user_message_without_turn(message)
+            let communication = InterAgentCommunication::new(
+                child_agent_path,
+                parent_agent_path,
+                Vec::new(),
+                message,
+                /*trigger_turn*/ false,
+            );
+            let _ = self
+                .send_inter_agent_communication(parent_thread_id, communication)
                 .await;
-        });
+            return;
+        }
+        let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
+            return;
+        };
+        parent_thread
+            .inject_user_message_without_turn(message)
+            .await;
     }
 
     #[allow(clippy::too_many_arguments)]
