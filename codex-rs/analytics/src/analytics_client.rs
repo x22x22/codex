@@ -1,4 +1,5 @@
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
@@ -30,7 +31,7 @@ pub struct TrackEventsContext {
 }
 
 #[derive(Clone)]
-pub struct ThreadInitializedInput {
+struct ThreadInitializedInput {
     pub connection_id: u64,
     pub thread_id: String,
     pub model: String,
@@ -88,11 +89,15 @@ pub enum AnalyticsFact {
     Request {
         connection_id: u64,
         request_id: RequestId,
-        request: ClientRequest,
+        request: Box<ClientRequest>,
+    },
+    Response {
+        connection_id: u64,
+        response: Box<ClientResponse>,
     },
     Notification {
         connection_id: u64,
-        notification: ServerNotification,
+        notification: Box<ServerNotification>,
     },
     // Facts that do not naturally exist on the app-server protocol surface, or
     // would require non-trivial protocol reshaping on this branch.
@@ -100,9 +105,6 @@ pub enum AnalyticsFact {
 }
 
 pub enum CustomAnalyticsFact {
-    // This remains custom on this branch because app-server-protocol does not
-    // yet expose a generic client response enum we can reduce over directly.
-    ThreadInitialized(ThreadInitializedInput),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
@@ -255,12 +257,6 @@ impl AnalyticsEventsClient {
         });
     }
 
-    pub fn track_thread_initialized(&self, input: ThreadInitializedInput) {
-        self.record_fact(AnalyticsFact::Custom(
-            CustomAnalyticsFact::ThreadInitialized(input),
-        ));
-    }
-
     pub fn track_app_mentioned(&self, tracking: TrackEventsContext, mentions: Vec<AppInvocation>) {
         if mentions.is_empty() {
             return;
@@ -329,6 +325,13 @@ impl AnalyticsEventsClient {
             return;
         }
         self.queue.try_send(input);
+    }
+
+    pub fn track_response(&self, connection_id: u64, response: ClientResponse) {
+        self.record_fact(AnalyticsFact::Response {
+            connection_id,
+            response: Box::new(response),
+        });
     }
 }
 
@@ -461,14 +464,17 @@ impl AnalyticsReducer {
                 request_id: _request_id,
                 request: _request,
             } => {}
+            AnalyticsFact::Response {
+                connection_id,
+                response,
+            } => {
+                self.ingest_response(connection_id, *response, out);
+            }
             AnalyticsFact::Notification {
                 connection_id: _connection_id,
                 notification: _notification,
             } => {}
             AnalyticsFact::Custom(input) => match input {
-                CustomAnalyticsFact::ThreadInitialized(input) => {
-                    self.ingest_thread_initialized(input, out);
-                }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
                 }
@@ -508,6 +514,42 @@ impl AnalyticsReducer {
         out.push(TrackEventRequest::CodexThreadInitialized(
             codex_thread_initialized_event_request(client_state.product_client_id.clone(), input),
         ));
+    }
+
+    fn ingest_response(
+        &mut self,
+        connection_id: u64,
+        response: ClientResponse,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let input = match response {
+            ClientResponse::ThreadStart { response, .. } => ThreadInitializedInput {
+                connection_id,
+                thread_id: response.thread.id,
+                model: response.model,
+                ephemeral: response.thread.ephemeral,
+                session_source: response.thread.source.into(),
+                initialization_mode: InitializationMode::New,
+            },
+            ClientResponse::ThreadResume { response, .. } => ThreadInitializedInput {
+                connection_id,
+                thread_id: response.thread.id,
+                model: response.model,
+                ephemeral: response.thread.ephemeral,
+                session_source: response.thread.source.into(),
+                initialization_mode: InitializationMode::Resumed,
+            },
+            ClientResponse::ThreadFork { response, .. } => ThreadInitializedInput {
+                connection_id,
+                thread_id: response.thread.id,
+                model: response.model,
+                ephemeral: response.thread.ephemeral,
+                session_source: response.thread.source.into(),
+                initialization_mode: InitializationMode::Forked,
+            },
+            _ => return,
+        };
+        self.ingest_thread_initialized(input, out);
     }
 
     async fn ingest_skill_invoked(

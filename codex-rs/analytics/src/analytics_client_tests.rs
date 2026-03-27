@@ -6,7 +6,6 @@ use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
 use super::CodexPluginEventRequest;
 use super::CodexPluginUsedEventRequest;
-use super::CustomAnalyticsFact;
 use super::InitializationMode;
 use super::InvocationType;
 use super::ThreadInitializedInput;
@@ -17,8 +16,18 @@ use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
 use super::codex_thread_initialized_event_request;
 use super::normalize_path_for_skill_id;
+use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
+use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
+use codex_app_server_protocol::SessionSource as AppServerSessionSource;
+use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
 use codex_login::default_client::originator;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -32,6 +41,61 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::mpsc;
+
+fn sample_thread(thread_id: &str, ephemeral: bool) -> Thread {
+    Thread {
+        id: thread_id.to_string(),
+        preview: "first prompt".to_string(),
+        ephemeral,
+        model_provider: "openai".to_string(),
+        created_at: 1,
+        updated_at: 2,
+        status: AppServerThreadStatus::Idle,
+        path: None,
+        cwd: PathBuf::from("/tmp"),
+        cli_version: "0.0.0".to_string(),
+        source: AppServerSessionSource::Exec,
+        agent_nickname: None,
+        agent_role: None,
+        git_info: None,
+        name: None,
+        turns: Vec::new(),
+    }
+}
+
+fn sample_thread_start_response(thread_id: &str, ephemeral: bool, model: &str) -> ClientResponse {
+    ClientResponse::ThreadStart {
+        request_id: RequestId::Integer(1),
+        response: ThreadStartResponse {
+            thread: sample_thread(thread_id, ephemeral),
+            model: model.to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AppServerAskForApproval::OnFailure,
+            approvals_reviewer: AppServerApprovalsReviewer::User,
+            sandbox: AppServerSandboxPolicy::DangerFullAccess,
+            reasoning_effort: None,
+        },
+    }
+}
+
+fn sample_thread_resume_response(thread_id: &str, ephemeral: bool, model: &str) -> ClientResponse {
+    ClientResponse::ThreadResume {
+        request_id: RequestId::Integer(2),
+        response: ThreadResumeResponse {
+            thread: sample_thread(thread_id, ephemeral),
+            model: model.to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: AppServerAskForApproval::OnFailure,
+            approvals_reviewer: AppServerApprovalsReviewer::User,
+            sandbox: AppServerSandboxPolicy::DangerFullAccess,
+            reasoning_effort: None,
+        },
+    }
+}
 
 fn expected_absolute_path(path: &PathBuf) -> String {
     std::fs::canonicalize(path)
@@ -238,16 +302,14 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
-                ThreadInitializedInput {
-                    connection_id: 7,
-                    thread_id: "thread-no-client".to_string(),
-                    model: "gpt-5".to_string(),
-                    ephemeral: false,
-                    session_source: SessionSource::Exec,
-                    initialization_mode: InitializationMode::New,
-                },
-            )),
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-no-client",
+                    false,
+                    "gpt-5",
+                )),
+            },
             &mut events,
         )
         .await;
@@ -273,16 +335,10 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::ThreadInitialized(
-                ThreadInitializedInput {
-                    connection_id: 7,
-                    thread_id: "thread-1".to_string(),
-                    model: "gpt-5".to_string(),
-                    ephemeral: true,
-                    session_source: SessionSource::Exec,
-                    initialization_mode: InitializationMode::Resumed,
-                },
-            )),
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_resume_response("thread-1", true, "gpt-5")),
+            },
             &mut events,
         )
         .await;
