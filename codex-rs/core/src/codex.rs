@@ -349,8 +349,8 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
-use codex_analytics::CodexTurnEvent;
 use codex_analytics::InvocationType;
+use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
@@ -5807,10 +5807,12 @@ pub(crate) async fn run_turn(
             let mut state = sess.state.lock().await;
             state.take_next_turn_is_first()
         };
-        sess.services.analytics_events_client.track_turn_started(
-            tracking.clone(),
-            CodexTurnEvent {
+        sess.services
+            .analytics_events_client
+            .track_turn_resolved_config(TurnResolvedConfigFact {
+                turn_id: tracking.turn_id.clone(),
                 submission_type: None,
+                model: turn_context.model_info.slug.clone(),
                 model_provider: turn_context.config.model_provider_id.clone(),
                 sandbox_policy: turn_context.sandbox_policy.get().clone(),
                 reasoning_effort: turn_context.reasoning_effort,
@@ -5821,34 +5823,8 @@ pub(crate) async fn run_turn(
                 sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
                 collaboration_mode: turn_context.collaboration_mode.mode,
                 personality: turn_context.personality,
-                num_input_images: input
-                    .iter()
-                    .filter(|item| {
-                        matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
-                    })
-                    .count(),
                 is_first_turn,
-                status: None,
-                turn_error: None,
-                steer_count: None,
-                total_tool_call_count: None,
-                shell_command_count: None,
-                file_change_count: None,
-                mcp_tool_call_count: None,
-                dynamic_tool_call_count: None,
-                subagent_tool_call_count: None,
-                web_search_count: None,
-                image_generation_count: None,
-                input_tokens: None,
-                cached_input_tokens: None,
-                output_tokens: None,
-                reasoning_output_tokens: None,
-                total_tokens: None,
-                duration_ms: None,
-                started_at: None,
-                completed_at: None,
-            },
-        );
+            });
     }
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
@@ -6132,13 +6108,6 @@ pub(crate) async fn run_turn(
             }
         }
     }
-
-    if !input.is_empty() {
-        sess.services
-            .analytics_events_client
-            .track_turn_completed(tracking.turn_id.clone());
-    }
-
     last_agent_message
 }
 
