@@ -46,9 +46,11 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_tools::ToolDefinition;
+use codex_tools::parse_dynamic_tool;
 use codex_tools::parse_mcp_tool;
-pub use codex_tools::parse_tool_input_schema;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_template::Template;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -56,16 +58,27 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 pub type JsonSchema = codex_tools::JsonSchema;
 
 #[cfg(test)]
 pub(crate) use codex_tools::mcp_call_tool_result_output_schema;
 
-const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
+const TOOL_SEARCH_DESCRIPTION_TEMPLATE_SOURCE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
-const TOOL_SUGGEST_DESCRIPTION_TEMPLATE: &str =
+const TOOL_SEARCH_DESCRIPTION_TEMPLATE_KEY: &str = "app_descriptions";
+static TOOL_SEARCH_DESCRIPTION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(TOOL_SEARCH_DESCRIPTION_TEMPLATE_SOURCE)
+        .unwrap_or_else(|err| panic!("tool_search description template must parse: {err}"))
+});
+const TOOL_SUGGEST_DESCRIPTION_TEMPLATE_SOURCE: &str =
     include_str!("../../templates/search_tool/tool_suggest_description.md");
+const TOOL_SUGGEST_DESCRIPTION_TEMPLATE_KEY: &str = "discoverable_tools";
+static TOOL_SUGGEST_DESCRIPTION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(TOOL_SUGGEST_DESCRIPTION_TEMPLATE_SOURCE)
+        .unwrap_or_else(|err| panic!("tool_suggest description template must parse: {err}"))
+});
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
 
 fn unified_exec_output_schema() -> JsonValue {
@@ -157,10 +170,10 @@ fn spawn_agent_output_schema_v2() -> JsonValue {
         "properties": {
             "agent_id": {
                 "type": ["string", "null"],
-                "description": "Thread identifier for the spawned agent when no task name was assigned."
+                "description": "Legacy thread identifier for the spawned agent."
             },
             "task_name": {
-                "type": ["string", "null"],
+                "type": "string",
                 "description": "Canonical task name for the spawned agent."
             },
             "nickname": {
@@ -1215,13 +1228,13 @@ fn create_spawn_agent_tool_v1(config: &ToolsConfig) -> ToolSpec {
 
 fn create_spawn_agent_tool_v2(config: &ToolsConfig) -> ToolSpec {
     let available_models_description = spawn_agent_models_description(&config.available_models);
-    let return_value_description = "Returns the canonical task name when the spawned agent was named, otherwise the agent id, plus the user-facing nickname when available.";
+    let return_value_description = "Returns the canonical task name for the spawned agent, plus the user-facing nickname when available.";
     let mut properties = spawn_agent_common_properties(config);
     properties.insert(
         "task_name".to_string(),
         JsonSchema::String {
             description: Some(
-                "Optional task name for the new agent. Use lowercase letters, digits, and underscores."
+                "Task name for the new agent. Use lowercase letters, digits, and underscores."
                     .to_string(),
             ),
         },
@@ -1237,7 +1250,7 @@ fn create_spawn_agent_tool_v2(config: &ToolsConfig) -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: None,
+            required: Some(vec!["task_name".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(spawn_agent_output_schema_v2()),
@@ -1950,8 +1963,12 @@ fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
             .join("\n")
     };
 
-    let description =
-        TOOL_SEARCH_DESCRIPTION_TEMPLATE.replace("{{app_descriptions}}", app_descriptions.as_str());
+    let description = TOOL_SEARCH_DESCRIPTION_TEMPLATE
+        .render([(
+            TOOL_SEARCH_DESCRIPTION_TEMPLATE_KEY,
+            app_descriptions.as_str(),
+        )])
+        .unwrap_or_else(|err| panic!("tool_search description template must render: {err}"));
 
     ToolSpec::ToolSearch {
         execution: "client".to_string(),
@@ -2006,10 +2023,13 @@ fn create_tool_suggest_tool(discoverable_tools: &[DiscoverableTool]) -> ToolSpec
             },
         ),
     ]);
-    let description = TOOL_SUGGEST_DESCRIPTION_TEMPLATE.replace(
-        "{{discoverable_tools}}",
-        format_discoverable_tools(discoverable_tools).as_str(),
-    );
+    let discoverable_tools = format_discoverable_tools(discoverable_tools);
+    let description = TOOL_SUGGEST_DESCRIPTION_TEMPLATE
+        .render([(
+            TOOL_SUGGEST_DESCRIPTION_TEMPLATE_KEY,
+            discoverable_tools.as_str(),
+        )])
+        .unwrap_or_else(|err| panic!("tool_suggest description template must render: {err}"));
 
     ToolSpec::Function(ResponsesApiTool {
         name: TOOL_SUGGEST_TOOL_NAME.to_string(),
@@ -2366,47 +2386,35 @@ pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let parsed_tool = parse_mcp_tool(&tool)?;
-
-    Ok(ResponsesApiTool {
-        name: fully_qualified_name,
-        description: parsed_tool.description,
-        strict: false,
-        defer_loading: None,
-        parameters: parsed_tool.input_schema,
-        output_schema: Some(parsed_tool.output_schema),
-    })
+    Ok(tool_definition_to_openai_tool(
+        parse_mcp_tool(&tool)?.renamed(fully_qualified_name),
+    ))
 }
 
 pub(crate) fn mcp_tool_to_deferred_openai_tool(
     name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let parsed_tool = parse_mcp_tool(&tool)?;
-
-    Ok(ResponsesApiTool {
-        name,
-        description: parsed_tool.description,
-        strict: false,
-        defer_loading: Some(true),
-        parameters: parsed_tool.input_schema,
-        output_schema: None,
-    })
+    Ok(tool_definition_to_openai_tool(
+        parse_mcp_tool(&tool)?.renamed(name).into_deferred(),
+    ))
 }
 
 fn dynamic_tool_to_openai_tool(
     tool: &DynamicToolSpec,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
+    Ok(tool_definition_to_openai_tool(parse_dynamic_tool(tool)?))
+}
 
-    Ok(ResponsesApiTool {
-        name: tool.name.clone(),
-        description: tool.description.clone(),
+fn tool_definition_to_openai_tool(tool_definition: ToolDefinition) -> ResponsesApiTool {
+    ResponsesApiTool {
+        name: tool_definition.name,
+        description: tool_definition.description,
         strict: false,
-        defer_loading: None,
-        parameters: input_schema,
-        output_schema: None,
-    })
+        defer_loading: tool_definition.defer_loading.then_some(true),
+        parameters: tool_definition.input_schema,
+        output_schema: tool_definition.output_schema,
+    }
 }
 
 /// Builds the tool registry builder while collecting tool specs for later serialization.
