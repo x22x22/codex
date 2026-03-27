@@ -195,6 +195,8 @@ fn sample_turn_completed_notification(
 fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
     TurnResolvedConfigFact {
         turn_id: turn_id.to_string(),
+        thread_id: "thread-2".to_string(),
+        num_input_images: 1,
         submission_type: None,
         model: "gpt-5".to_string(),
         model_provider: "openai".to_string(),
@@ -453,6 +455,8 @@ fn turn_event_serializes_expected_shape() {
             2,
             TurnResolvedConfigFact {
                 turn_id: "turn-2".to_string(),
+                thread_id: "thread-2".to_string(),
+                num_input_images: 2,
                 submission_type: None,
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
@@ -658,6 +662,8 @@ async fn turn_lifecycle_emits_turn_event() {
             AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
                 TurnResolvedConfigFact {
                     turn_id: "turn-2".to_string(),
+                    thread_id: "thread-2".to_string(),
+                    num_input_images: 2,
                     submission_type: None,
                     model: "gpt-5".to_string(),
                     model_provider: "openai".to_string(),
