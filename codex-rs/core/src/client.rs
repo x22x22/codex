@@ -113,6 +113,7 @@ use crate::util::emit_feedback_auth_recovery_tags;
 use crate::util::emit_feedback_request_tags_with_auth_env;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
+pub const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
@@ -133,6 +134,7 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
     conversation_id: ThreadId,
+    installation_id: String,
     provider: ModelProviderInfo,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
@@ -254,6 +256,7 @@ impl ModelClient {
     pub fn new(
         auth_manager: Option<Arc<AuthManager>>,
         conversation_id: ThreadId,
+        installation_id: String,
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
@@ -269,6 +272,7 @@ impl ModelClient {
             state: Arc::new(ModelClientState {
                 auth_manager,
                 conversation_id,
+                installation_id,
                 provider,
                 auth_env_telemetry,
                 session_source,
@@ -393,6 +397,9 @@ impl ModelClient {
         };
 
         let mut extra_headers = self.build_subagent_headers();
+        if let Ok(header_value) = HeaderValue::from_str(&self.state.installation_id) {
+            extra_headers.insert(X_CODEX_INSTALLATION_ID_HEADER, header_value);
+        }
         extra_headers.extend(build_conversation_headers(Some(
             self.state.conversation_id.to_string(),
         )));
@@ -640,6 +647,7 @@ impl ModelClient {
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let conversation_id = self.state.conversation_id.to_string();
         let mut headers = build_responses_headers(
+            Some(self.state.installation_id.as_str()),
             self.state.beta_features_header.as_deref(),
             turn_state,
             turn_metadata_header.as_ref(),
@@ -763,6 +771,7 @@ impl ModelClientSession {
             conversation_id: Some(conversation_id),
             session_source: Some(self.client.state.session_source.clone()),
             extra_headers: build_responses_headers(
+                Some(self.client.state.installation_id.as_str()),
                 self.client.state.beta_features_header.as_deref(),
                 Some(&self.turn_state),
                 turn_metadata_header.as_ref(),
@@ -1375,15 +1384,22 @@ fn build_ws_client_metadata(turn_metadata_header: Option<&str>) -> Option<HashMa
 ///
 /// These headers implement Codex-specific conventions:
 ///
+/// - `x-codex-installation-id`: stable identifier persisted under `CODEX_HOME`.
 /// - `x-codex-beta-features`: comma-separated beta feature keys enabled for the session.
 /// - `x-codex-turn-state`: sticky routing token captured earlier in the turn.
 /// - `x-codex-turn-metadata`: optional per-turn metadata for observability.
 fn build_responses_headers(
+    installation_id: Option<&str>,
     beta_features_header: Option<&str>,
     turn_state: Option<&Arc<OnceLock<String>>>,
     turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
+    if let Some(value) = installation_id
+        && let Ok(header_value) = HeaderValue::from_str(value)
+    {
+        headers.insert(X_CODEX_INSTALLATION_ID_HEADER, header_value);
+    }
     if let Some(value) = beta_features_header
         && !value.is_empty()
         && let Ok(header_value) = HeaderValue::from_str(value)

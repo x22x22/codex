@@ -6,6 +6,7 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ThreadManager;
 use codex_core::WireApi;
+use codex_core::X_CODEX_INSTALLATION_ID_HEADER;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
@@ -75,6 +76,8 @@ use wiremock::matchers::header_regex;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
+
+const INSTALLATION_ID_FILENAME: &str = "installation_id";
 
 #[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
@@ -653,10 +656,17 @@ async fn includes_conversation_id_and_model_headers_in_request() {
         .header("authorization")
         .expect("authorization header");
     let request_originator = request.header("originator").expect("originator header");
+    let installation_id =
+        std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
+            .expect("read installation id");
+    let request_installation_id = request
+        .header(X_CODEX_INSTALLATION_ID_HEADER)
+        .expect("installation id header");
 
     assert_eq!(request_session_id, session_id.to_string());
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
+    assert_eq!(request_installation_id, installation_id);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -758,11 +768,18 @@ async fn chatgpt_auth_sends_correct_request() {
     let request_body = request.body_json();
 
     let session_id = request.header("session_id").expect("session_id header");
+    let installation_id =
+        std::fs::read_to_string(test.codex_home_path().join(INSTALLATION_ID_FILENAME))
+            .expect("read installation id");
+    let request_installation_id = request
+        .header(X_CODEX_INSTALLATION_ID_HEADER)
+        .expect("installation id header");
     assert_eq!(session_id, thread_id.to_string());
 
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
     assert_eq!(request_chatgpt_account_id, "account_id");
+    assert_eq!(request_installation_id, installation_id);
     assert!(request_body["stream"].as_bool().unwrap());
     assert_eq!(
         request_body["include"][0].as_str().unwrap(),
@@ -1837,6 +1854,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let client = ModelClient::new(
         None,
         conversation_id,
+        "11111111-1111-4111-8111-111111111111".to_string(),
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,

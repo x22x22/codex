@@ -7,6 +7,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::WireApi;
+use codex_core::X_CODEX_INSTALLATION_ID_HEADER;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -22,6 +23,8 @@ use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use wiremock::matchers::header;
+
+const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 #[tokio::test]
 async fn responses_stream_includes_subagent_header_on_review() {
@@ -89,6 +92,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let client = ModelClient::new(
         None,
         conversation_id,
+        TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
         config.model_verbosity,
@@ -131,6 +135,10 @@ async fn responses_stream_includes_subagent_header_on_review() {
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
         Some("review")
+    );
+    assert_eq!(
+        request.header(X_CODEX_INSTALLATION_ID_HEADER).as_deref(),
+        Some(TEST_INSTALLATION_ID)
     );
     assert_eq!(request.header("x-codex-sandbox"), None);
 }
@@ -202,6 +210,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let client = ModelClient::new(
         None,
         conversation_id,
+        TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
         config.model_verbosity,
@@ -314,6 +323,7 @@ async fn responses_respects_model_info_overrides_from_config() {
     let client = ModelClient::new(
         None,
         conversation_id,
+        TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         session_source,
         config.model_verbosity,

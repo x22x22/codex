@@ -18,6 +18,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
     ModelClient::new(
         None,
         ThreadId::new(),
+        "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         session_source,
         None,
