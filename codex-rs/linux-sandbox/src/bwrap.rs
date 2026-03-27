@@ -803,7 +803,8 @@ mod tests {
             .position(|window| window[0] == "--ro-bind" && window[2] == "/.codex")
             .expect("expected read-only /.codex carveout");
         assert!(
-            writable_root_bind_index < codex_carveout_index && codex_carveout_index < dev_rebind_index,
+            writable_root_bind_index < codex_carveout_index
+                && codex_carveout_index < dev_rebind_index,
             "expected /.codex carveout after writable root bind and before /dev rebind: {:#?}",
             args.args
         );
