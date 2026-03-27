@@ -346,7 +346,7 @@ mod tests {
             .await
             .expect("listener should bind");
         let remote_control_url = format!(
-            "http://localhost:{}/backend-api/",
+            "http://127.0.0.1:{}/backend-api/",
             listener
                 .local_addr()
                 .expect("listener should have a local addr")
