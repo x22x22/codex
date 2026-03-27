@@ -2151,7 +2151,7 @@ async fn handle_turn_interrupted(
         event_turn_id,
         TurnStatus::Interrupted,
         /*error*/ None,
-        None,
+        /*analytics_events_client*/ None,
         outgoing,
     )
     .await;
