@@ -212,9 +212,9 @@ mod tests {
     async fn persisted_remote_control_enrollment_round_trips_by_target_and_account() {
         let codex_home = TempDir::new().expect("temp dir should create");
         let state_db = remote_control_state_runtime(&codex_home).await;
-        let first_target = normalize_remote_control_url("http://example.com/remote/control")
+        let first_target = normalize_remote_control_url("https://example.com/remote/control")
             .expect("first target should parse");
-        let second_target = normalize_remote_control_url("http://example.com/other/control")
+        let second_target = normalize_remote_control_url("https://example.com/other/control")
             .expect("second target should parse");
         let first_enrollment = RemoteControlEnrollment {
             account_id: Some("account-a".to_string()),
@@ -277,9 +277,9 @@ mod tests {
     async fn clearing_persisted_remote_control_enrollment_removes_only_matching_entry() {
         let codex_home = TempDir::new().expect("temp dir should create");
         let state_db = remote_control_state_runtime(&codex_home).await;
-        let first_target = normalize_remote_control_url("http://example.com/remote/control")
+        let first_target = normalize_remote_control_url("https://example.com/remote/control")
             .expect("first target should parse");
-        let second_target = normalize_remote_control_url("http://example.com/other/control")
+        let second_target = normalize_remote_control_url("https://example.com/other/control")
             .expect("second target should parse");
         let first_enrollment = RemoteControlEnrollment {
             account_id: Some("account-a".to_string()),
@@ -344,10 +344,11 @@ mod tests {
             .await
             .expect("listener should bind");
         let remote_control_url = format!(
-            "http://{}/backend-api/",
+            "http://localhost:{}/backend-api/",
             listener
                 .local_addr()
                 .expect("listener should have a local addr")
+                .port()
         );
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");

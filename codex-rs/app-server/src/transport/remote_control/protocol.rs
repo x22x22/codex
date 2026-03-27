@@ -99,14 +99,18 @@ pub(super) fn normalize_remote_control_url(
         io::Error::new(
             ErrorKind::InvalidInput,
             format!(
-                "invalid remote control URL `{remote_control_url}`; expected absolute URL with http:// or https:// scheme"
+                "invalid remote control URL `{remote_control_url}`; expected absolute HTTPS URL"
             ),
         )
     };
 
     let mut remote_control_url = Url::parse(remote_control_url).map_err(map_url_parse_error)?;
     match remote_control_url.scheme() {
-        "https" | "http" => {}
+        "https" => {}
+        "http"
+            if remote_control_url
+                .host_str()
+                .is_some_and(|host| host.eq_ignore_ascii_case("localhost")) => {}
         _ => return Err(map_scheme_error(())),
     }
     if !remote_control_url.path().ends_with('/') {
@@ -136,4 +140,50 @@ pub(super) fn normalize_remote_control_url(
         websocket_url: websocket_url.to_string(),
         enroll_url: enroll_url.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn normalize_remote_control_url_accepts_https_urls() {
+        assert_eq!(
+            normalize_remote_control_url("https://example.com/backend-api")
+                .expect("https URL should normalize"),
+            RemoteControlTarget {
+                websocket_url: "wss://example.com/backend-api/wham/remote/control/server"
+                    .to_string(),
+                enroll_url: "https://example.com/backend-api/wham/remote/control/server/enroll"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_remote_control_url_accepts_localhost_http_urls() {
+        assert_eq!(
+            normalize_remote_control_url("http://localhost:8080/backend-api")
+                .expect("localhost http URL should normalize"),
+            RemoteControlTarget {
+                websocket_url: "ws://localhost:8080/backend-api/wham/remote/control/server"
+                    .to_string(),
+                enroll_url: "http://localhost:8080/backend-api/wham/remote/control/server/enroll"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_remote_control_url_rejects_non_localhost_http_urls() {
+        let err = normalize_remote_control_url("http://example.com/backend-api")
+            .expect_err("non-localhost http URL should be rejected");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+        assert_eq!(
+            err.to_string(),
+            "invalid remote control URL `http://example.com/backend-api`; expected absolute HTTPS URL"
+        );
+    }
 }

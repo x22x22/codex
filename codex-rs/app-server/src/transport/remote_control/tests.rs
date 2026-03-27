@@ -61,17 +61,22 @@ async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime>
         .expect("state runtime should initialize")
 }
 
+fn remote_control_url_for_listener(listener: &TcpListener) -> String {
+    format!(
+        "http://localhost:{}/backend-api/",
+        listener
+            .local_addr()
+            .expect("listener should have a local addr")
+            .port()
+    )
+}
+
 #[tokio::test]
 async fn remote_control_transport_manages_virtual_clients_and_routes_messages() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
-    let remote_control_url = format!(
-        "http://{}/backend-api/",
-        listener
-            .local_addr()
-            .expect("listener should have a local addr")
-    );
+    let remote_control_url = remote_control_url_for_listener(&listener);
     let codex_home = TempDir::new().expect("temp dir should create");
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
@@ -323,12 +328,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
-    let remote_control_url = format!(
-        "http://{}/backend-api/",
-        listener
-            .local_addr()
-            .expect("listener should have a local addr")
-    );
+    let remote_control_url = remote_control_url_for_listener(&listener);
     let codex_home = TempDir::new().expect("temp dir should create");
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
@@ -398,12 +398,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_client_closes() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
-    let remote_control_url = format!(
-        "http://{}/backend-api/",
-        listener
-            .local_addr()
-            .expect("listener should have a local addr")
-    );
+    let remote_control_url = remote_control_url_for_listener(&listener);
     let codex_home = TempDir::new().expect("temp dir should create");
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
@@ -548,12 +543,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
-    let remote_control_url = format!(
-        "http://{}/backend-api/",
-        listener
-            .local_addr()
-            .expect("listener should have a local addr")
-    );
+    let remote_control_url = remote_control_url_for_listener(&listener);
     let codex_home = TempDir::new().expect("temp dir should create");
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
@@ -745,12 +735,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
-    let remote_control_url = format!(
-        "http://{}/backend-api/",
-        listener
-            .local_addr()
-            .expect("listener should have a local addr")
-    );
+    let remote_control_url = remote_control_url_for_listener(&listener);
     let codex_home = TempDir::new().expect("temp dir should create");
     let state_db = remote_control_state_runtime(&codex_home).await;
     let remote_control_target =
@@ -810,12 +795,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
-    let remote_control_url = format!(
-        "http://{}/backend-api/",
-        listener
-            .local_addr()
-            .expect("listener should have a local addr")
-    );
+    let remote_control_url = remote_control_url_for_listener(&listener);
     let codex_home = TempDir::new().expect("temp dir should create");
     let state_db = remote_control_state_runtime(&codex_home).await;
     let remote_control_target =

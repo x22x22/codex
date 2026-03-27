@@ -764,6 +764,16 @@ mod tests {
         auth_manager_from_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
     }
 
+    fn remote_control_url_for_listener(listener: &TcpListener) -> String {
+        format!(
+            "http://localhost:{}/backend-api/",
+            listener
+                .local_addr()
+                .expect("listener should have a local addr")
+                .port()
+        )
+    }
+
     fn remote_control_auth_dot_json(access_token: &str) -> AuthDotJson {
         #[derive(serde::Serialize)]
         struct Header {
@@ -806,12 +816,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
-        let remote_control_url = format!(
-            "http://{}/backend-api/",
-            listener
-                .local_addr()
-                .expect("listener should have a local addr")
-        );
+        let remote_control_url = remote_control_url_for_listener(&listener);
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
         let expected_error = format!(
@@ -865,12 +870,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
-        let remote_control_url = format!(
-            "http://{}/backend-api/",
-            listener
-                .local_addr()
-                .expect("listener should have a local addr")
-        );
+        let remote_control_url = remote_control_url_for_listener(&listener);
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
         let server_task = tokio::spawn(async move {
@@ -939,12 +939,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
-        let remote_control_url = format!(
-            "http://{}/backend-api/",
-            listener
-                .local_addr()
-                .expect("listener should have a local addr")
-        );
+        let remote_control_url = remote_control_url_for_listener(&listener);
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
         let enroll_url = remote_control_target.enroll_url.clone();
@@ -1012,12 +1007,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
-        let remote_control_url = format!(
-            "http://{}/backend-api/",
-            listener
-                .local_addr()
-                .expect("listener should have a local addr")
-        );
+        let remote_control_url = remote_control_url_for_listener(&listener);
         drop(listener);
 
         let remote_control_target =
