@@ -152,8 +152,21 @@ impl App {
                         .await
                     {
                         Ok(statuses) => {
+                            let disabled_config_mcp_servers: std::collections::HashSet<String> =
+                                self.chat_widget
+                                    .config_ref()
+                                    .mcp_servers
+                                    .get()
+                                    .iter()
+                                    .filter_map(|(name, server)| {
+                                        (!server.enabled).then_some(name.clone())
+                                    })
+                                    .collect();
                             self.chat_widget.set_mcp_startup_expected_servers(
-                                statuses.into_iter().map(|status| status.name),
+                                statuses.into_iter().filter_map(|status| {
+                                    (!disabled_config_mcp_servers.contains(&status.name))
+                                        .then_some(status.name)
+                                }),
                             );
                         }
                         Err(err) => {
