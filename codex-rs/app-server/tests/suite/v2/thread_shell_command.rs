@@ -143,6 +143,33 @@ async fn thread_dependency_env_set_is_inherited_by_shell_commands() -> Result<()
     let set_id = mcp
         .send_thread_dependency_env_set_request(ThreadDependencyEnvSetParams {
             thread_id: thread.id.clone(),
+            values: HashMap::from([(DEPENDENCY_ENV_KEY.to_string(), String::new())]),
+        })
+        .await?;
+    let set_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
+    )
+    .await??;
+    let _: ThreadDependencyEnvSetResponse = to_response(set_resp)?;
+
+    let contains_id = mcp
+        .send_thread_env_contains_request(ThreadEnvContainsParams {
+            thread_id: thread.id.clone(),
+            key: DEPENDENCY_ENV_KEY.to_string(),
+        })
+        .await?;
+    let contains_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(contains_id)),
+    )
+    .await??;
+    let contains = to_response::<ThreadEnvContainsResponse>(contains_resp)?;
+    assert_eq!(contains, ThreadEnvContainsResponse { contains: false });
+
+    let set_id = mcp
+        .send_thread_dependency_env_set_request(ThreadDependencyEnvSetParams {
+            thread_id: thread.id.clone(),
             values: HashMap::from([(
                 DEPENDENCY_ENV_KEY.to_string(),
                 DEPENDENCY_ENV_VALUE.to_string(),
