@@ -222,7 +222,7 @@ if [[ $skip_auth -eq 0 && -f "$auth_file" ]]; then
   "${adb_cmd[@]}" push "$auth_file" "$remote_auth_tmp" >/dev/null
   "${adb_cmd[@]}" shell run-as "$agent_package" mkdir -p files/codex-home
   "${adb_cmd[@]}" shell \
-    "run-as $agent_package sh -c 'cat $remote_auth_tmp > files/codex-home/auth.json && chmod 600 files/codex-home/auth.json'"
+    "run-as $agent_package sh -c 'cat $remote_auth_tmp > files/codex-home/auth.json'"
   cleanup_remote_auth_tmp
   trap - EXIT
 elif [[ $skip_auth -eq 0 ]]; then
