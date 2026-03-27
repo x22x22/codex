@@ -170,6 +170,15 @@ jobs:
             # canary and release workflows should build `third_party/v8`.
             -//third_party/v8:all
           )
+          if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+            # `code-mode` and `v8-poc` still pull the `v8` crate transitively even
+            # when `//third_party/v8:all` is excluded, so keep them out of the
+            # Windows stabilization loop for now.
+            bazel_targets+=(
+              -//codex-rs/code-mode:all
+              -//codex-rs/v8-poc:all
+            )
+          fi
 
           if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
             # Bazel test sandboxes on macOS may resolve an older Homebrew `node`
