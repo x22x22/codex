@@ -1,4 +1,4 @@
-name: Bazel (experimental)
+name: Bazel
 
 # Note this workflow was originally derived from:
 # https://github.com/cerisier/toolchains_llvm_bootstrapped/blob/main/.github/workflows/ci.yaml
