@@ -81,6 +81,10 @@ build:clippy --@rules_rust//rust/settings:clippy.toml=//codex-rs:clippy.toml
 build:argument-comment-lint --aspects=//tools/argument-comment-lint:lint_aspect.bzl%rust_argument_comment_lint_aspect
 build:argument-comment-lint --output_groups=argument_comment_lint_checks
 build:argument-comment-lint --@rules_rust//rust/toolchain/channel=nightly
+# On Windows, exec-side helper binaries such as process_wrapper need to prefer
+# rust-lld over the GNU-flavored Bazel C++ linker path.
+build:argument-comment-lint-windows --config=argument-comment-lint
+build:argument-comment-lint-windows --@rules_rust//rust/settings:toolchain_linker_preference=rust
 
 # Rearrange caches on Windows so they're on the same volume as the checkout.
 common:ci-windows --config=ci-bazel
