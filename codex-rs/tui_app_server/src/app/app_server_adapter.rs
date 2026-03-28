@@ -119,6 +119,7 @@ impl App {
                     skipped,
                     "app-server event consumer lagged; dropping ignored events"
                 );
+                self.chat_widget.finish_mcp_startup_after_lag();
             }
             AppServerEvent::ServerNotification(notification) => {
                 self.handle_server_notification_event(app_server_client, notification)
@@ -138,7 +139,7 @@ impl App {
 
     async fn handle_server_notification_event(
         &mut self,
-        app_server_client: &AppServerSession,
+        _app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
         match &notification {
@@ -148,31 +149,16 @@ impl App {
             }
             ServerNotification::McpServerStatusUpdated(_) => {
                 if self.chat_widget.needs_mcp_startup_expected_servers() {
-                    match super::fetch_all_mcp_server_statuses(app_server_client.request_handle())
-                        .await
-                    {
-                        Ok(statuses) => {
-                            let disabled_config_mcp_servers: std::collections::HashSet<String> =
-                                self.chat_widget
-                                    .config_ref()
-                                    .mcp_servers
-                                    .get()
-                                    .iter()
-                                    .filter_map(|(name, server)| {
-                                        (!server.enabled).then_some(name.clone())
-                                    })
-                                    .collect();
-                            self.chat_widget.set_mcp_startup_expected_servers(
-                                statuses.into_iter().filter_map(|status| {
-                                    (!disabled_config_mcp_servers.contains(&status.name))
-                                        .then_some(status.name)
-                                }),
-                            );
-                        }
-                        Err(err) => {
-                            tracing::warn!(%err, "failed to seed expected MCP startup servers");
-                        }
-                    }
+                    let enabled_config_mcp_servers: Vec<String> = self
+                        .chat_widget
+                        .config_ref()
+                        .mcp_servers
+                        .get()
+                        .iter()
+                        .filter_map(|(name, server)| server.enabled.then_some(name.clone()))
+                        .collect();
+                    self.chat_widget
+                        .set_mcp_startup_expected_servers(enabled_config_mcp_servers);
                 }
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {

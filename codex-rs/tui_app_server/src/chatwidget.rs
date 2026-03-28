@@ -797,8 +797,10 @@ pub(crate) struct ChatWidget {
     /// bottom pane is treated as "running" while this is populated, even if no agent turn is
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
-    /// Expected MCP servers for the current startup round, seeded from the app-server runtime.
+    /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
+    /// MCP startup is a one-time app boot sequence; ignore straggling status updates after settle.
+    mcp_startup_complete: bool,
     connectors_cache: ConnectorsCacheState,
     connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
@@ -2790,6 +2792,9 @@ impl ChatWidget {
         status: McpStartupStatus,
         complete_when_settled: bool,
     ) {
+        if self.mcp_startup_complete {
+            return;
+        }
         let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
         if let McpStartupStatus::Failed { error } = &status {
             self.on_warning(error);
@@ -2862,7 +2867,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn needs_mcp_startup_expected_servers(&self) -> bool {
-        self.mcp_startup_expected_servers.is_none()
+        !self.mcp_startup_complete && self.mcp_startup_expected_servers.is_none()
     }
 
     pub(crate) fn set_mcp_startup_expected_servers<I>(&mut self, server_names: I)
@@ -2894,9 +2899,51 @@ impl ChatWidget {
 
         self.mcp_startup_status = None;
         self.mcp_startup_expected_servers = None;
+        self.mcp_startup_complete = true;
         self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
+    }
+
+    pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
+        if self.mcp_startup_complete {
+            return;
+        }
+
+        let Some(current) = &self.mcp_startup_status else {
+            return;
+        };
+
+        let mut failed = Vec::new();
+        let mut cancelled = Vec::new();
+
+        if let Some(expected_servers) = &self.mcp_startup_expected_servers {
+            for name in expected_servers {
+                match current.get(name) {
+                    Some(McpStartupStatus::Ready) => {}
+                    Some(McpStartupStatus::Failed { .. }) => failed.push(name.clone()),
+                    Some(McpStartupStatus::Cancelled | McpStartupStatus::Starting) | None => {
+                        cancelled.push(name.clone());
+                    }
+                }
+            }
+        } else {
+            for (name, state) in current {
+                match state {
+                    McpStartupStatus::Ready => {}
+                    McpStartupStatus::Failed { .. } => failed.push(name.clone()),
+                    McpStartupStatus::Cancelled | McpStartupStatus::Starting => {
+                        cancelled.push(name.clone());
+                    }
+                }
+            }
+        }
+
+        failed.sort();
+        failed.dedup();
+        cancelled.sort();
+        cancelled.dedup();
+        self.finish_mcp_startup(failed, cancelled);
     }
 
     #[cfg(test)]
@@ -4626,6 +4673,7 @@ impl ChatWidget {
             mcp_startup_status: None,
             pending_turn_copyable_output: None,
             mcp_startup_expected_servers: None,
+            mcp_startup_complete: false,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,

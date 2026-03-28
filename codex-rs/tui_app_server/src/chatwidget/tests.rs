@@ -2074,6 +2074,7 @@ async fn make_chatwidget_manual(
         agent_turn_running: false,
         mcp_startup_status: None,
         mcp_startup_expected_servers: None,
+        mcp_startup_complete: false,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_partial_snapshot: None,
         plugin_install_apps_needing_auth: Vec::new(),
@@ -11685,6 +11686,64 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
         "app_server_mcp_startup_failure_renders_warning_history",
         term.backend().vt100().screen().contents()
     );
+}
+
+#[tokio::test]
+async fn app_server_mcp_startup_lag_settles_startup_and_ignores_late_updates() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Failed,
+            error: Some("MCP client for `alpha` failed to start: handshake failed".to_string()),
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "beta".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        }),
+        None,
+    );
+
+    let _ = drain_insert_history(&mut rx);
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.finish_mcp_startup_after_lag();
+
+    let summary_text = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(summary_text.contains("MCP startup interrupted"));
+    assert!(summary_text.contains("beta"));
+    assert!(summary_text.contains("MCP startup incomplete (failed: alpha)"));
+    assert!(!chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "beta".to_string(),
+            status: McpServerStartupState::Ready,
+            error: None,
+        }),
+        None,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(!chat.bottom_pane.is_task_running());
 }
 
 #[tokio::test]
