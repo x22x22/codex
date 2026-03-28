@@ -5,6 +5,7 @@ set -euo pipefail
 print_failed_bazel_test_logs=0
 use_node_test_env=0
 remote_download_toplevel=0
+use_ci_config=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,6 +21,10 @@ while [[ $# -gt 0 ]]; do
       remote_download_toplevel=1
       shift
       ;;
+    --use-ci-config)
+      use_ci_config=1
+      shift
+      ;;
     --)
       shift
       break
@@ -32,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--use-ci-config] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -41,8 +46,23 @@ if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
   bazel_startup_args+=("--output_user_root=${BAZEL_OUTPUT_USER_ROOT}")
 fi
 
+runner_os="${RUNNER_OS:-}"
+if [[ -z "${runner_os}" ]]; then
+  case "$(uname -s)" in
+    Darwin)
+      runner_os=macOS
+      ;;
+    Linux)
+      runner_os=Linux
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      runner_os=Windows
+      ;;
+  esac
+fi
+
 ci_config=ci-linux
-case "${RUNNER_OS:-}" in
+case "${runner_os}" in
   macOS)
     ci_config=ci-macos
     ;;
@@ -112,7 +132,7 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
-if [[ $use_node_test_env -eq 1 && "${RUNNER_OS:-}" != "Windows" ]]; then
+if [[ $use_node_test_env -eq 1 && "${runner_os}" != "Windows" ]]; then
   # Bazel test sandboxes on macOS may resolve an older Homebrew `node`
   # before the `actions/setup-node` runtime on PATH.
   node_bin="$(which node)"
@@ -134,6 +154,11 @@ if (( ${#bazel_startup_args[@]} > 0 )); then
   bazel_cmd+=("${bazel_startup_args[@]}")
 fi
 
+ci_config_args=()
+if [[ -n "${BUILDBUDDY_API_KEY:-}" || $use_ci_config -eq 1 ]]; then
+  ci_config_args+=("--config=${ci_config}")
+fi
+
 if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   echo "BuildBuddy API key is available; using remote Bazel configuration."
   # Work around Bazel 9 remote repo contents cache / overlay materialization failures
@@ -142,7 +167,7 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   # remote execution/cache; this only disables the startup-level repo contents cache.
   bazel_run_args=(
     "${bazel_args[@]}"
-    "--config=${ci_config}"
+    "${ci_config_args[@]}"
     "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
   )
   if (( ${#post_config_bazel_args[@]} > 0 )); then
@@ -158,28 +183,36 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   bazel_status=${PIPESTATUS[0]}
   set -e
 else
-  echo "BuildBuddy API key is not available; using local Bazel configuration."
-  # Keep fork/community PRs on Bazel but disable remote services that are
-  # configured in .bazelrc and require auth.
-  #
-  # Flag docs:
-  # - Command-line reference: https://bazel.build/reference/command-line-reference
-  # - Remote caching overview: https://bazel.build/remote/caching
-  # - Remote execution overview: https://bazel.build/remote/rbe
-  # - Build Event Protocol overview: https://bazel.build/remote/bep
-  #
-  # --noexperimental_remote_repo_contents_cache:
-  #   disable remote repo contents cache enabled in .bazelrc startup options.
-  #   https://bazel.build/reference/command-line-reference#startup_options-flag--experimental_remote_repo_contents_cache
-  # --remote_cache= and --remote_executor=:
-  #   clear remote cache/execution endpoints configured in .bazelrc.
-  #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
-  #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
-  bazel_run_args=(
-    "${bazel_args[@]}"
-    --remote_cache=
-    --remote_executor=
-  )
+  bazel_run_args=("${bazel_args[@]}" "${ci_config_args[@]}")
+
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "BuildBuddy API key is not available in GitHub Actions; disabling remote Bazel services."
+    # Keep fork/community PRs on Bazel but disable remote services that are
+    # configured in .bazelrc and require auth.
+    #
+    # Flag docs:
+    # - Command-line reference: https://bazel.build/reference/command-line-reference
+    # - Remote caching overview: https://bazel.build/remote/caching
+    # - Remote execution overview: https://bazel.build/remote/rbe
+    # - Build Event Protocol overview: https://bazel.build/remote/bep
+    #
+    # --noexperimental_remote_repo_contents_cache:
+    #   disable remote repo contents cache enabled in .bazelrc startup options.
+    #   https://bazel.build/reference/command-line-reference#startup_options-flag--experimental_remote_repo_contents_cache
+    # --remote_cache= and --remote_executor=:
+    #   clear remote cache/execution endpoints configured in .bazelrc.
+    #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
+    #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
+    bazel_run_args+=(
+      --remote_cache=
+      --remote_executor=
+    )
+  elif [[ $use_ci_config -eq 1 ]]; then
+    echo "BuildBuddy API key env var is not available; using ${ci_config} with remote settings from local Bazel config."
+  else
+    echo "BuildBuddy API key env var is not available; preserving Bazel remote settings from local Bazel config."
+  fi
+
   if (( ${#post_config_bazel_args[@]} > 0 )); then
     bazel_run_args+=("${post_config_bazel_args[@]}")
   fi
