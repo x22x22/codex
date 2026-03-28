@@ -2950,8 +2950,9 @@ impl ChatWidget {
 
     pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
         if self.mcp_startup_ignore_updates_until_next_start {
-            self.mcp_startup_pending_next_round.clear();
-            self.mcp_startup_pending_next_round_saw_starting = false;
+            if self.mcp_startup_pending_next_round.is_empty() {
+                self.mcp_startup_pending_next_round_saw_starting = false;
+            }
             self.mcp_startup_allow_terminal_only_next_round = true;
         }
 
