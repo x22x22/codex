@@ -2812,8 +2812,8 @@ impl ChatWidget {
             let Some(expected_servers) = &self.mcp_startup_expected_servers else {
                 return;
             };
-            let saw_full_round = !expected_servers.is_empty()
-                && expected_servers
+            let saw_full_round = expected_servers.is_empty()
+                || expected_servers
                     .iter()
                     .all(|name| self.mcp_startup_pending_next_round.contains_key(name));
             let saw_starting = self
