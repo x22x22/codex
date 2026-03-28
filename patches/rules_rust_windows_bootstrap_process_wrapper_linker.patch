@@ -1,0 +1,25 @@
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -468,11 +468,21 @@
+         ld = cc_common.get_tool_for_action(
+             feature_configuration = feature_configuration,
+             action_name = action_name,
+         )
+         ld_is_direct_driver = False
+ 
+-    if not ld or toolchain.linker_preference == "rust":
++    # The bootstrap process wrapper is built without the normal rules_rust
++    # process wrapper. On Windows, the C++ toolchain path currently resolves to
++    # clang++ while still emitting MSVC-style arguments, so prefer rust-lld for
++    # this one bootstrap binary instead of switching all Rust actions over.
++    use_bootstrap_rust_linker = (
++        toolchain.target_os.startswith("windows") and
++        hasattr(ctx.executable, "_bootstrap_process_wrapper") and
++        not ctx.executable._process_wrapper
++    )
++
++    if not ld or toolchain.linker_preference == "rust" or use_bootstrap_rust_linker:
+         ld = toolchain.linker.path
+         ld_is_direct_driver = toolchain.linker_type == "direct"
+ 
+         # When using rust-lld directly, we still need library search paths from cc_toolchain
