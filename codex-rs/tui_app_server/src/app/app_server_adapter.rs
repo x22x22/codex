@@ -21,6 +21,7 @@ use crate::exec_command::split_command_string;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 #[cfg(test)]
@@ -147,8 +148,10 @@ impl App {
                 self.pending_app_server_requests
                     .resolve_notification(&notification.request_id);
             }
-            ServerNotification::McpServerStatusUpdated(_) => {
-                if self.chat_widget.needs_mcp_startup_expected_servers() {
+            ServerNotification::McpServerStatusUpdated(notification) => {
+                if notification.status == McpServerStartupState::Starting
+                    && self.chat_widget.needs_mcp_startup_expected_servers()
+                {
                     let enabled_config_mcp_servers: Vec<String> = self
                         .chat_widget
                         .config_ref()

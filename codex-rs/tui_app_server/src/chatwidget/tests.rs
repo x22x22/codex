@@ -2074,7 +2074,7 @@ async fn make_chatwidget_manual(
         agent_turn_running: false,
         mcp_startup_status: None,
         mcp_startup_expected_servers: None,
-        mcp_startup_complete: false,
+        mcp_startup_ignore_updates_until_next_start: false,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_partial_snapshot: None,
         plugin_install_apps_needing_auth: Vec::new(),

@@ -799,8 +799,8 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
-    /// MCP startup is a one-time app boot sequence; ignore straggling status updates after settle.
-    mcp_startup_complete: bool,
+    /// After startup settles, ignore late terminal updates until a new startup round begins.
+    mcp_startup_ignore_updates_until_next_start: bool,
     connectors_cache: ConnectorsCacheState,
     connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
@@ -2792,8 +2792,11 @@ impl ChatWidget {
         status: McpStartupStatus,
         complete_when_settled: bool,
     ) {
-        if self.mcp_startup_complete {
-            return;
+        if self.mcp_startup_ignore_updates_until_next_start {
+            if !matches!(status, McpStartupStatus::Starting) {
+                return;
+            }
+            self.mcp_startup_ignore_updates_until_next_start = false;
         }
         let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
         if let McpStartupStatus::Failed { error } = &status {
@@ -2867,7 +2870,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn needs_mcp_startup_expected_servers(&self) -> bool {
-        !self.mcp_startup_complete && self.mcp_startup_expected_servers.is_none()
+        self.mcp_startup_expected_servers.is_none()
     }
 
     pub(crate) fn set_mcp_startup_expected_servers<I>(&mut self, server_names: I)
@@ -2899,17 +2902,13 @@ impl ChatWidget {
 
         self.mcp_startup_status = None;
         self.mcp_startup_expected_servers = None;
-        self.mcp_startup_complete = true;
+        self.mcp_startup_ignore_updates_until_next_start = true;
         self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
     }
 
     pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
-        if self.mcp_startup_complete {
-            return;
-        }
-
         let Some(current) = &self.mcp_startup_status else {
             return;
         };
@@ -4673,7 +4672,7 @@ impl ChatWidget {
             mcp_startup_status: None,
             pending_turn_copyable_output: None,
             mcp_startup_expected_servers: None,
-            mcp_startup_complete: false,
+            mcp_startup_ignore_updates_until_next_start: false,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
