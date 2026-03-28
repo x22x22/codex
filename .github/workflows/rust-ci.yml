@@ -137,13 +137,13 @@ jobs:
         include:
           - name: Linux
             runner: ubuntu-24.04
-            timeout_minutes: 120
+            timeout_minutes: 30
           - name: macOS
             runner: macos-15-xlarge
-            timeout_minutes: 60
+            timeout_minutes: 30
           - name: Windows
             runner: windows-x64
-            timeout_minutes: 120
+            timeout_minutes: 30
             runs_on:
               group: codex-runners
               labels: codex-windows-x64
@@ -159,8 +159,8 @@ jobs:
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
       - name: Install nightly argument-comment-lint toolchain
+        if: ${{ runner.os == 'Windows' }}
         shell: bash
         run: |
           rustup toolchain install nightly-2025-09-18 \
@@ -171,25 +171,21 @@ jobs:
             --no-self-update
           rustup default nightly-2025-09-18
       - name: Run argument comment lint on codex-rs via Bazel
+        if: ${{ runner.os != 'Windows' }}
         shell: bash
         run: |
           ./.github/scripts/run-bazel-ci.sh \
-            --print-failed-test-logs \
             -- \
-            test \
-            --build_tests_only \
-            --local_test_jobs=4 \
-            --test_tag_filters=argument-comment-lint \
-            --test_env=CARGO_HOME \
-            --test_env=GITHUB_RUN_ATTEMPT \
-            --test_env=GITHUB_RUN_ID \
-            --test_env=HOME \
-            --test_env=PATH \
-            --test_env=RUSTUP_HOME \
-            --test_env=USERPROFILE \
+            build \
+            --config=argument-comment-lint \
+            --keep_going \
             --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
             -- \
             //codex-rs/...
+      - name: Run argument comment lint on codex-rs via packaged wrapper
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py
 
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
