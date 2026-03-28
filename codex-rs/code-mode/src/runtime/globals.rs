@@ -26,8 +26,11 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     let yield_control = helper_function(scope, "yield_control", yield_control_callback)?;
     let exit = helper_function(scope, "exit", exit_callback)?;
 
-    set_global(scope, global, "tools", tools.into())?;
-    set_global(scope, global, "ALL_TOOLS", all_tools)?;
+    // We use the word "tools" everywhere in the codebase to refer to functions the model can call.
+    // The model sees these things as callables in the "functions" namespace. So we use "functions"
+    // as the name of the JS global that holds its callable functions.
+    set_global(scope, global, "functions", tools.into())?;
+    set_global(scope, global, "ALL_FUNCTIONS", all_tools)?;
     set_global(scope, global, "text", text.into())?;
     set_global(scope, global, "image", image.into())?;
     set_global(scope, global, "store", store.into())?;
