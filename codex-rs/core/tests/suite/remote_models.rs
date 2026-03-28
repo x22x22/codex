@@ -296,7 +296,11 @@ async fn custom_model_alias_sends_base_model_slug() -> Result<()> {
                 },
             );
             config.model_catalog = Some(ModelsResponse {
-                models: vec![test_remote_model(base_model, ModelVisibility::List, 1)],
+                models: vec![test_remote_model(
+                    base_model,
+                    ModelVisibility::List,
+                    /*priority*/ 1,
+                )],
             });
         });
 

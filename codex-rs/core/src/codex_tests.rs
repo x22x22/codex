@@ -502,7 +502,7 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
         "example.com",
         NetworkRuleProtocol::Https,
         Decision::Allow,
-        None,
+        /*justification*/ None,
     )?;
 
     let (started_proxy, _) = Session::start_managed_network_proxy(
@@ -2165,14 +2165,14 @@ async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
         config.as_ref(),
         RolloutRecorderParams::new(
             ThreadId::default(),
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        None,
-        None,
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
     )
     .await
     .expect("create rollout recorder");
@@ -2486,7 +2486,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        None,
+        /*model_catalog*/ None,
         HashMap::new(),
         CollaborationModesConfig::default(),
     ));
@@ -2536,7 +2536,10 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -2577,7 +2580,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        None,
+        /*model_catalog*/ None,
         HashMap::new(),
         CollaborationModesConfig::default(),
     ));
@@ -2641,7 +2644,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let state = SessionState::new(session_configuration.clone());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(/*exec_server_url*/ None)
@@ -3415,7 +3421,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        None,
+        /*model_catalog*/ None,
         HashMap::new(),
         CollaborationModesConfig::default(),
     ));
@@ -3479,7 +3485,10 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let state = SessionState::new(session_configuration.clone());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(/*exec_server_url*/ None)
@@ -3929,7 +3938,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
             }],
-            None,
+            /*reference_context_item*/ None,
         )
         .await;
 
@@ -4173,14 +4182,14 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         config.as_ref(),
         RolloutRecorderParams::new(
             ThreadId::default(),
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        None,
-        None,
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
     )
     .await
     .expect("create rollout recorder");
@@ -4270,14 +4279,14 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         config.as_ref(),
         RolloutRecorderParams::new(
             ThreadId::default(),
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        None,
-        None,
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
     )
     .await
     .expect("create rollout recorder");
