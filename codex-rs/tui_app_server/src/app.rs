@@ -518,7 +518,12 @@ struct ThreadEventStore {
 
 impl ThreadEventStore {
     fn event_survives_session_refresh(event: &ThreadBufferedEvent) -> bool {
-        matches!(event, ThreadBufferedEvent::Request(_))
+        matches!(
+            event,
+            ThreadBufferedEvent::Request(_)
+                | ThreadBufferedEvent::Notification(ServerNotification::HookStarted(_))
+                | ThreadBufferedEvent::Notification(ServerNotification::HookCompleted(_))
+        )
     }
 
     fn new(capacity: usize) -> Self {
@@ -1834,9 +1839,8 @@ impl App {
             return Ok(());
         }
 
-        self.chat_widget.add_error_message(format!(
-            "Not available in app-server TUI yet for thread {thread_id}."
-        ));
+        self.chat_widget
+            .add_error_message(format!("Not available in TUI yet for thread {thread_id}."));
         Ok(())
     }
 
@@ -3617,7 +3621,7 @@ impl App {
                     Ok(app_server) => app_server,
                     Err(err) => {
                         self.chat_widget.add_error_message(format!(
-                            "Failed to start app-server-backed session picker: {err}"
+                            "Failed to start TUI session picker: {err}"
                         ));
                         return Ok(AppRunControl::Continue);
                     }
@@ -3626,6 +3630,7 @@ impl App {
                     tui,
                     &self.config,
                     /*show_all*/ false,
+                    /*include_non_interactive*/ false,
                     picker_app_server,
                 )
                 .await?
@@ -5578,7 +5583,7 @@ async fn fetch_all_mcp_server_statuses(
                 },
             })
             .await
-            .wrap_err("mcpServerStatus/list failed in app-server TUI")?;
+            .wrap_err("mcpServerStatus/list failed in TUI")?;
         statuses.extend(response.data);
         if let Some(next_cursor) = response.next_cursor {
             cursor = Some(next_cursor);
@@ -5605,7 +5610,7 @@ async fn fetch_plugins_list(
             },
         })
         .await
-        .wrap_err("plugin/list failed in app-server TUI")
+        .wrap_err("plugin/list failed in TUI")
 }
 
 async fn fetch_plugin_detail(
@@ -5616,7 +5621,7 @@ async fn fetch_plugin_detail(
     request_handle
         .request_typed(ClientRequest::PluginRead { request_id, params })
         .await
-        .wrap_err("plugin/read failed in app-server TUI")
+        .wrap_err("plugin/read failed in TUI")
 }
 
 async fn fetch_plugin_install(
@@ -5635,7 +5640,7 @@ async fn fetch_plugin_install(
             },
         })
         .await
-        .wrap_err("plugin/install failed in app-server TUI")
+        .wrap_err("plugin/install failed in TUI")
 }
 
 async fn fetch_plugin_uninstall(
@@ -5652,12 +5657,12 @@ async fn fetch_plugin_uninstall(
             },
         })
         .await
-        .wrap_err("plugin/uninstall failed in app-server TUI")
+        .wrap_err("plugin/uninstall failed in TUI")
 }
 
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the
 /// in-process MCP subsystem (tools keyed as `mcp__{server}__{tool}`, plus
-/// per-server resource/template/auth maps). Test-only because the app-server TUI
+/// per-server resource/template/auth maps). Test-only because the TUI
 /// renders directly from `McpServerStatus` rather than these maps.
 #[cfg(test)]
 type McpInventoryMaps = (
@@ -5727,6 +5732,16 @@ mod tests {
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
     use codex_app_server_protocol::ConfigWarningNotification;
+    use codex_app_server_protocol::HookCompletedNotification;
+    use codex_app_server_protocol::HookEventName as AppServerHookEventName;
+    use codex_app_server_protocol::HookExecutionMode as AppServerHookExecutionMode;
+    use codex_app_server_protocol::HookHandlerType as AppServerHookHandlerType;
+    use codex_app_server_protocol::HookOutputEntry as AppServerHookOutputEntry;
+    use codex_app_server_protocol::HookOutputEntryKind as AppServerHookOutputEntryKind;
+    use codex_app_server_protocol::HookRunStatus as AppServerHookRunStatus;
+    use codex_app_server_protocol::HookRunSummary as AppServerHookRunSummary;
+    use codex_app_server_protocol::HookScope as AppServerHookScope;
+    use codex_app_server_protocol::HookStartedNotification;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
@@ -8336,6 +8351,59 @@ guardian_approval = true
         })
     }
 
+    fn hook_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
+        ServerNotification::HookStarted(HookStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            run: AppServerHookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::UserPromptSubmit,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: AppServerHookRunStatus::Running,
+                status_message: Some("checking go-workflow input policy".to_string()),
+                started_at: 1,
+                completed_at: None,
+                duration_ms: None,
+                entries: Vec::new(),
+            },
+        })
+    }
+
+    fn hook_completed_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
+        ServerNotification::HookCompleted(HookCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            run: AppServerHookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: AppServerHookEventName::UserPromptSubmit,
+                handler_type: AppServerHookHandlerType::Command,
+                execution_mode: AppServerHookExecutionMode::Sync,
+                scope: AppServerHookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: AppServerHookRunStatus::Stopped,
+                status_message: Some("checking go-workflow input policy".to_string()),
+                started_at: 1,
+                completed_at: Some(11),
+                duration_ms: Some(10),
+                entries: vec![
+                    AppServerHookOutputEntry {
+                        kind: AppServerHookOutputEntryKind::Warning,
+                        text: "go-workflow must start from PlanMode".to_string(),
+                    },
+                    AppServerHookOutputEntry {
+                        kind: AppServerHookOutputEntryKind::Stop,
+                        text: "prompt blocked".to_string(),
+                    },
+                ],
+            },
+        })
+    }
+
     fn agent_message_delta_notification(
         thread_id: ThreadId,
         turn_id: &str,
@@ -8450,6 +8518,37 @@ guardian_approval = true
         let snapshot = store.snapshot();
         assert!(snapshot.events.is_empty());
         assert_eq!(store.has_pending_thread_approvals(), false);
+    }
+
+    #[test]
+    fn thread_event_store_rebase_preserves_hook_notifications() {
+        let thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(8);
+        store.push_notification(hook_started_notification(thread_id, "turn-hook"));
+        store.push_notification(hook_completed_notification(thread_id, "turn-hook"));
+
+        store.rebase_buffer_after_session_refresh();
+
+        let snapshot = store.snapshot();
+        let hook_notifications = snapshot
+            .events
+            .into_iter()
+            .map(|event| match event {
+                ThreadBufferedEvent::Notification(notification) => {
+                    serde_json::to_value(notification).expect("hook notification should serialize")
+                }
+                other => panic!("expected buffered hook notification, saw: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            hook_notifications,
+            vec![
+                serde_json::to_value(hook_started_notification(thread_id, "turn-hook"))
+                    .expect("hook notification should serialize"),
+                serde_json::to_value(hook_completed_notification(thread_id, "turn-hook"))
+                    .expect("hook notification should serialize"),
+            ]
+        );
     }
 
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
