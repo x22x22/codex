@@ -138,6 +138,10 @@ jobs:
               labels: codex-windows-x64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: ${{ runner.os }}
+          install-test-prereqs: true
       - name: Install Linux sandbox build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -148,21 +152,9 @@ jobs:
         with:
           toolchain: nightly-2025-09-18
           components: llvm-tools-preview, rustc-dev, rust-src
-      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
-      - name: Run argument comment lint on codex-rs
-        if: ${{ runner.os == 'macOS' }}
+      - name: Run argument comment lint on codex-rs via Bazel
         shell: bash
-        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py
-      # Linux still uses the default-targets-only form for now, but PRs run the
-      # released linter on all three platforms so wrapper regressions surface pre-merge.
-      - name: Run argument comment lint on codex-rs (default targets only)
-        if: ${{ runner.os == 'Linux' }}
-        shell: bash
-        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py -- --lib --bins
-      - name: Run argument comment lint on codex-rs
-        if: ${{ runner.os == 'Windows' }}
-        shell: bash
-        run: python ./tools/argument-comment-lint/run-prebuilt-linter.py
+        run: bazel test --build_tests_only --test_tag_filters=argument-comment-lint //codex-rs/...
 
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
