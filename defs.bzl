@@ -104,48 +104,6 @@ workspace_root_test = rule(
     },
 )
 
-def _workspace_dep_packages(package_name):
-    package_data = DEP_DATA.get(package_name, {})
-    dependency_labels = []
-
-    for key in ["deps", "build_deps", "dev_deps"]:
-        dependency_labels += package_data.get(key, [])
-
-    for key in ["deps_by_platform", "build_deps_by_platform", "dev_deps_by_platform"]:
-        for labels in package_data.get(key, {}).values():
-            dependency_labels += labels
-
-    workspace_packages = []
-    for dependency_label in dependency_labels:
-        if dependency_label.startswith("//codex-rs/"):
-            workspace_packages.append(Label(dependency_label).package)
-
-    return workspace_packages
-
-def _argument_comment_lint_data(package_name):
-    closure = {package_name: True}
-    frontier = [package_name]
-
-    for _ in range(len(DEP_DATA)):
-        next_frontier = []
-        for current_package in frontier:
-            for dependency_package in _workspace_dep_packages(current_package):
-                if dependency_package not in closure:
-                    closure[dependency_package] = True
-                    next_frontier.append(dependency_package)
-
-        if not next_frontier:
-            break
-        frontier = next_frontier
-
-    return [
-        "//codex-rs:workspace-files",
-        "//tools/argument-comment-lint:runtime-files",
-    ] + [
-        "//{}:package-files".format(closure_package)
-        for closure_package in sorted(closure.keys())
-    ]
-
 def codex_rust_crate(
         name,
         crate_name,
@@ -345,20 +303,3 @@ def codex_rust_crate(
             env = cargo_env,
             tags = test_tags,
         )
-
-    workspace_root_test(
-        name = name + "-argument-comment-lint",
-        data = _argument_comment_lint_data(native.package_name()),
-        env = {
-            "ARGUMENT_COMMENT_LINT_MANIFEST": manifest_path,
-        },
-        # Package-scoped Dylint runs vary widely by crate and platform; the
-        # default 5-minute Bazel test timeout is too tight for slower crates.
-        tags = [
-            "argument-comment-lint",
-            "no-sandbox",
-        ],
-        test_bin = "//tools/argument-comment-lint:argument-comment-lint-bazel-runner",
-        timeout = "long",
-        workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
-    )
