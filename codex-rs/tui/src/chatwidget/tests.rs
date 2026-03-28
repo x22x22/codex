@@ -2328,7 +2328,6 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
             call_id: "call-spawn".to_string(),
             sender_thread_id,
             prompt: "Explore the repo".to_string(),
-            spawn_mode: codex_protocol::protocol::AgentSpawnMode::Spawn,
             model: "gpt-5".to_string(),
             reasoning_effort: ReasoningEffortConfig::High,
         }),
