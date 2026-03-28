@@ -6,6 +6,7 @@ mod json_schema;
 mod mcp_tool;
 mod responses_api;
 mod tool_definition;
+mod tool_spec;
 
 pub use dynamic_tool::parse_dynamic_tool;
 pub use json_schema::AdditionalProperties;
@@ -24,3 +25,8 @@ pub use responses_api::mcp_tool_to_deferred_responses_api_tool;
 pub use responses_api::mcp_tool_to_responses_api_tool;
 pub use responses_api::tool_definition_to_responses_api_tool;
 pub use tool_definition::ToolDefinition;
+pub use tool_spec::ConfiguredToolSpec;
+pub use tool_spec::ResponsesApiWebSearchFilters;
+pub use tool_spec::ResponsesApiWebSearchUserLocation;
+pub use tool_spec::ToolSpec;
+pub use tool_spec::create_tools_json_for_responses_api;
