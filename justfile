@@ -67,7 +67,7 @@ bazel-lock-check:
     ./scripts/check-module-bazel-lock.sh
 
 bazel-test:
-    bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint --keep_going //... -//third_party/v8:all
 
 bazel-clippy:
     bazel build --config=clippy -- //codex-rs/... -//codex-rs/v8-poc:all
@@ -77,7 +77,7 @@ bazel-argument-comment-lint:
     bazel build --config=argument-comment-lint -- //codex-rs/...
 
 bazel-remote-test:
-    bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint --config=remote --platforms=//:rbe --keep_going //... -//third_party/v8:all
 
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
