@@ -565,7 +565,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &client,
                     ClientRequest::ThreadFork {
                         request_id: request_ids.next(),
-                        params: thread_fork_params_from_config(&config, session_id, None),
+                        params: thread_fork_params_from_config(
+                            &config, session_id, /*path*/ None,
+                        ),
                     },
                     "thread/fork",
                 )
@@ -1839,7 +1841,7 @@ mod tests {
     #[test]
     fn lagged_event_warning_message_is_explicit() {
         assert_eq!(
-            lagged_event_warning_message(7),
+            lagged_event_warning_message(/*skipped*/ 7),
             "in-process app-server event stream lagged; dropped 7 events".to_string()
         );
     }
