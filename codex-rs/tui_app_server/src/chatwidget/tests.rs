@@ -11802,6 +11802,93 @@ async fn app_server_mcp_startup_after_lag_can_settle_without_starting_updates() 
 }
 
 #[tokio::test]
+async fn app_server_mcp_startup_next_round_discards_stale_terminal_updates() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(["alpha".to_string(), "beta".to_string()]);
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Failed,
+            error: Some("MCP client for `alpha` failed to start: handshake failed".to_string()),
+        }),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "beta".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.finish_mcp_startup_after_lag();
+    let _ = drain_insert_history(&mut rx);
+    assert!(!chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Failed,
+            error: Some(
+                "MCP client for `alpha` failed to start: stale handshake failed".to_string(),
+            ),
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "beta".to_string(),
+            status: McpServerStartupState::Starting,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(!chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Ready,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "beta".to_string(),
+            status: McpServerStartupState::Ready,
+            error: None,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let summary_text = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(summary_text.is_empty());
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn app_server_mcp_startup_next_round_after_lag_can_settle_without_starting_updates() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
@@ -11836,6 +11923,18 @@ async fn app_server_mcp_startup_next_round_after_lag_can_settle_without_starting
     chat.finish_mcp_startup_after_lag();
     let _ = drain_insert_history(&mut rx);
     assert!(!chat.bottom_pane.is_task_running());
+
+    chat.handle_server_notification(
+        ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+            name: "alpha".to_string(),
+            status: McpServerStartupState::Failed,
+            error: Some(
+                "MCP client for `alpha` failed to start: stale handshake failed".to_string(),
+            ),
+        }),
+        /*replay_kind*/ None,
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
 
     chat.finish_mcp_startup_after_lag();
 

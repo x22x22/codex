@@ -2798,6 +2798,15 @@ impl ChatWidget {
     ) {
         let mut activated_pending_round = false;
         let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
+            if matches!(status, McpStartupStatus::Starting)
+                && !self
+                    .mcp_startup_pending_next_round
+                    .values()
+                    .any(|state| matches!(state, McpStartupStatus::Starting))
+            {
+                self.mcp_startup_pending_next_round.clear();
+                self.mcp_startup_allow_terminal_only_next_round = false;
+            }
             self.mcp_startup_pending_next_round.insert(server, status);
             let Some(expected_servers) = &self.mcp_startup_expected_servers else {
                 return;
@@ -2938,6 +2947,7 @@ impl ChatWidget {
 
     pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
         if self.mcp_startup_ignore_updates_until_next_start {
+            self.mcp_startup_pending_next_round.clear();
             self.mcp_startup_allow_terminal_only_next_round = true;
         }
 
