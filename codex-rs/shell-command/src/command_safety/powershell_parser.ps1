@@ -1,39 +1,105 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 
-$payload = $env:CODEX_POWERSHELL_PAYLOAD
-if ([string]::IsNullOrEmpty($payload)) {
-    Write-Output '{"status":"parse_failed"}'
-    exit 0
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+$stdin = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), $utf8, $false)
+$stdout = [System.IO.StreamWriter]::new([Console]::OpenStandardOutput(), $utf8)
+$stdout.AutoFlush = $true
+
+# This script stays alive so the Rust caller can amortize PowerShell startup across
+# many parse requests. Each request and response is one compact JSON line.
+while (($requestLine = $stdin.ReadLine()) -ne $null) {
+    $request = $null
+    try {
+        $request = $requestLine | ConvertFrom-Json
+    } catch {
+        Write-Response @{ id = $null; status = 'parse_failed' }
+        continue
+    }
+
+    # We process requests serially, but still echo the id back so the Rust side can
+    # detect protocol desyncs instead of silently trusting mixed stdout.
+    $requestId = $request.id
+    $payload = $request.payload
+    if ([string]::IsNullOrEmpty($payload)) {
+        Write-Response @{ id = $requestId; status = 'parse_failed' }
+        continue
+    }
+
+    try {
+        $source =
+            [System.Text.Encoding]::Unicode.GetString(
+                [System.Convert]::FromBase64String($payload)
+            )
+    } catch {
+        Write-Response @{ id = $requestId; status = 'parse_failed' }
+        continue
+    }
+
+    Write-Response (Invoke-ParseRequest -RequestId $requestId -Source $source)
 }
 
-try {
-    $source =
-        [System.Text.Encoding]::Unicode.GetString(
-            [System.Convert]::FromBase64String($payload)
+function Invoke-ParseRequest {
+    param($RequestId, $Source)
+
+    $tokens = $null
+    $errors = $null
+
+    $ast = $null
+    try {
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput(
+            $Source,
+            [ref]$tokens,
+            [ref]$errors
         )
-} catch {
-    Write-Output '{"status":"parse_failed"}'
-    exit 0
+    } catch {
+        return @{ id = $RequestId; status = 'parse_failed' }
+    }
+
+    if ($errors.Count -gt 0) {
+        return @{ id = $RequestId; status = 'parse_errors' }
+    }
+
+    $commands = [System.Collections.ArrayList]::new()
+
+    foreach ($statement in $ast.EndBlock.Statements) {
+        if (-not (Add-CommandsFromPipelineBase $statement $commands)) {
+            $commands = $null
+            break
+        }
+    }
+
+    if ($commands -ne $null) {
+        $normalized = [System.Collections.ArrayList]::new()
+        foreach ($cmd in $commands) {
+            if ($cmd -is [string]) {
+                $null = $normalized.Add(@($cmd))
+                continue
+            }
+
+            if ($cmd -is [System.Array] -or $cmd -is [System.Collections.IEnumerable]) {
+                $null = $normalized.Add(@($cmd))
+                continue
+            }
+
+            $normalized = $null
+            break
+        }
+
+        $commands = $normalized
+    }
+
+    if ($commands -eq $null) {
+        return @{ id = $RequestId; status = 'unsupported' }
+    }
+
+    return @{ id = $RequestId; status = 'ok'; commands = $commands }
 }
 
-$tokens = $null
-$errors = $null
+function Write-Response {
+    param($Response)
 
-$ast = $null
-try {
-    $ast = [System.Management.Automation.Language.Parser]::ParseInput(
-        $source,
-        [ref]$tokens,
-        [ref]$errors
-    )
-} catch {
-    Write-Output '{"status":"parse_failed"}'
-    exit 0
-}
-
-if ($errors.Count -gt 0) {
-    Write-Output '{"status":"parse_errors"}'
-    exit 0
+    $stdout.WriteLine(($Response | ConvertTo-Json -Compress -Depth 3))
 }
 
 function Convert-CommandElement {
@@ -162,40 +228,3 @@ function Add-CommandsFromPipelineBase {
 
     return $false
 }
-
-$commands = [System.Collections.ArrayList]::new()
-
-foreach ($statement in $ast.EndBlock.Statements) {
-    if (-not (Add-CommandsFromPipelineBase $statement $commands)) {
-        $commands = $null
-        break
-    }
-}
-
-if ($commands -ne $null) {
-    $normalized = [System.Collections.ArrayList]::new()
-    foreach ($cmd in $commands) {
-        if ($cmd -is [string]) {
-            $null = $normalized.Add(@($cmd))
-            continue
-        }
-
-        if ($cmd -is [System.Array] -or $cmd -is [System.Collections.IEnumerable]) {
-            $null = $normalized.Add(@($cmd))
-            continue
-        }
-
-        $normalized = $null
-        break
-    }
-
-    $commands = $normalized
-}
-
-$result = if ($commands -eq $null) {
-    @{ status = 'unsupported' }
-} else {
-    @{ status = 'ok'; commands = $commands }
-}
-
-,$result | ConvertTo-Json -Depth 3
