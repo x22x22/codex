@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+filegroup(
+    name = "runtime-files",
+    srcs = [
+        "argument-comment-lint",
+        "run-prebuilt-linter.py",
+        "wrapper_common.py",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+rust_binary(
+    name = "argument-comment-lint-bazel-runner",
+    crate_name = "argument_comment_lint_bazel_runner",
+    crate_root = "bazel_runner.rs",
+    srcs = ["bazel_runner.rs"],
+    visibility = ["//visibility:public"],
+)
