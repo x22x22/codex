@@ -107,7 +107,7 @@ def build_final_args(parsed: ParsedWrapperArgs, manifest_path: Path) -> list[str
 
     if not parsed.has_manifest_path:
         final_args.extend(["--manifest-path", str(manifest_path)])
-    if not parsed.has_package_selection:
+    if not parsed.has_package_selection and not parsed.has_manifest_path:
         final_args.append("--workspace")
     if not parsed.has_no_deps:
         final_args.append("--no-deps")
