@@ -2338,7 +2338,7 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .skills_manager
         .skills_for_cwd(
             &crate::skills_load_input_from_config(&parent_config, Vec::new()),
-            true,
+            /*force_reload*/ true,
         )
         .await;
     let parent_skill = parent_outcome
@@ -2733,7 +2733,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         per_turn_config,
         model_info,
         &models_manager,
-        None,
+        /*network*/ None,
         environment,
         "turn_id".to_string(),
         Arc::clone(&js_repl),
@@ -3574,7 +3574,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         per_turn_config,
         model_info,
         &models_manager,
-        None,
+        /*network*/ None,
         environment,
         "turn_id".to_string(),
         Arc::clone(&js_repl),

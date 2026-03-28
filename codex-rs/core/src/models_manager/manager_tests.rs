@@ -633,7 +633,7 @@ fn models_request_telemetry_emits_auth_env_feedback_tags_on_failure() {
             .unwrap(),
     );
     telemetry.on_request(
-        1,
+        /*attempt*/ 1,
         Some(StatusCode::UNAUTHORIZED),
         Some(&TransportError::Http {
             status: StatusCode::UNAUTHORIZED,
