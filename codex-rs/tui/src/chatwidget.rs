@@ -2962,7 +2962,9 @@ impl ChatWidget {
         let mut failed = Vec::new();
         let mut cancelled = Vec::new();
 
-        if let Some(expected_servers) = &self.mcp_startup_expected_servers {
+        if let Some(expected_servers) = &self.mcp_startup_expected_servers
+            && !expected_servers.is_empty()
+        {
             for name in expected_servers {
                 match current.get(name) {
                     Some(McpStartupStatus::Ready) => {}

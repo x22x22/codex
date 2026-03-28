@@ -12060,6 +12060,40 @@ async fn app_server_mcp_startup_next_round_with_empty_expected_servers_reactivat
 }
 
 #[tokio::test]
+async fn app_server_mcp_startup_after_lag_with_empty_expected_servers_preserves_failures() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.set_mcp_startup_expected_servers(std::iter::empty::<String>());
+
+    chat.on_mcp_startup_update(McpStartupUpdateEvent {
+        server: "runtime".to_string(),
+        status: McpStartupStatus::Starting,
+    });
+    chat.on_mcp_startup_update(McpStartupUpdateEvent {
+        server: "runtime".to_string(),
+        status: McpStartupStatus::Failed {
+            error: "MCP client for `runtime` failed to start: handshake failed".to_string(),
+        },
+    });
+
+    let warning_text = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(warning_text.contains("MCP client for `runtime` failed to start: handshake failed"));
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.finish_mcp_startup_after_lag();
+
+    let summary_text = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(summary_text.contains("MCP startup incomplete (failed: runtime)"));
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn app_server_mcp_startup_next_round_after_lag_can_settle_without_starting_updates() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
