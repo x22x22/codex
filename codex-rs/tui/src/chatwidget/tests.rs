@@ -1861,12 +1861,20 @@ async fn turn_started_uses_runtime_context_window_before_first_token_count() {
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(100));
 
     chat.add_status_output();
-    tokio::task::yield_now().await;
 
-    let cells = drain_insert_history(&mut rx);
-    let context_line = cells
-        .last()
-        .expect("status output inserted")
+    let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match rx.recv().await {
+                Some(AppEvent::InsertHistoryCell(cell)) => break cell,
+                Some(_) => continue,
+                None => panic!("app event channel closed before status output was emitted"),
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for status output");
+    let context_line = history_cell
+        .display_lines(80)
         .iter()
         .map(|line| {
             line.spans
