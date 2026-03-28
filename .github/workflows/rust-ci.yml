@@ -156,11 +156,11 @@ jobs:
       - name: Run argument comment lint on codex-rs
         if: ${{ runner.os == 'macOS' }}
         shell: bash
-        run: ./tools/argument-comment-lint/run-prebuilt-linter.sh
+        run: ./tools/argument-comment-lint/run-prebuilt-linter.py
       - name: Run argument comment lint on codex-rs (default targets only)
         if: ${{ runner.os != 'macOS' }}
         shell: bash
-        run: ./tools/argument-comment-lint/run-prebuilt-linter.sh -- --lib --bins
+        run: ./tools/argument-comment-lint/run-prebuilt-linter.py -- --lib --bins
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
