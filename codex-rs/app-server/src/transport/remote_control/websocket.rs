@@ -14,6 +14,7 @@ use super::protocol::ClientEvent;
 use super::protocol::ClientId;
 use super::protocol::RemoteControlTarget;
 use super::protocol::ServerEnvelope;
+use super::protocol::StreamId;
 use axum::http::HeaderValue;
 use base64::Engine;
 use codex_core::AuthManager;
@@ -50,7 +51,7 @@ pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 const REMOTE_CONTROL_SUBSCRIBE_CURSOR_HEADER: &str = "x-codex-subscribe-cursor";
 
 struct BoundedOutboundBuffer {
-    buffer_by_client: HashMap<ClientId, BTreeMap<u64, ServerEnvelope>>,
+    buffer_by_client: HashMap<(ClientId, StreamId), BTreeMap<u64, ServerEnvelope>>,
     used_tx: watch::Sender<usize>,
 }
 
@@ -66,20 +67,29 @@ impl BoundedOutboundBuffer {
 
     fn insert(&mut self, server_envelope: &ServerEnvelope) {
         self.buffer_by_client
-            .entry(server_envelope.client_id.clone())
+            .entry((
+                server_envelope.client_id.clone(),
+                server_envelope.stream_id.clone(),
+            ))
             .or_default()
             .insert(server_envelope.seq_id, server_envelope.clone());
         self.used_tx.send_modify(|used| *used += 1);
     }
 
-    fn remove(&mut self, client_id: &ClientId) {
-        if let Some(buffer) = self.buffer_by_client.remove(client_id) {
+    fn remove(&mut self, client_id: &ClientId, stream_id: &StreamId) {
+        if let Some(buffer) = self
+            .buffer_by_client
+            .remove(&(client_id.clone(), stream_id.clone()))
+        {
             self.used_tx.send_modify(|used| *used -= buffer.len());
         }
     }
 
-    fn ack(&mut self, client_id: &ClientId, acked_seq_id: u64) {
-        let Some(buffer) = self.buffer_by_client.get_mut(client_id) else {
+    fn ack(&mut self, client_id: &ClientId, stream_id: &StreamId, acked_seq_id: u64) {
+        let Some(buffer) = self
+            .buffer_by_client
+            .get_mut(&(client_id.clone(), stream_id.clone()))
+        else {
             return;
         };
         while let Some(seq_id) = buffer.first_key_value().map(|(seq_id, _)| seq_id)
@@ -89,7 +99,8 @@ impl BoundedOutboundBuffer {
             self.used_tx.send_modify(|used| *used -= 1);
         }
         if buffer.is_empty() {
-            self.buffer_by_client.remove(client_id);
+            self.buffer_by_client
+                .remove(&(client_id.clone(), stream_id.clone()));
         }
     }
 
@@ -320,6 +331,7 @@ impl RemoteControlWebsocket {
                     event: queued_server_envelope.event,
                     client_id: queued_server_envelope.client_id,
                     seq_id,
+                    stream_id: queued_server_envelope.stream_id,
                 };
                 state.outbound_buffer.insert(&server_envelope);
 
@@ -391,14 +403,14 @@ impl RemoteControlWebsocket {
                     continue;
                 }
                 _ = idle_sweep_interval.tick() => {
-                    let expired_client_ids = match client_tracker.close_expired_clients().await {
-                        Ok(expired_client_ids) => expired_client_ids,
+                    let expired_client_keys = match client_tracker.close_expired_clients().await {
+                        Ok(expired_client_keys) => expired_client_keys,
                         Err(_) => return Ok(()),
                     };
-                    if !expired_client_ids.is_empty() {
+                    if !expired_client_keys.is_empty() {
                         let mut state = state.lock().await;
-                        for client_id in expired_client_ids {
-                            state.outbound_buffer.remove(&client_id);
+                        for (client_id, stream_id) in expired_client_keys {
+                            state.outbound_buffer.remove(&client_id, &stream_id);
                         }
                     }
                     continue;
@@ -441,22 +453,29 @@ impl RemoteControlWebsocket {
                 }
             };
 
+            let resolved_stream_id = client_envelope
+                .stream_id
+                .clone()
+                .or_else(|| client_tracker.legacy_stream_id(&client_envelope.client_id));
             let mut state = state.lock().await;
             if let Some(cursor) = client_envelope.cursor.as_deref() {
                 state.subscribe_cursor = Some(cursor.to_string());
             }
             if let ClientEvent::Ack = &client_envelope.event
                 && let Some(acked_seq_id) = client_envelope.seq_id
+                && let Some(stream_id) = resolved_stream_id.as_ref()
             {
                 state
                     .outbound_buffer
-                    .ack(&client_envelope.client_id, acked_seq_id);
+                    .ack(&client_envelope.client_id, stream_id, acked_seq_id);
             }
-            if matches!(&client_envelope.event, ClientEvent::ClientClosed)
-                || remote_control_message_starts_connection(&client_envelope.event)
-            {
-                state.outbound_buffer.remove(&client_envelope.client_id);
-            }
+            if (matches!(&client_envelope.event, ClientEvent::ClientClosed)
+                || remote_control_message_starts_connection(&client_envelope.event))
+                && let Some(stream_id) = resolved_stream_id.as_ref() {
+                    state
+                        .outbound_buffer
+                        .remove(&client_envelope.client_id, stream_id);
+                }
             drop(state);
 
             if client_tracker
@@ -834,6 +853,7 @@ mod tests {
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = Some(RemoteControlEnrollment {
             account_id: Some("account_id".to_string()),
+            environment_id: "env_test".to_string(),
             server_id: "srv_e_test".to_string(),
             server_name: "test-server".to_string(),
         });
@@ -888,6 +908,7 @@ mod tests {
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = Some(RemoteControlEnrollment {
             account_id: Some("account_id".to_string()),
+            environment_id: "env_test".to_string(),
             server_id: "srv_e_test".to_string(),
             server_name: "test-server".to_string(),
         });

@@ -11,10 +11,10 @@ impl StateRuntime {
         &self,
         websocket_url: &str,
         account_id: Option<&str>,
-    ) -> anyhow::Result<Option<(String, String)>> {
+    ) -> anyhow::Result<Option<(String, String, String)>> {
         let row = sqlx::query(
             r#"
-SELECT server_id, server_name
+SELECT server_id, environment_id, server_name
 FROM remote_control_enrollments
 WHERE websocket_url = ? AND account_id = ?
             "#,
@@ -24,8 +24,14 @@ WHERE websocket_url = ? AND account_id = ?
         .fetch_optional(self.pool.as_ref())
         .await?;
 
-        row.map(|row| Ok((row.try_get("server_id")?, row.try_get("server_name")?)))
-            .transpose()
+        row.map(|row| {
+            Ok((
+                row.try_get("server_id")?,
+                row.try_get("environment_id")?,
+                row.try_get("server_name")?,
+            ))
+        })
+        .transpose()
     }
 
     pub async fn upsert_remote_control_enrollment(
@@ -33,6 +39,7 @@ WHERE websocket_url = ? AND account_id = ?
         websocket_url: &str,
         account_id: Option<&str>,
         server_id: &str,
+        environment_id: &str,
         server_name: &str,
     ) -> anyhow::Result<()> {
         sqlx::query(
@@ -41,11 +48,13 @@ INSERT INTO remote_control_enrollments (
     websocket_url,
     account_id,
     server_id,
+    environment_id,
     server_name,
     updated_at
-) VALUES (?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(websocket_url, account_id) DO UPDATE SET
     server_id = excluded.server_id,
+    environment_id = excluded.environment_id,
     server_name = excluded.server_name,
     updated_at = excluded.updated_at
             "#,
@@ -53,6 +62,7 @@ ON CONFLICT(websocket_url, account_id) DO UPDATE SET
         .bind(websocket_url)
         .bind(remote_control_account_id_key(account_id))
         .bind(server_id)
+        .bind(environment_id)
         .bind(server_name)
         .bind(Utc::now().timestamp())
         .execute(self.pool.as_ref())
@@ -97,6 +107,7 @@ mod tests {
                 "wss://example.com/backend-api/wham/remote/control/server",
                 Some("account-a"),
                 "srv_e_first",
+                "env_first",
                 "first-server",
             )
             .await
@@ -106,6 +117,7 @@ mod tests {
                 "wss://example.com/backend-api/wham/remote/control/server",
                 Some("account-b"),
                 "srv_e_second",
+                "env_second",
                 "second-server",
             )
             .await
@@ -119,7 +131,11 @@ mod tests {
                 )
                 .await
                 .expect("load first enrollment"),
-            Some(("srv_e_first".to_string(), "first-server".to_string()))
+            Some((
+                "srv_e_first".to_string(),
+                "env_first".to_string(),
+                "first-server".to_string()
+            ))
         );
         assert_eq!(
             runtime
@@ -147,6 +163,7 @@ mod tests {
                 "wss://example.com/backend-api/wham/remote/control/server",
                 None,
                 "srv_e_first",
+                "env_first",
                 "first-server",
             )
             .await
@@ -156,6 +173,7 @@ mod tests {
                 "wss://example.com/backend-api/wham/remote/control/server",
                 Some("account-a"),
                 "srv_e_second",
+                "env_second",
                 "second-server",
             )
             .await
@@ -189,7 +207,11 @@ mod tests {
                 )
                 .await
                 .expect("load retained enrollment"),
-            Some(("srv_e_second".to_string(), "second-server".to_string()))
+            Some((
+                "srv_e_second".to_string(),
+                "env_second".to_string(),
+                "second-server".to_string()
+            ))
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;

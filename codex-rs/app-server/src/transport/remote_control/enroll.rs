@@ -20,6 +20,7 @@ pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlEnrollment {
     pub(super) account_id: Option<String>,
+    pub(super) environment_id: String,
     pub(super) server_id: String,
     pub(super) server_name: String,
 }
@@ -47,11 +48,14 @@ pub(super) async fn load_persisted_remote_control_enrollment(
         }
     };
 
-    enrollment.map(|(server_id, server_name)| RemoteControlEnrollment {
-        account_id: account_id.map(&str::to_string),
-        server_id,
-        server_name,
-    })
+    enrollment.map(
+        |(server_id, environment_id, server_name)| RemoteControlEnrollment {
+            account_id: account_id.map(&str::to_string),
+            environment_id,
+            server_id,
+            server_name,
+        },
+    )
 }
 
 pub(super) async fn update_persisted_remote_control_enrollment(
@@ -77,6 +81,7 @@ pub(super) async fn update_persisted_remote_control_enrollment(
                 &remote_control_target.websocket_url,
                 account_id,
                 &enrollment.server_id,
+                &enrollment.environment_id,
                 &enrollment.server_name,
             )
             .await
@@ -182,6 +187,7 @@ pub(super) async fn enroll_remote_control_server(
 
     Ok(RemoteControlEnrollment {
         account_id: account_id.map(&str::to_string),
+        environment_id: enrollment.environment_id,
         server_id: enrollment.server_id,
         server_name,
     })
@@ -221,11 +227,13 @@ mod tests {
                 .expect("second target should parse");
         let first_enrollment = RemoteControlEnrollment {
             account_id: Some("account-a".to_string()),
+            environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
             server_name: "first-server".to_string(),
         };
         let second_enrollment = RemoteControlEnrollment {
             account_id: Some("account-a".to_string()),
+            environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
             server_name: "second-server".to_string(),
         };
@@ -287,11 +295,13 @@ mod tests {
                 .expect("second target should parse");
         let first_enrollment = RemoteControlEnrollment {
             account_id: Some("account-a".to_string()),
+            environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
             server_name: "first-server".to_string(),
         };
         let second_enrollment = RemoteControlEnrollment {
             account_id: Some("account-a".to_string()),
+            environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
             server_name: "second-server".to_string(),
         };

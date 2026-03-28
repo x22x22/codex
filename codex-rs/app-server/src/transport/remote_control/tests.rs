@@ -95,7 +95,11 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         enroll_request.request_line,
         "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
     );
-    respond_with_json(enroll_request.stream, json!({ "server_id": "srv_e_test" })).await;
+    respond_with_json(
+        enroll_request.stream,
+        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+    )
+    .await;
     let mut websocket = accept_remote_control_connection(&listener).await;
 
     let client_id = ClientId("client-1".to_string());
@@ -104,6 +108,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         ClientEnvelope {
             event: ClientEvent::Ping,
             client_id: client_id.clone(),
+            stream_id: None,
             seq_id: None,
             cursor: None,
         },
@@ -131,6 +136,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
                 ),
             },
             client_id: client_id.clone(),
+            stream_id: None,
             seq_id: Some(0),
             cursor: None,
         },
@@ -161,6 +167,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
                 message: initialize_message.clone(),
             },
             client_id: client_id.clone(),
+            stream_id: None,
             seq_id: Some(1),
             cursor: None,
         },
@@ -207,6 +214,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
                 message: followup_message.clone(),
             },
             client_id: client_id.clone(),
+            stream_id: None,
             seq_id: Some(2),
             cursor: None,
         },
@@ -232,6 +240,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         ClientEnvelope {
             event: ClientEvent::Ping,
             client_id: client_id.clone(),
+            stream_id: None,
             seq_id: None,
             cursor: None,
         },
@@ -281,6 +290,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         ClientEnvelope {
             event: ClientEvent::ClientClosed,
             client_id: client_id.clone(),
+            stream_id: None,
             seq_id: None,
             cursor: None,
         },
@@ -304,6 +314,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
         ClientEnvelope {
             event: ClientEvent::Ping,
             client_id,
+            stream_id: None,
             seq_id: None,
             cursor: None,
         },
@@ -348,7 +359,11 @@ async fn remote_control_transport_reconnects_after_disconnect() {
         enroll_request.request_line,
         "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
     );
-    respond_with_json(enroll_request.stream, json!({ "server_id": "srv_e_test" })).await;
+    respond_with_json(
+        enroll_request.stream,
+        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+    )
+    .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
     first_websocket
         .close(None)
@@ -374,6 +389,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
                 }),
             },
             client_id: ClientId("client-2".to_string()),
+            stream_id: None,
             seq_id: Some(0),
             cursor: None,
         },
@@ -414,7 +430,11 @@ async fn remote_control_transport_clears_outgoing_buffer_when_client_closes() {
     .expect("remote control should start");
 
     let enroll_request = accept_http_request(&listener).await;
-    respond_with_json(enroll_request.stream, json!({ "server_id": "srv_e_test" })).await;
+    respond_with_json(
+        enroll_request.stream,
+        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+    )
+    .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
 
     let client_id = ClientId("client-1".to_string());
@@ -436,6 +456,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_client_closes() {
                 message: initialize_message,
             },
             client_id: client_id.clone(),
+            stream_id: None,
             seq_id: Some(0),
             cursor: None,
         },
@@ -493,6 +514,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_client_closes() {
         ClientEnvelope {
             event: ClientEvent::ClientClosed,
             client_id: client_id.clone(),
+            stream_id: None,
             seq_id: None,
             cursor: None,
         },
@@ -519,6 +541,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_client_closes() {
         ClientEnvelope {
             event: ClientEvent::Ping,
             client_id,
+            stream_id: None,
             seq_id: None,
             cursor: None,
         },
@@ -582,7 +605,11 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
             "app_server_version": env!("CARGO_PKG_VERSION"),
         })
     );
-    respond_with_json(enroll_request.stream, json!({ "server_id": "srv_e_test" })).await;
+    respond_with_json(
+        enroll_request.stream,
+        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+    )
+    .await;
 
     let (handshake_request, mut websocket) =
         accept_remote_control_backend_connection(&listener).await;
@@ -634,6 +661,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
                     message: initialize_message.clone(),
                 },
                 client_id: backend_client_id.clone(),
+                stream_id: None,
                 seq_id: Some(0),
                 cursor: None,
             },
@@ -742,6 +770,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
         normalize_remote_control_url(&remote_control_url).expect("target should parse");
     let persisted_enrollment = RemoteControlEnrollment {
         account_id: Some("account_id".to_string()),
+        environment_id: "env_persisted".to_string(),
         server_id: "srv_e_persisted".to_string(),
         server_name: "persisted-server".to_string(),
     };
@@ -803,11 +832,13 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
     let stale_enrollment = RemoteControlEnrollment {
         account_id: Some("account_id".to_string()),
+        environment_id: "env_stale".to_string(),
         server_id: "srv_e_stale".to_string(),
         server_name: "stale-server".to_string(),
     };
     let refreshed_enrollment = RemoteControlEnrollment {
         account_id: Some("account_id".to_string()),
+        environment_id: "env_refreshed".to_string(),
         server_id: "srv_e_refreshed".to_string(),
         server_name: expected_server_name,
     };
@@ -851,7 +882,10 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     );
     respond_with_json(
         enroll_request.stream,
-        json!({ "server_id": refreshed_enrollment.server_id }),
+        json!({
+            "server_id": refreshed_enrollment.server_id,
+            "environment_id": refreshed_enrollment.environment_id,
+        }),
     )
     .await;
 
@@ -1048,8 +1082,15 @@ async fn read_server_event(websocket: &mut WebSocketStream<TcpStream>) -> serde_
             .expect("websocket frame should be readable");
         match frame {
             tungstenite::Message::Text(text) => {
-                return serde_json::from_str(text.as_ref())
-                    .expect("server event should deserialize");
+                let mut event: serde_json::Value =
+                    serde_json::from_str(text.as_ref()).expect("server event should deserialize");
+                if let Some(stream_id) = event
+                    .as_object_mut()
+                    .and_then(|event| event.remove("stream_id"))
+                {
+                    assert!(stream_id.is_string(), "stream_id should be a string");
+                }
+                return event;
             }
             tungstenite::Message::Ping(payload) => {
                 websocket

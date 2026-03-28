@@ -24,11 +24,22 @@ pub(super) struct EnrollRemoteServerRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct EnrollRemoteServerResponse {
     pub(super) server_id: String,
+    pub(super) environment_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ClientId(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StreamId(pub String);
+
+impl StreamId {
+    pub fn new_random() -> Self {
+        Self(uuid::Uuid::now_v7().to_string())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -44,13 +55,11 @@ pub enum ClientEvent {
 pub(crate) struct ClientEnvelope {
     #[serde(flatten)]
     pub(crate) event: ClientEvent,
-    #[serde(rename = "client_id", alias = "clientId")]
+    #[serde(rename = "client_id")]
     pub(crate) client_id: ClientId,
-    #[serde(
-        rename = "seq_id",
-        alias = "seqId",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "stream_id", skip_serializing_if = "Option::is_none")]
+    pub(crate) stream_id: Option<StreamId>,
+    #[serde(rename = "seq_id", skip_serializing_if = "Option::is_none")]
     pub(crate) seq_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) cursor: Option<String>,
@@ -81,9 +90,11 @@ pub enum ServerEvent {
 pub(crate) struct ServerEnvelope {
     #[serde(flatten)]
     pub(crate) event: ServerEvent,
-    #[serde(rename = "client_id", alias = "clientId")]
+    #[serde(rename = "client_id")]
     pub(crate) client_id: ClientId,
-    #[serde(rename = "seq_id", alias = "seqId")]
+    #[serde(rename = "stream_id")]
+    pub(crate) stream_id: StreamId,
+    #[serde(rename = "seq_id")]
     pub(crate) seq_id: u64,
 }
 

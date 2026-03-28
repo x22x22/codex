@@ -8,6 +8,7 @@ use crate::transport::remote_control::websocket::load_remote_control_auth;
 
 pub use self::protocol::ClientId;
 use self::protocol::ServerEvent;
+use self::protocol::StreamId;
 use self::protocol::normalize_remote_control_url;
 use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
@@ -24,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 pub(super) struct QueuedServerEnvelope {
     pub(super) event: ServerEvent,
     pub(super) client_id: ClientId,
+    pub(super) stream_id: StreamId,
     pub(super) write_complete_tx: Option<oneshot::Sender<()>>,
 }
 
