@@ -85,7 +85,9 @@ rustup toolchain install nightly-2025-09-18 \
 
 The checked-in DotSlash file lives at `tools/argument-comment-lint/argument-comment-lint`.
 `run-prebuilt-linter.py` resolves that file via `dotslash` and is the path used by
-`just clippy`, `just argument-comment-lint`, and the Rust CI job. The
+`just clippy` and `just argument-comment-lint`. Bazel-backed CI now drives the
+same wrapper through package-owned test targets tagged `argument-comment-lint`.
+The
 source-build path remains available in `run.py` for people
 iterating on the lint crate itself.
 
@@ -128,6 +130,7 @@ Run the lint against `codex-rs` from the repo root:
 ```bash
 ./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-core
 just argument-comment-lint -p codex-core
+bazel test --build_tests_only --test_tag_filters=argument-comment-lint //codex-rs/...
 ```
 
 If no package selection is provided, `run-prebuilt-linter.py` defaults to checking the
