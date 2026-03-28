@@ -1,0 +1,20 @@
+# What: make the default rules_rust Windows nightly toolchain use GNU, not MSVC.
+# Why: codex's Bazel Windows platform is based on llvm-mingw/gnullvm, and the
+# nightly rustc-dev artifacts that power argument-comment-lint do not exist for
+# gnullvm. Using the default MSVC nightly toolchain on that platform mixes MSVC
+# Rust libraries with GNU/clang linker flags and breaks tool targets such as
+# `process_wrapper`.
+
+diff --git a/rust/repositories.bzl b/rust/repositories.bzl
+--- a/rust/repositories.bzl
++++ b/rust/repositories.bzl
+@@ -48,8 +48,8 @@ DEFAULT_TOOLCHAIN_TRIPLES = {
+     "aarch64-unknown-linux-gnu": "rust_linux_aarch64",
+     "powerpc64le-unknown-linux-gnu": "rust_linux_powerpc64le",
+     "s390x-unknown-linux-gnu": "rust_linux_s390x",
+     "x86_64-apple-darwin": "rust_macos_x86_64",
+-    "x86_64-pc-windows-msvc": "rust_windows_x86_64",
++    "x86_64-pc-windows-gnu": "rust_windows_x86_64",
+     "x86_64-unknown-freebsd": "rust_freebsd_x86_64",
+     "x86_64-unknown-linux-gnu": "rust_linux_x86_64",
+ }
