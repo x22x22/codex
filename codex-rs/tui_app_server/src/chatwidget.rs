@@ -799,8 +799,10 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
-    /// After startup settles, ignore late terminal updates until a new startup round begins.
+    /// After startup settles, ignore stale updates until enough notifications confirm a new round.
     mcp_startup_ignore_updates_until_next_start: bool,
+    /// Buffers post-settle MCP startup updates until they cover a full fresh round.
+    mcp_startup_pending_next_round: HashMap<String, McpStartupStatus>,
     connectors_cache: ConnectorsCacheState,
     connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
@@ -2792,17 +2794,41 @@ impl ChatWidget {
         status: McpStartupStatus,
         complete_when_settled: bool,
     ) {
-        if self.mcp_startup_ignore_updates_until_next_start {
-            if !matches!(status, McpStartupStatus::Starting) {
+        let mut activated_pending_round = false;
+        let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
+            self.mcp_startup_pending_next_round.insert(server, status);
+            let Some(expected_servers) = &self.mcp_startup_expected_servers else {
+                return;
+            };
+            let saw_full_round = !expected_servers.is_empty()
+                && expected_servers
+                    .iter()
+                    .all(|name| self.mcp_startup_pending_next_round.contains_key(name));
+            let saw_starting = self
+                .mcp_startup_pending_next_round
+                .values()
+                .any(|state| matches!(state, McpStartupStatus::Starting));
+            if !(saw_full_round && saw_starting) {
                 return;
             }
             self.mcp_startup_ignore_updates_until_next_start = false;
+            activated_pending_round = true;
+            std::mem::take(&mut self.mcp_startup_pending_next_round)
+        } else {
+            let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
+            if let McpStartupStatus::Failed { error } = &status {
+                self.on_warning(error);
+            }
+            startup_status.insert(server, status);
+            startup_status
+        };
+        if activated_pending_round {
+            for state in startup_status.values() {
+                if let McpStartupStatus::Failed { error } = state {
+                    self.on_warning(error);
+                }
+            }
         }
-        let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
-        if let McpStartupStatus::Failed { error } = &status {
-            self.on_warning(error);
-        }
-        startup_status.insert(server, status);
         self.mcp_startup_status = Some(startup_status);
         self.update_task_running_state();
         if complete_when_settled
@@ -2869,10 +2895,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn needs_mcp_startup_expected_servers(&self) -> bool {
-        self.mcp_startup_expected_servers.is_none()
-    }
-
     pub(crate) fn set_mcp_startup_expected_servers<I>(&mut self, server_names: I)
     where
         I: IntoIterator<Item = String>,
@@ -2901,8 +2923,8 @@ impl ChatWidget {
         }
 
         self.mcp_startup_status = None;
-        self.mcp_startup_expected_servers = None;
         self.mcp_startup_ignore_updates_until_next_start = true;
+        self.mcp_startup_pending_next_round.clear();
         self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
@@ -4673,6 +4695,7 @@ impl ChatWidget {
             pending_turn_copyable_output: None,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
+            mcp_startup_pending_next_round: HashMap::new(),
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
