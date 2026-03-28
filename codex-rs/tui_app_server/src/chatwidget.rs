@@ -805,6 +805,8 @@ pub(crate) struct ChatWidget {
     mcp_startup_allow_terminal_only_next_round: bool,
     /// Buffers post-settle MCP startup updates until they cover a full fresh round.
     mcp_startup_pending_next_round: HashMap<String, McpStartupStatus>,
+    /// Tracks whether the buffered next round has seen any `Starting` update yet.
+    mcp_startup_pending_next_round_saw_starting: bool,
     connectors_cache: ConnectorsCacheState,
     connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
@@ -2799,14 +2801,13 @@ impl ChatWidget {
         let mut activated_pending_round = false;
         let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
             if matches!(status, McpStartupStatus::Starting)
-                && !self
-                    .mcp_startup_pending_next_round
-                    .values()
-                    .any(|state| matches!(state, McpStartupStatus::Starting))
+                && !self.mcp_startup_pending_next_round_saw_starting
             {
                 self.mcp_startup_pending_next_round.clear();
                 self.mcp_startup_allow_terminal_only_next_round = false;
             }
+            self.mcp_startup_pending_next_round_saw_starting |=
+                matches!(status, McpStartupStatus::Starting);
             self.mcp_startup_pending_next_round.insert(server, status);
             let Some(expected_servers) = &self.mcp_startup_expected_servers else {
                 return;
@@ -2826,6 +2827,7 @@ impl ChatWidget {
             }
             self.mcp_startup_ignore_updates_until_next_start = false;
             self.mcp_startup_allow_terminal_only_next_round = false;
+            self.mcp_startup_pending_next_round_saw_starting = false;
             activated_pending_round = true;
             std::mem::take(&mut self.mcp_startup_pending_next_round)
         } else {
@@ -2940,6 +2942,7 @@ impl ChatWidget {
         self.mcp_startup_ignore_updates_until_next_start = true;
         self.mcp_startup_allow_terminal_only_next_round = false;
         self.mcp_startup_pending_next_round.clear();
+        self.mcp_startup_pending_next_round_saw_starting = false;
         self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
@@ -2948,6 +2951,7 @@ impl ChatWidget {
     pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
         if self.mcp_startup_ignore_updates_until_next_start {
             self.mcp_startup_pending_next_round.clear();
+            self.mcp_startup_pending_next_round_saw_starting = false;
             self.mcp_startup_allow_terminal_only_next_round = true;
         }
 
@@ -4717,6 +4721,7 @@ impl ChatWidget {
             mcp_startup_ignore_updates_until_next_start: false,
             mcp_startup_allow_terminal_only_next_round: false,
             mcp_startup_pending_next_round: HashMap::new(),
+            mcp_startup_pending_next_round_saw_starting: false,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
