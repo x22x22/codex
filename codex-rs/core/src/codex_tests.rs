@@ -738,7 +738,9 @@ fn non_app_mcp_tools_remain_visible_without_search_selection() {
         ),
         (
             "mcp__rmcp__echo".to_string(),
-            make_mcp_tool("rmcp", "echo", None, None),
+            make_mcp_tool(
+                "rmcp", "echo", /*connector_id*/ None, /*connector_name*/ None,
+            ),
         ),
     ]);
 
@@ -786,7 +788,9 @@ fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
         ),
         (
             "mcp__rmcp__echo".to_string(),
-            make_mcp_tool("rmcp", "echo", None, None),
+            make_mcp_tool(
+                "rmcp", "echo", /*connector_id*/ None, /*connector_name*/ None,
+            ),
         ),
     ]);
 
@@ -836,7 +840,9 @@ fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
         ),
         (
             "mcp__rmcp__echo".to_string(),
-            make_mcp_tool("rmcp", "echo", None, None),
+            make_mcp_tool(
+                "rmcp", "echo", /*connector_id*/ None, /*connector_name*/ None,
+            ),
         ),
     ]);
 
@@ -1180,7 +1186,13 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         codex_config::Constrained::allow_any(AskForApproval::UnlessTrusted);
     let forked = initial
         .thread_manager
-        .fork_thread(usize::MAX, fork_config, rollout_path, false, None)
+        .fork_thread(
+            usize::MAX,
+            fork_config,
+            rollout_path,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
         .await?;
 
     let collaboration_mode = CollaborationMode {
@@ -1352,7 +1364,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
         state.set_reference_context_item(Some(tc.to_turn_context_item()));
     }
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
 
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 1);
@@ -1399,7 +1411,7 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
         .collect();
     sess.persist_rollout_items(&rollout_items).await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 99).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 99).await;
 
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 99);
@@ -1416,7 +1428,7 @@ async fn thread_rollback_fails_without_persisted_rollout_path() {
     sess.record_into_history(&initial_context, tc.as_ref())
         .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
 
     let error_event = wait_for_thread_rollback_failed(&rx).await;
     assert_eq!(
@@ -1510,7 +1522,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
     }))
     .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 1);
 
@@ -1618,7 +1630,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
     )
     .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 1);
 
@@ -1696,10 +1708,10 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
     ])
     .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
     let first_rollback = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(first_rollback.num_turns, 1);
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
     let second_rollback = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(second_rollback.num_turns, 1);
 
@@ -1734,7 +1746,7 @@ async fn thread_rollback_fails_when_turn_in_progress() {
         .await;
 
     *sess.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
 
     let error_event = wait_for_thread_rollback_failed(&rx).await;
     assert_eq!(
@@ -1754,7 +1766,7 @@ async fn thread_rollback_fails_when_num_turns_is_zero() {
     sess.record_into_history(&initial_context, tc.as_ref())
         .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 0).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 0).await;
 
     let error_event = wait_for_thread_rollback_failed(&rx).await;
     assert_eq!(error_event.message, "num_turns must be >= 1");
@@ -3663,7 +3675,8 @@ async fn record_model_warning_appends_user_message() {
 #[tokio::test]
 async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_tasks() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    sess.set_previous_turn_settings(None).await;
+    sess.set_previous_turn_settings(/*previous_turn_settings*/ None)
+        .await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
@@ -3716,7 +3729,10 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
     ));
     let layers = config
         .config_layer_stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
         .into_iter()
         .cloned()
         .collect();
@@ -3967,7 +3983,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone(), None)
+    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
         .await
         .expect("image generation item should succeed");
 
@@ -4024,7 +4040,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone(), None)
+    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
         .await
         .expect("image generation item should still complete");
 
@@ -4116,10 +4132,13 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         .await;
     {
         let mut state = session.state.lock().await;
-        state.set_reference_context_item(None);
+        state.set_reference_context_item(/*item*/ None);
     }
     session
-        .replace_history(vec![compacted_summary.clone()], None)
+        .replace_history(
+            vec![compacted_summary.clone()],
+            /*reference_context_item*/ None,
+        )
         .await;
 
     session
@@ -4280,7 +4299,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         .await;
     {
         let mut state = session.state.lock().await;
-        state.set_reference_context_item(None);
+        state.set_reference_context_item(/*item*/ None);
     }
 
     session
@@ -4319,7 +4338,7 @@ async fn run_user_shell_command_does_not_set_reference_context_item() {
     let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
     {
         let mut state = session.state.lock().await;
-        state.set_reference_context_item(None);
+        state.set_reference_context_item(/*item*/ None);
     }
 
     handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
@@ -4472,7 +4491,8 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     .await
     .expect("inject pending input into active turn");
 
-    sess.on_task_finished(Arc::clone(&tc), None).await;
+    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+        .await;
 
     let history = sess.clone_history().await;
     let expected = ResponseItem::Message {
@@ -4564,7 +4584,7 @@ async fn steer_input_requires_active_turn() {
     }];
 
     let err = sess
-        .steer_input(input, None)
+        .steer_input(input, /*expected_turn_id*/ None)
         .await
         .expect_err("steering without active turn should fail");
 

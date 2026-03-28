@@ -145,7 +145,7 @@ async fn get_model_info_tracks_fallback_usage() {
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
         auth_manager,
-        None,
+        /*model_catalog*/ None,
         HashMap::new(),
         CollaborationModesConfig::default(),
     );
@@ -243,7 +243,7 @@ async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
         auth_manager,
-        None,
+        /*model_catalog*/ None,
         HashMap::new(),
         CollaborationModesConfig::default(),
     );
