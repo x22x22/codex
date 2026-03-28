@@ -67,13 +67,25 @@ bazel-lock-check:
     ./scripts/check-module-bazel-lock.sh
 
 bazel-test:
-    bazel test //... --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
 
 bazel-clippy:
     bazel build --config=clippy -- //codex-rs/... -//codex-rs/v8-poc:all
 
+[no-cd]
+bazel-argument-comment-lint:
+    bazel test \
+      --build_tests_only \
+      --test_tag_filters=argument-comment-lint \
+      --test_env=CARGO_HOME \
+      --test_env=HOME \
+      --test_env=PATH \
+      --test_env=RUSTUP_HOME \
+      --test_env=USERPROFILE \
+      //codex-rs/...
+
 bazel-remote-test:
-    bazel test //... --config=remote --platforms=//:rbe --keep_going
+    bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
 
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
