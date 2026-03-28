@@ -1,19 +1,32 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
 
-filegroup(
-    name = "runtime-files",
+exports_files(["lint_aspect.bzl"])
+
+rust_library(
+    name = "argument-comment-lint-lib",
+    crate_name = "argument_comment_lint",
+    crate_features = ["bazel_native"],
+    crate_root = "src/lib.rs",
     srcs = [
-        "argument-comment-lint",
-        "run-prebuilt-linter.py",
-        "wrapper_common.py",
+        "src/comment_parser.rs",
+        "src/lib.rs",
     ],
+    edition = "2024",
+    deps = ["@argument_comment_lint_crates//:clippy_utils"],
+    tags = ["manual"],
     visibility = ["//visibility:public"],
 )
 
 rust_binary(
-    name = "argument-comment-lint-bazel-runner",
-    crate_name = "argument_comment_lint_bazel_runner",
-    crate_root = "bazel_runner.rs",
-    srcs = ["bazel_runner.rs"],
+    name = "argument-comment-lint-driver",
+    crate_name = "argument_comment_lint_driver",
+    crate_root = "driver.rs",
+    srcs = ["driver.rs"],
+    edition = "2024",
+    deps = [
+        ":argument-comment-lint-lib",
+        "@zlib//:z",
+    ],
+    tags = ["manual"],
     visibility = ["//visibility:public"],
 )
