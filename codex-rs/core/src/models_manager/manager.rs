@@ -634,7 +634,7 @@ impl ModelsManager {
         Self::new_with_provider(
             codex_home,
             auth_manager,
-            None,
+            /*model_catalog*/ None,
             HashMap::new(),
             CollaborationModesConfig::default(),
             provider,
