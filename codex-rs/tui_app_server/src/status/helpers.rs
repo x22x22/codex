@@ -6,6 +6,7 @@ use chrono::Local;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
 use codex_exec_server::LOCAL_FS;
+use codex_protocol::account::PlanType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use std::path::Path;
@@ -90,6 +91,16 @@ pub(crate) fn compose_account_display(
     account_display.cloned()
 }
 
+pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
+    if plan_type.is_team_like() {
+        "Business".to_string()
+    } else if plan_type.is_business_like() {
+        "Enterprise".to_string()
+    } else {
+        title_case(format!("{plan_type:?}").as_str())
+    }
+}
+
 pub(crate) fn format_tokens_compact(value: i64) -> String {
     let value = value.max(0);
     if value == 0 {
@@ -160,5 +171,44 @@ pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<
         time
     } else {
         format!("{time} on {}", dt.format("%-d %b"))
+    }
+}
+
+fn title_case(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    let rest = chars.as_str().to_ascii_lowercase();
+    first.to_uppercase().collect::<String>() + &rest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn plan_type_display_name_remaps_display_labels() {
+        let cases = [
+            (PlanType::Free, "Free"),
+            (PlanType::Go, "Go"),
+            (PlanType::Plus, "Plus"),
+            (PlanType::Pro, "Pro"),
+            (PlanType::Team, "Business"),
+            (PlanType::SelfServeBusinessUsageBased, "Business"),
+            (PlanType::Business, "Enterprise"),
+            (PlanType::EnterpriseCbpUsageBased, "Enterprise"),
+            (PlanType::Enterprise, "Enterprise"),
+            (PlanType::Edu, "Edu"),
+            (PlanType::Unknown, "Unknown"),
+        ];
+
+        for (plan_type, expected) in cases {
+            assert_eq!(plan_type_display_name(plan_type), expected);
+        }
     }
 }

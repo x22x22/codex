@@ -14,7 +14,7 @@ codex *args:
 exec *args:
     cargo run --bin codex -- exec "$@"
 
-# Start codex-exec-server, enable the app-server TUI, and run codex-tui.
+# Start codex-exec-server and run codex-tui.
 [no-cd]
 tui-with-exec-server *args:
     ./scripts/run_tui_with_exec_server.sh "$@"
@@ -68,6 +68,9 @@ bazel-lock-check:
 
 bazel-test:
     bazel test //... --keep_going
+
+bazel-clippy:
+    bazel build --config=clippy -- //codex-rs/... -//codex-rs/v8-poc:all
 
 bazel-remote-test:
     bazel test //... --config=remote --platforms=//:rbe --keep_going
