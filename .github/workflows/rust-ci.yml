@@ -93,9 +93,15 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
-        with:
-          toolchain: nightly-2025-09-18
-          components: llvm-tools-preview, rustc-dev, rust-src
+      - name: Install nightly argument-comment-lint toolchain
+        shell: bash
+        run: |
+          rustup toolchain install nightly-2025-09-18 \
+            --profile minimal \
+            --component llvm-tools-preview \
+            --component rustc-dev \
+            --component rust-src \
+            --no-self-update
       - name: Cache cargo-dylint tooling
         id: cargo_dylint_cache
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
@@ -138,6 +144,10 @@ jobs:
               labels: codex-windows-x64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: ${{ runner.os }}
+          install-test-prereqs: true
       - name: Install Linux sandbox build dependencies
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -145,24 +155,27 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
-        with:
-          toolchain: nightly-2025-09-18
-          components: llvm-tools-preview, rustc-dev, rust-src
-      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
-      - name: Run argument comment lint on codex-rs
-        if: ${{ runner.os == 'macOS' }}
+      - name: Install nightly argument-comment-lint toolchain
         shell: bash
-        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py
-      # Linux still uses the default-targets-only form for now, but PRs run the
-      # released linter on all three platforms so wrapper regressions surface pre-merge.
-      - name: Run argument comment lint on codex-rs (default targets only)
-        if: ${{ runner.os == 'Linux' }}
+        run: |
+          rustup toolchain install nightly-2025-09-18 \
+            --profile minimal \
+            --component llvm-tools-preview \
+            --component rustc-dev \
+            --component rust-src \
+            --no-self-update
+      - name: Run argument comment lint on codex-rs via Bazel
         shell: bash
-        run: python3 ./tools/argument-comment-lint/run-prebuilt-linter.py -- --lib --bins
-      - name: Run argument comment lint on codex-rs
-        if: ${{ runner.os == 'Windows' }}
-        shell: bash
-        run: python ./tools/argument-comment-lint/run-prebuilt-linter.py
+        run: |
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-test-logs \
+            -- \
+            test \
+            --build_tests_only \
+            --test_tag_filters=argument-comment-lint \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            -- \
+            //codex-rs/...
 
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
