@@ -74,16 +74,7 @@ bazel-clippy:
 
 [no-cd]
 bazel-argument-comment-lint:
-    bazel test \
-      --build_tests_only \
-      --local_test_jobs=4 \
-      --test_tag_filters=argument-comment-lint \
-      --test_env=CARGO_HOME \
-      --test_env=HOME \
-      --test_env=PATH \
-      --test_env=RUSTUP_HOME \
-      --test_env=USERPROFILE \
-      //codex-rs/...
+    bazel build --config=argument-comment-lint -- //codex-rs/...
 
 bazel-remote-test:
     bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
@@ -110,7 +101,11 @@ write-hooks-schema:
 # Run the argument-comment Dylint checks across codex-rs.
 [no-cd]
 argument-comment-lint *args:
-    ./tools/argument-comment-lint/run-prebuilt-linter.py "$@"
+    if [ "$#" -eq 0 ]; then \
+      bazel build --config=argument-comment-lint -- //codex-rs/...; \
+    else \
+      ./tools/argument-comment-lint/run-prebuilt-linter.py "$@"; \
+    fi
 
 [no-cd]
 argument-comment-lint-from-source *args:
