@@ -1913,7 +1913,7 @@ async fn turn_started_uses_runtime_context_window_before_first_token_count() {
     .await
     .expect("timed out waiting for status output");
     let context_line = history_cell
-        .display_lines(80)
+        .display_lines(/*width*/ 80)
         .iter()
         .map(|line| {
             line.spans

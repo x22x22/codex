@@ -177,9 +177,10 @@ async fn zero_byte_limit_disables_discovery() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
 
-    let discovery = discover_project_doc_paths(&make_config(&tmp, 0, None).await)
-        .await
-        .expect("discover paths");
+    let discovery =
+        discover_project_doc_paths(&make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await)
+            .await
+            .expect("discover paths");
     assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
@@ -420,7 +421,7 @@ async fn agents_md_directory_is_ignored() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::create_dir(tmp.path().join("AGENTS.md")).unwrap();
 
-    let cfg = make_config(&tmp, 4096, None).await;
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
 
     let res = get_user_instructions(&cfg).await;
     assert_eq!(res, None);
@@ -437,7 +438,7 @@ async fn override_directory_falls_back_to_agents_md_file() {
     fs::create_dir(tmp.path().join(LOCAL_PROJECT_DOC_FILENAME)).unwrap();
     fs::write(tmp.path().join(DEFAULT_PROJECT_DOC_FILENAME), "primary").unwrap();
 
-    let cfg = make_config(&tmp, 4096, None).await;
+    let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
 
     let res = get_user_instructions(&cfg)
         .await
