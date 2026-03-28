@@ -96,6 +96,29 @@ nightly_rust.toolchain(
     dev_components = True,
     edition = "2024",
 )
+# Keep Windows exec tools on MSVC so Bazel helper binaries link correctly, but
+# lint crate targets as `windows-gnullvm` to preserve the repo's actual cfgs.
+nightly_rust.repository_set(
+    name = "rust_windows_x86_64",
+    edition = "2024",
+    exec_triple = "x86_64-pc-windows-msvc",
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
+    ],
+    target_triple = "x86_64-pc-windows-msvc",
+    versions = ["nightly/2025-09-18"],
+)
+nightly_rust.repository_set(
+    name = "rust_windows_x86_64",
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
+    ],
+    target_triple = "x86_64-pc-windows-gnullvm",
+)
 use_repo(nightly_rust, "rust_toolchains")
 
 toolchains = use_extension("@rules_rs//rs/experimental/toolchains:module_extension.bzl", "toolchains")
