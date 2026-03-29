@@ -21,6 +21,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -69,6 +70,51 @@ where
     serde_json::to_value(value).unwrap_or_else(|err| {
         JsonValue::String(format!("failed to serialize {tool_name} result: {err}"))
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpawnAgentModelCandidate {
+    pub(crate) model: Option<String>,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct SpawnAgentModelFallbackCandidate {
+    pub(crate) model: String,
+    #[serde(default)]
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
+}
+
+pub(crate) fn collect_spawn_agent_model_candidates(
+    model_fallback_list: Option<&Vec<SpawnAgentModelFallbackCandidate>>,
+    requested_model: Option<&str>,
+    requested_reasoning_effort: Option<ReasoningEffort>,
+) -> Vec<SpawnAgentModelCandidate> {
+    if let Some(model_fallback_list) = model_fallback_list {
+        return model_fallback_list
+            .iter()
+            .map(|candidate| SpawnAgentModelCandidate {
+                model: Some(candidate.model.clone()),
+                reasoning_effort: candidate.reasoning_effort,
+            })
+            .collect();
+    }
+
+    let mut candidates = Vec::new();
+    if requested_model.is_some() || requested_reasoning_effort.is_some() {
+        candidates.push(SpawnAgentModelCandidate {
+            model: requested_model.map(ToString::to_string),
+            reasoning_effort: requested_reasoning_effort,
+        });
+    }
+    candidates
+}
+
+pub(crate) fn spawn_should_retry_on_quota_exhaustion(error: &CodexErr) -> bool {
+    matches!(
+        error,
+        CodexErr::QuotaExceeded | CodexErr::UsageLimitReached(_)
+    )
 }
 
 pub(crate) fn build_wait_agent_statuses(
@@ -362,4 +408,109 @@ fn validate_spawn_agent_reasoning_effort(
     Err(FunctionCallError::RespondToModel(format!(
         "Reasoning effort `{requested_reasoning_effort}` is not supported for model `{model}`. Supported reasoning efforts: {supported}"
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::UsageLimitReachedError;
+    use crate::protocol::AgentStatus;
+
+    #[test]
+    fn collect_spawn_agent_model_candidates_prefers_fallback_list() {
+        let candidates = collect_spawn_agent_model_candidates(
+            Some(&vec![
+                SpawnAgentModelFallbackCandidate {
+                    model: "fallback-a".to_string(),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                },
+                SpawnAgentModelFallbackCandidate {
+                    model: "fallback-b".to_string(),
+                    reasoning_effort: Some(ReasoningEffort::Minimal),
+                },
+            ]),
+            Some("legacy-model"),
+            Some(ReasoningEffort::Low),
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                SpawnAgentModelCandidate {
+                    model: Some("fallback-a".to_string()),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                },
+                SpawnAgentModelCandidate {
+                    model: Some("fallback-b".to_string()),
+                    reasoning_effort: Some(ReasoningEffort::Minimal),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn collect_spawn_agent_model_candidates_falls_back_to_legacy_args() {
+        let candidates = collect_spawn_agent_model_candidates(
+            None,
+            Some("legacy-model"),
+            Some(ReasoningEffort::Minimal),
+        );
+        assert_eq!(
+            candidates,
+            vec![SpawnAgentModelCandidate {
+                model: Some("legacy-model".to_string()),
+                reasoning_effort: Some(ReasoningEffort::Minimal),
+            }]
+        );
+    }
+
+    #[test]
+    fn collect_spawn_agent_model_candidates_empty_when_no_model_is_set() {
+        let candidates = collect_spawn_agent_model_candidates(None, None, None);
+        assert_eq!(candidates, Vec::new());
+    }
+
+    #[test]
+    fn spawn_should_retry_on_quota_exhaustion_checks_expected_error_variants() {
+        assert!(spawn_should_retry_on_quota_exhaustion(
+            &CodexErr::QuotaExceeded
+        ));
+        assert!(spawn_should_retry_on_quota_exhaustion(
+            &CodexErr::UsageLimitReached(UsageLimitReachedError {
+                plan_type: None,
+                resets_at: None,
+                rate_limits: None,
+                promo_message: None,
+            })
+        ));
+        assert!(!spawn_should_retry_on_quota_exhaustion(
+            &CodexErr::UnsupportedOperation("thread manager dropped".to_string())
+        ));
+    }
+
+    #[test]
+    fn collab_spawn_error_handles_thread_manager_drop() {
+        assert_eq!(
+            collab_spawn_error(CodexErr::UnsupportedOperation(
+                "thread manager dropped".to_string()
+            )),
+            FunctionCallError::RespondToModel("collab manager unavailable".to_string())
+        );
+    }
+
+    #[test]
+    fn build_wait_agent_statuses_includes_extras_in_sorted_order() {
+        let receiver_agents = vec![];
+        let mut statuses = HashMap::new();
+        let thread_a = ThreadId::new();
+        let thread_b = ThreadId::new();
+        statuses.insert(thread_b, AgentStatus::Completed(Some("done".to_string())));
+        statuses.insert(thread_a, AgentStatus::Completed(Some("done".to_string())));
+
+        let entries = build_wait_agent_statuses(&statuses, &receiver_agents);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].thread_id, thread_a);
+        assert_eq!(entries[1].thread_id, thread_b);
+    }
 }
