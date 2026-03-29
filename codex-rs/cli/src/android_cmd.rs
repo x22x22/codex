@@ -26,7 +26,9 @@ use uuid::Uuid;
 
 const AGENT_BRIDGE_REMOTE_PORT: u16 = 48_765;
 const AGENT_BRIDGE_BOOTSTRAP_COMPONENT: &str =
-    "com.openai.codex.agent/.DesktopBridgeBootstrapActivity";
+    "com.openai.codex.agent/.DesktopBridgeBootstrapReceiver";
+const AGENT_BRIDGE_BOOTSTRAP_ACTION: &str =
+    "com.openai.codex.agent.action.BOOTSTRAP_DESKTOP_BRIDGE";
 const AGENT_BRIDGE_AUTH_EXTRA: &str = "com.openai.codex.agent.extra.DESKTOP_BRIDGE_AUTH_TOKEN";
 const CONTROL_PATH: &str = "/control";
 const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(125);
@@ -452,8 +454,9 @@ async fn bootstrap_bridge(serial: Option<&str>, auth_token: &str) -> anyhow::Res
         &[
             "shell".to_string(),
             "am".to_string(),
-            "start".to_string(),
-            "-W".to_string(),
+            "broadcast".to_string(),
+            "-a".to_string(),
+            AGENT_BRIDGE_BOOTSTRAP_ACTION.to_string(),
             "-n".to_string(),
             AGENT_BRIDGE_BOOTSTRAP_COMPONENT.to_string(),
             "--es".to_string(),

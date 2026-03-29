@@ -77,6 +77,20 @@ stub SDK docs and the local refactor doc:
     Agent process.
   - the first prompt can then be typed in the attached desktop TUI instead of
     being supplied to `sessions start`.
+- Attached runtime completion semantics are intentionally non-terminal:
+  - attached Genie turns remain live after `turn/completed` so the same desktop
+    TUI can send follow-up prompts.
+  - attached direct AGENT planner sessions stay live after planning completes.
+  - child Genie sessions spawned by an attached planner are held open for
+    inspection after completion and remain attachable until the planner attach
+    detaches.
+  - once the planner detaches, those held child sessions are allowed to settle
+    to their terminal framework state and the parent roll-up can complete.
+- Parent-session cancellation is tree-scoped for direct AGENT sessions:
+  cancelling the parent from the desktop bridge, framework tool bridge, or the
+  detail UI must cancel the parent and all child Genie sessions through the
+  framework `cancelSession(...)` path, even when some of those sessions are
+  already terminal.
 
 ## External reference implementations
 

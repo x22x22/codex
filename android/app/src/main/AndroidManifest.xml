@@ -64,12 +64,12 @@
             android:exported="false"
             android:launchMode="singleTop" />
 
-        <activity
-            android:name=".DesktopBridgeBootstrapActivity"
-            android:exported="true"
-            android:excludeFromRecents="true"
-            android:launchMode="singleTop"
-            android:noHistory="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <receiver
+            android:name=".DesktopBridgeBootstrapReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.openai.codex.agent.action.BOOTSTRAP_DESKTOP_BRIDGE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

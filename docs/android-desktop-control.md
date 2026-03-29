@@ -42,10 +42,25 @@ available in the device UI:
 - `codex android sessions attach-target`
 - `codex android sessions attach`
 
-`attach` targets the live **Genie** session runtime in this first pass. Agent
-parent sessions remain listable and readable, but the live attach path is
-implemented for active Genie child sessions because that is the long-lived
-Codex runtime that performs target-app work.
+`attach` now works for both:
+
+- live **Genie** child runtimes
+- live **Agent planner** runtimes for direct AGENT parent sessions
+
+Attach lifecycle semantics:
+
+- When an attached turn completes, the attached runtime stays alive so the same
+  desktop TUI can send follow-up prompts.
+- When an attached planner session finishes planning and spawns child Genie
+  sessions, the planner stays attached instead of closing.
+- Child Genie sessions spawned by an attached planner are held open for
+  inspection after their turn completes; they remain `attachable` until the
+  planner attach detaches.
+- Detaching the planner releases that hold, allowing completed child sessions to
+  finalize and the parent roll-up to settle normally.
+- Cancelling a direct AGENT parent session is tree-scoped: it cancels the
+  parent and all child Genie sessions from both the desktop bridge and the
+  on-device UI.
 
 ## CLI shape
 
@@ -89,8 +104,9 @@ Draft-session behavior:
 
 ## Android-side design
 
-- Add a headless exported bootstrap activity that starts the bridge server and
-  seeds the bearer token supplied by the desktop CLI.
+- Add an exported bootstrap broadcast receiver that starts the bridge server and
+  seeds the bearer token supplied by the desktop CLI without surfacing the
+  Agent UI task.
 - Run the bridge on device loopback only.
 - Reuse `AgentSessionController` / `AgentSessionLauncher` for create, list, and
   management actions instead of duplicating orchestration logic.
@@ -99,6 +115,9 @@ Draft-session behavior:
 - Extend the existing framework session bridge between Agent and Genie so it can
   relay app-server JSON-RPC frames for live desktop attach in addition to the
   existing fixed-form metadata calls.
+- Keep planner-spawned child Genie sessions under an inspection hold while the
+  planner desktop attach is active, and release that hold when the planner
+  detaches.
 
 ## Desktop-side design
 
