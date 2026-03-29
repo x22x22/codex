@@ -2041,7 +2041,7 @@ mod tests {
 
         pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
 
-        let area = Rect::new(0, 0, 40, pane.desired_height(40).max(2));
+        let area = Rect::new(0, 0, 40, pane.desired_height(/*width*/ 40).max(2));
         assert!(pane.cursor_pos(area).is_some());
         assert_eq!(lower_view_handle_calls.get(), 0);
     }
