@@ -2793,6 +2793,15 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// Record one MCP startup update, promoting it into either the active startup
+    /// round or a buffered "next" round.
+    ///
+    /// This path has to deal with lossy app-server delivery. After
+    /// `finish_mcp_startup()` or `finish_mcp_startup_after_lag()`, we briefly
+    /// ignore incoming updates so stale events from the just-finished round do not
+    /// reopen startup. While that guard is active we buffer updates for a possible
+    /// next round, and only reactivate once the buffered set is coherent enough to
+    /// treat as a fresh startup round.
     fn update_mcp_startup_status(
         &mut self,
         server: String,
@@ -2801,6 +2810,11 @@ impl ChatWidget {
     ) {
         let mut activated_pending_round = false;
         let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
+            // Ignore-mode buffers the next plausible round so stale post-finish
+            // updates cannot immediately reopen startup. A fresh `Starting`
+            // update resets the buffer only if we have not already seen a
+            // pending-round `Starting`; this preserves valid interleavings like
+            // `alpha: Starting -> alpha: Ready -> beta: Starting`.
             if matches!(status, McpStartupStatus::Starting)
                 && !self.mcp_startup_pending_next_round_saw_starting
             {
@@ -2826,12 +2840,17 @@ impl ChatWidget {
             {
                 return;
             }
+
+            // The buffered map now looks like a complete next round, so promote it
+            // to the active round and resume normal completion tracking.
             self.mcp_startup_ignore_updates_until_next_start = false;
             self.mcp_startup_allow_terminal_only_next_round = false;
             self.mcp_startup_pending_next_round_saw_starting = false;
             activated_pending_round = true;
             std::mem::take(&mut self.mcp_startup_pending_next_round)
         } else {
+            // Normal path: fold the update into the active round and surface
+            // per-server failures immediately.
             let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
             if let McpStartupStatus::Failed { error } = &status {
                 self.on_warning(error);
@@ -2840,6 +2859,7 @@ impl ChatWidget {
             startup_status
         };
         if activated_pending_round {
+            // A promoted buffered round may already contain terminal failures.
             for state in startup_status.values() {
                 if let McpStartupStatus::Failed { error } = state {
                     self.on_warning(error);
@@ -2848,6 +2868,10 @@ impl ChatWidget {
         }
         self.mcp_startup_status = Some(startup_status);
         self.update_task_running_state();
+
+        // App-server-backed startup completes when every expected server has
+        // reported a non-Starting status. Lag handling can force an earlier
+        // settle via `finish_mcp_startup_after_lag()`.
         if complete_when_settled
             && let Some(current) = &self.mcp_startup_status
             && let Some(expected_servers) = &self.mcp_startup_expected_servers
@@ -2875,6 +2899,8 @@ impl ChatWidget {
             return;
         }
         if let Some(current) = &self.mcp_startup_status {
+            // Otherwise keep the status header focused on the remaining
+            // in-progress servers for the active round.
             let total = current.len();
             let mut starting: Vec<_> = current
                 .iter()
