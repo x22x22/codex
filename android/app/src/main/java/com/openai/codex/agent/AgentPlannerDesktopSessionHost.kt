@@ -104,6 +104,7 @@ internal class AgentPlannerDesktopSessionHost(
         if (!closing.compareAndSet(false, true)) {
             return
         }
+        DesktopInspectionRegistry.markPlannerDetached(sessionId)
         val proxy = synchronized(proxyLock) {
             currentDesktopProxy.also {
                 currentDesktopProxy = null
@@ -147,6 +148,7 @@ internal class AgentPlannerDesktopSessionHost(
         runCatching {
             replacement?.onClosed("Replaced by a newer desktop attach")
         }
+        DesktopInspectionRegistry.markPlannerAttached(sessionId)
         return connectionId
     }
 
@@ -174,6 +176,7 @@ internal class AgentPlannerDesktopSessionHost(
         if (remoteProxyState?.connectionId == connectionId) {
             remoteProxyState = null
         }
+        DesktopInspectionRegistry.markPlannerDetached(sessionId)
         runCatching {
             proxy.onClosed(reason)
         }
@@ -381,12 +384,22 @@ internal class AgentPlannerDesktopSessionHost(
                         "Failed to start planned child session: ${err.message ?: err::class.java.simpleName}",
                     )
                     publishTrace("Planner child start failed: ${err.message ?: err::class.java.simpleName}")
-                }.onSuccess {
-                    val connectionId = currentDesktopProxy?.connectionId
-                    if (connectionId != null) {
-                        closeDesktopProxy(connectionId, "Planner completed; attach a child session")
+                }.onSuccess { result ->
+                    val heldForInspection = currentDesktopProxy != null &&
+                        DesktopInspectionRegistry.holdChildrenForAttachedPlanner(
+                            parentSessionId = sessionId,
+                            childSessionIds = result.childSessionIds,
+                        )
+                    if (heldForInspection) {
+                        publishTrace(
+                            "Planner completed; child sessions remain attachable for inspection until this planner attach detaches.",
+                        )
+                    } else {
+                        publishTrace(
+                            "Planner completed; started child sessions ${result.childSessionIds.joinToString(", ")}.",
+                        )
                     }
-                    return true
+                    return false
                 }
                 false
             }

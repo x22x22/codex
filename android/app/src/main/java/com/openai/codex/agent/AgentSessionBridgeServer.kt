@@ -76,6 +76,7 @@ object AgentSessionBridgeServer {
             private const val METHOD_GET_RUNTIME_STATUS = "getRuntimeStatus"
             private const val METHOD_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
             private const val METHOD_READ_SESSION_EXECUTION_SETTINGS = "readSessionExecutionSettings"
+            private const val METHOD_READ_DESKTOP_INSPECTION_HOLD = "readDesktopInspectionHold"
             private const val METHOD_REGISTER_APP_SERVER_THREAD = "registerAppServerThread"
             private const val WRITE_CHUNK_BYTES = 4096
             private const val KIND_REQUEST = "request"
@@ -269,6 +270,13 @@ object AgentSessionBridgeServer {
                             .put("requestId", requestId)
                             .put("ok", true)
                             .put("executionSettings", executionSettingsStore.toJson(sessionId))
+                    }
+                    METHOD_READ_DESKTOP_INSPECTION_HOLD -> {
+                        JSONObject()
+                            .put("kind", KIND_RESPONSE)
+                            .put("requestId", requestId)
+                            .put("ok", true)
+                            .put("inspectionHold", DesktopInspectionRegistry.isSessionHeldForInspection(sessionId))
                     }
                     METHOD_REGISTER_APP_SERVER_THREAD -> {
                         currentThreadId = request.optString("threadId").trim().ifEmpty { null }

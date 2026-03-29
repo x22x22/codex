@@ -31,6 +31,7 @@ class AgentBridgeClient(
         private const val OP_GET_RUNTIME_STATUS = "getRuntimeStatus"
         private const val OP_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
         private const val OP_READ_SESSION_EXECUTION_SETTINGS = "readSessionExecutionSettings"
+        private const val OP_READ_DESKTOP_INSPECTION_HOLD = "readDesktopInspectionHold"
         private const val OP_REGISTER_APP_SERVER_THREAD = "registerAppServerThread"
         private const val WRITE_CHUNK_BYTES = 4096
         private const val RESPONSES_METHOD = "POST"
@@ -114,6 +115,12 @@ class AgentBridgeClient(
                 .put("method", OP_REGISTER_APP_SERVER_THREAD)
                 .put("threadId", threadId),
         )
+    }
+
+    fun readDesktopInspectionHold(): Boolean {
+        return request(
+            JSONObject().put("method", OP_READ_DESKTOP_INSPECTION_HOLD),
+        ).optBoolean("inspectionHold")
     }
 
     fun setAppServerProxyHandler(handler: AppServerProxyHandler?) {

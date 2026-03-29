@@ -48,6 +48,11 @@ class CodexAppServerHost(
         val remoteRequestId: Any,
     )
 
+    private data class PendingTerminalTransition(
+        val terminalState: Int,
+        val errorMessage: String? = null,
+    )
+
     private val requestIdSequence = AtomicInteger(1)
     private val pendingResponses = ConcurrentHashMap<String, LinkedBlockingQueue<JSONObject>>()
     private val remotePendingRequests = ConcurrentHashMap<String, RemotePendingRequest>()
@@ -64,6 +69,7 @@ class CodexAppServerHost(
     private var stderrThread: Thread? = null
     private var finalAgentMessage: String? = null
     private var resultPublished = false
+    private var pendingTerminalTransition: PendingTerminalTransition? = null
     @Volatile
     private var activeThreadId: String? = null
     @Volatile
@@ -306,6 +312,7 @@ class CodexAppServerHost(
         while (!control.cancelled) {
             val message = inboundMessages.poll(POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             if (message == null) {
+                maybeApplyPendingTerminalTransition()?.let { return }
                 if (!process.isAlive) {
                     throw IOException("codex app-server exited with code ${process.exitValue()}")
                 }
@@ -410,6 +417,7 @@ class CodexAppServerHost(
         return when (method) {
             "turn/started" -> {
                 finalAgentMessage = null
+                pendingTerminalTransition = null
                 streamedAgentMessages.clear()
                 callback.publishTrace(request.sessionId, "codex turn started for ${request.targetPackage}.")
                 false
@@ -540,41 +548,86 @@ class CodexAppServerHost(
                 val resultText = finalAgentMessage?.takeIf(String::isNotBlank)
                     ?: "Genie completed without a final assistant message."
                 publishResultOnce(resultText)
-                if (shouldKeepSessionOpenAfterTurn()) {
-                    callback.publishTrace(
-                        request.sessionId,
-                        "Turn completed; desktop attach remains active for follow-up control.",
-                    )
-                    return false
-                }
-                callback.updateState(request.sessionId, AgentSessionInfo.STATE_COMPLETED)
-                return true
+                return deferOrFinishTurn(
+                    pendingTransition = PendingTerminalTransition(
+                        terminalState = AgentSessionInfo.STATE_COMPLETED,
+                    ),
+                    keepOpenTrace = "Turn completed; desktop attach remains active for follow-up control.",
+                )
             }
             "interrupted" -> {
-                if (shouldKeepSessionOpenAfterTurn()) {
-                    callback.publishTrace(
-                        request.sessionId,
-                        "Turn interrupted; desktop attach remains active for follow-up control.",
-                    )
-                    return false
-                }
-                callback.publishError(request.sessionId, "Genie turn interrupted")
-                callback.updateState(request.sessionId, AgentSessionInfo.STATE_CANCELLED)
-                return true
+                return deferOrFinishTurn(
+                    pendingTransition = PendingTerminalTransition(
+                        terminalState = AgentSessionInfo.STATE_CANCELLED,
+                        errorMessage = "Genie turn interrupted",
+                    ),
+                    keepOpenTrace = "Turn interrupted; desktop attach remains active for follow-up control.",
+                )
             }
             else -> {
                 val errorDetail = turn.opt("error")?.toString()
-                    ?: "Genie turn failed with status ${turn.optString("status", "unknown")}" 
-                callback.publishError(request.sessionId, errorDetail)
+                    ?: "Genie turn failed with status ${turn.optString("status", "unknown")}"
+                return deferOrFinishTurn(
+                    pendingTransition = PendingTerminalTransition(
+                        terminalState = AgentSessionInfo.STATE_FAILED,
+                        errorMessage = errorDetail,
+                    ),
+                    keepOpenTrace = "Turn failed; desktop attach remains active for inspection and follow-up control.",
+                )
+            }
+        }
+    }
+
+    private fun deferOrFinishTurn(
+        pendingTransition: PendingTerminalTransition,
+        keepOpenTrace: String,
+    ): Boolean {
+        if (shouldKeepSessionOpenAfterTurn()) {
+            pendingTerminalTransition = pendingTransition
+            callback.publishTrace(request.sessionId, keepOpenTrace)
+            return false
+        }
+        applyPendingTerminalTransition(pendingTransition)
+        return true
+    }
+
+    private fun maybeApplyPendingTerminalTransition(): Unit? {
+        val pendingTransition = pendingTerminalTransition ?: return null
+        if (shouldKeepSessionOpenAfterTurn()) {
+            return null
+        }
+        applyPendingTerminalTransition(pendingTransition)
+        return Unit
+    }
+
+    private fun applyPendingTerminalTransition(pendingTransition: PendingTerminalTransition) {
+        pendingTerminalTransition = null
+        when (pendingTransition.terminalState) {
+            AgentSessionInfo.STATE_COMPLETED -> {
+                callback.updateState(request.sessionId, AgentSessionInfo.STATE_COMPLETED)
+            }
+            AgentSessionInfo.STATE_CANCELLED -> {
+                pendingTransition.errorMessage?.let { callback.publishError(request.sessionId, it) }
+                callback.updateState(request.sessionId, AgentSessionInfo.STATE_CANCELLED)
+            }
+            AgentSessionInfo.STATE_FAILED -> {
+                pendingTransition.errorMessage?.let { callback.publishError(request.sessionId, it) }
                 callback.updateState(request.sessionId, AgentSessionInfo.STATE_FAILED)
-                return true
             }
         }
     }
 
     private fun shouldKeepSessionOpenAfterTurn(): Boolean {
-        val proxyState = remoteProxyState ?: return false
-        return proxyState.connectionId == bridgeClient.currentRemoteConnectionId()
+        val proxyState = remoteProxyState
+        if (proxyState != null && proxyState.connectionId == bridgeClient.currentRemoteConnectionId()) {
+            return true
+        }
+        return runCatching {
+            bridgeClient.readDesktopInspectionHold()
+        }.getOrElse { err ->
+            Log.w(TAG, "Failed to read desktop inspection hold for ${request.sessionId}", err)
+            false
+        }
     }
 
     private fun publishResultOnce(text: String) {

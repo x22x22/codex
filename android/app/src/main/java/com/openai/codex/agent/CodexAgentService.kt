@@ -53,7 +53,7 @@ class CodexAgentService : AgentService() {
                 AgentSessionBridgeServer.closeSession(session.sessionId)
             }
         }
-        if (isTerminalSessionState(session.state)) {
+        if (isTerminalSessionState(session.state) && !DesktopInspectionRegistry.isPlannerAttached(session.sessionId)) {
             AgentPlannerRuntimeManager.closeSession(session.sessionId)
         }
         if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER) {
@@ -76,6 +76,7 @@ class CodexAgentService : AgentService() {
         Log.i(TAG, "onSessionRemoved sessionId=$sessionId")
         AgentSessionBridgeServer.closeSession(sessionId)
         AgentPlannerRuntimeManager.closeSession(sessionId)
+        DesktopInspectionRegistry.removeSession(sessionId)
         AgentQuestionNotifier.cancel(this, sessionId)
         presentationPolicyStore.removePolicy(sessionId)
         handledGenieQuestions.removeIf { it.startsWith("$sessionId:") }
@@ -130,6 +131,9 @@ class CodexAgentService : AgentService() {
                 )
             },
         )
+        val deferTerminalRollup =
+            DesktopInspectionRegistry.isPlannerAttached(parentSessionId) &&
+                isTerminalSessionState(rollup.state)
         rollup.sessionsToAttach.forEach { childSessionId ->
             runCatching {
                 manager.attachTarget(childSessionId)
@@ -141,26 +145,34 @@ class CodexAgentService : AgentService() {
                 Log.w(TAG, "Failed to attach target for $childSessionId", err)
             }
         }
-        if (shouldUpdateParentSessionState(parentSession.state, rollup.state)) {
+        if (!deferTerminalRollup && shouldUpdateParentSessionState(parentSession.state, rollup.state)) {
             runCatching {
                 manager.updateSessionState(parentSessionId, rollup.state)
             }.onFailure { err ->
                 Log.w(TAG, "Failed to update parent session state for $parentSessionId", err)
             }
         }
-        val parentEvents = if (rollup.resultMessage != null || rollup.errorMessage != null) {
+        val parentEvents = if (!deferTerminalRollup && (rollup.resultMessage != null || rollup.errorMessage != null)) {
             manager.getSessionEvents(parentSessionId)
         } else {
             emptyList()
         }
-        if (rollup.resultMessage != null && findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_RESULT) != rollup.resultMessage) {
+        if (
+            !deferTerminalRollup &&
+            rollup.resultMessage != null &&
+            findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_RESULT) != rollup.resultMessage
+        ) {
             runCatching {
                 manager.publishResult(parentSessionId, rollup.resultMessage)
             }.onFailure { err ->
                 Log.w(TAG, "Failed to publish parent result for $parentSessionId", err)
             }
         }
-        if (rollup.errorMessage != null && findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_ERROR) != rollup.errorMessage) {
+        if (
+            !deferTerminalRollup &&
+            rollup.errorMessage != null &&
+            findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_ERROR) != rollup.errorMessage
+        ) {
             runCatching {
                 manager.publishError(parentSessionId, rollup.errorMessage)
             }.onFailure { err ->
