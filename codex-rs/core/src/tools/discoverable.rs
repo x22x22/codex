@@ -12,29 +12,11 @@ pub(crate) enum DiscoverableToolType {
     Plugin,
 }
 
-impl DiscoverableToolType {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Connector => "connector",
-            Self::Plugin => "plugin",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DiscoverableToolAction {
     Install,
     Enable,
-}
-
-impl DiscoverableToolAction {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Install => "install",
-            Self::Enable => "enable",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,13 +44,6 @@ impl DiscoverableTool {
         match self {
             Self::Connector(connector) => connector.name.as_str(),
             Self::Plugin(plugin) => plugin.name.as_str(),
-        }
-    }
-
-    pub(crate) fn description(&self) -> Option<&str> {
-        match self {
-            Self::Connector(connector) => connector.description.as_deref(),
-            Self::Plugin(plugin) => plugin.description.as_deref(),
         }
     }
 
