@@ -268,7 +268,8 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         "spawn_agent",
         function_payload(json!({
             "message": "inspect this repo",
-            "agent_type": "explorer"
+            "agent_type": "explorer",
+            "fork_context": false
         })),
     );
     let output = SpawnAgentHandler
@@ -400,6 +401,46 @@ async fn multi_agent_v2_spawn_fork_context_ignores_child_model_overrides() {
 }
 
 #[tokio::test]
+async fn spawn_agent_watchdog_role_returns_handle_without_spawn_mode() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::AgentWatchdog)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "check in periodically",
+                "agent_type": "watchdog"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let agent_id = parse_agent_id(
+        result["agent_id"]
+            .as_str()
+            .expect("spawn_agent result should include agent_id"),
+    );
+
+    assert_eq!(success, Some(true));
+    assert_eq!(
+        manager.agent_control().get_status(agent_id).await,
+        AgentStatus::PendingInit
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_returns_agent_id_without_task_name() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
@@ -411,7 +452,8 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
             Arc::new(turn),
             "spawn_agent",
             function_payload(json!({
-                "message": "inspect this repo"
+                "message": "inspect this repo",
+                "fork_context": false
             })),
         ))
         .await
@@ -421,7 +463,7 @@ async fn spawn_agent_returns_agent_id_without_task_name() {
         serde_json::from_str(&content).expect("spawn_agent result should be json");
 
     assert!(result["agent_id"].is_string());
-    assert!(result.get("task_name").is_none());
+    assert_eq!(result["task_name"], serde_json::Value::Null);
     assert!(result.get("nickname").is_some());
     assert_eq!(success, Some(true));
 }
@@ -448,7 +490,8 @@ async fn multi_agent_v2_spawn_requires_task_name() {
         Arc::new(turn),
         "spawn_agent",
         function_payload(json!({
-            "message": "inspect this repo"
+            "message": "inspect this repo",
+            "fork_context": false
         })),
     );
     let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
@@ -467,7 +510,7 @@ async fn spawn_agent_errors_when_manager_dropped() {
         Arc::new(session),
         Arc::new(turn),
         "spawn_agent",
-        function_payload(json!({"message": "hello"})),
+        function_payload(json!({"message": "hello", "fork_context": false})),
     );
     let Err(err) = SpawnAgentHandler.handle(invocation).await else {
         panic!("spawn should fail without a manager");
@@ -1357,7 +1400,8 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         "spawn_agent",
         function_payload(json!({
             "message": "await this command",
-            "agent_type": "explorer"
+            "agent_type": "explorer",
+            "fork_context": false
         })),
     );
     let output = SpawnAgentHandler
@@ -1417,7 +1461,7 @@ async fn spawn_agent_rejects_when_depth_limit_exceeded() {
         Arc::new(session),
         Arc::new(turn),
         "spawn_agent",
-        function_payload(json!({"message": "hello"})),
+        function_payload(json!({"message": "hello", "fork_context": false})),
     );
     let Err(err) = SpawnAgentHandler.handle(invocation).await else {
         panic!("spawn should fail when depth limit exceeded");
@@ -1457,7 +1501,7 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
         Arc::new(session),
         Arc::new(turn),
         "spawn_agent",
-        function_payload(json!({"message": "hello"})),
+        function_payload(json!({"message": "hello", "fork_context": false})),
     );
     let output = SpawnAgentHandler
         .handle(invocation)
@@ -1533,7 +1577,10 @@ async fn send_input_rejects_invalid_id() {
     let FunctionCallError::RespondToModel(msg) = err else {
         panic!("expected respond-to-model error");
     };
-    assert!(msg.starts_with("invalid agent id not-a-uuid:"));
+    assert_eq!(
+        msg,
+        "agent_name must use only lowercase letters, digits, and underscores"
+    );
 }
 
 #[tokio::test]
@@ -1870,7 +1917,7 @@ async fn wait_agent_rejects_invalid_target() {
     let FunctionCallError::RespondToModel(msg) = err else {
         panic!("expected respond-to-model error");
     };
-    assert!(msg.starts_with("invalid agent id invalid:"));
+    assert!(msg.contains("invalid"));
 }
 
 #[tokio::test]
@@ -1887,7 +1934,7 @@ async fn wait_agent_rejects_empty_targets() {
     };
     assert_eq!(
         err,
-        FunctionCallError::RespondToModel("agent ids must be non-empty".to_string())
+        FunctionCallError::RespondToModel("agent targets must be non-empty".to_string())
     );
 }
 

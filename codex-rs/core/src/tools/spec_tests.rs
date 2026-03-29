@@ -128,7 +128,7 @@ fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&
     use std::collections::HashSet;
     let mut names = HashSet::new();
     let mut duplicates = Vec::new();
-    for name in tools.iter().map(ConfiguredToolSpec::name) {
+    for name in tools.iter().flat_map(configured_tool_spec_names) {
         if !names.insert(name) {
             duplicates.push(name);
         }
@@ -145,10 +145,23 @@ fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&
     }
 }
 
+fn configured_tool_spec_names(tool: &ConfiguredToolSpec) -> Vec<&str> {
+    match &tool.spec {
+        ToolSpec::Namespace(namespace) => namespace
+            .tools
+            .iter()
+            .map(|tool| match tool {
+                codex_tools::ResponsesApiNamespaceTool::Function(tool) => tool.name.as_str(),
+            })
+            .collect(),
+        _ => vec![tool.name()],
+    }
+}
+
 fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
     let names = tools
         .iter()
-        .map(ConfiguredToolSpec::name)
+        .flat_map(configured_tool_spec_names)
         .collect::<Vec<_>>();
     assert!(
         !names.contains(&expected_absent),
@@ -188,10 +201,28 @@ fn wait_agent_timeout_options() -> WaitAgentTimeoutOptions {
 }
 
 fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a ConfiguredToolSpec {
-    tools
-        .iter()
-        .find(|tool| tool.name() == expected_name)
-        .unwrap_or_else(|| panic!("expected tool {expected_name}"))
+    if let Some(tool) = tools.iter().find(|tool| tool.name() == expected_name) {
+        return tool;
+    }
+    for tool in tools {
+        let ToolSpec::Namespace(namespace) = &tool.spec else {
+            continue;
+        };
+        if let Some(tool) = namespace.tools.iter().find_map(|tool| match tool {
+            codex_tools::ResponsesApiNamespaceTool::Function(tool)
+                if tool.name == expected_name =>
+            {
+                Some(tool.clone())
+            }
+            _ => None,
+        }) {
+            return Box::leak(Box::new(ConfiguredToolSpec::new(
+                ToolSpec::Function(tool),
+                /*supports_parallel_tool_calls*/ false,
+            )));
+        }
+    }
+    panic!("expected tool {expected_name}")
 }
 
 fn strip_descriptions_schema(schema: &mut JsonSchema) {
@@ -357,28 +388,30 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     ] {
         expected.insert(spec.name().to_string(), spec);
     }
-    let collab_specs = if config.multi_agent_v2 {
+    let mut collab_specs = if config.multi_agent_v2 {
         vec![
             create_spawn_agent_tool_v2(spawn_agent_tool_options(&config)),
             create_send_message_tool(),
             create_wait_agent_tool_v2(wait_agent_timeout_options()),
             create_close_agent_tool_v2(),
+            create_list_agents_tool_v2(),
         ]
     } else {
-        vec![
+        let mut collab_specs = vec![
             create_spawn_agent_tool_v1(spawn_agent_tool_options(&config)),
             create_send_input_tool_v1(),
+            create_resume_agent_tool(),
             create_wait_agent_tool_v1(wait_agent_timeout_options()),
             create_close_agent_tool_v1(),
-        ]
+        ];
+        if config.agent_watchdog {
+            collab_specs.push(create_list_agents_tool(config.agent_watchdog));
+            collab_specs.push(create_compact_parent_context_tool());
+        }
+        collab_specs
     };
-    for spec in collab_specs {
-        expected.insert(spec.name().to_string(), spec);
-    }
-    if !config.multi_agent_v2 {
-        let spec = create_resume_agent_tool();
-        expected.insert(spec.name().to_string(), spec);
-    }
+    let spec = create_agent_tools_namespace(collab_specs.split_off(0));
+    expected.insert(spec.name().to_string(), spec);
 
     if config.exec_permission_approvals_enabled {
         let spec = create_request_permissions_tool(request_permissions_tool_description());
@@ -1095,7 +1128,16 @@ fn assert_model_tools(
     let model_visible_specs = router.model_visible_specs();
     let tool_names = model_visible_specs
         .iter()
-        .map(ToolSpec::name)
+        .flat_map(|tool| match tool {
+            ToolSpec::Namespace(namespace) => namespace
+                .tools
+                .iter()
+                .map(|tool| match tool {
+                    codex_tools::ResponsesApiNamespaceTool::Function(tool) => tool.name.as_str(),
+                })
+                .collect::<Vec<_>>(),
+            _ => vec![tool.name()],
+        })
         .collect::<Vec<_>>();
     assert_eq!(&tool_names, &expected_tools,);
 }
