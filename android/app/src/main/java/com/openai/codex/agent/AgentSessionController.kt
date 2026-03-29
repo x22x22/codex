@@ -538,6 +538,23 @@ class AgentSessionController(context: Context) {
         requireAgentManager().attachTarget(sessionId)
     }
 
+    fun cancelSessionTree(sessionId: String) {
+        val manager = requireAgentManager()
+        val sessions = manager.getSessions(currentUserId())
+        val session = sessions.firstOrNull { it.sessionId == sessionId }
+            ?: throw IllegalArgumentException("Unknown session: $sessionId")
+        if (isDirectParentSession(session)) {
+            sessions.asSequence()
+                .filter { childSession ->
+                    childSession.parentSessionId == sessionId
+                }
+                .forEach { childSession ->
+                    manager.cancelSession(childSession.sessionId)
+                }
+        }
+        manager.cancelSession(sessionId)
+    }
+
     fun cancelSession(sessionId: String) {
         requireAgentManager().cancelSession(sessionId)
     }

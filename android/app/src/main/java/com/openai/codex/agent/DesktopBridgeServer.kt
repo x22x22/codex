@@ -270,7 +270,7 @@ object DesktopBridgeServer {
 
         private fun cancelSession(params: JSONObject?): JSONObject {
             val sessionId = params.requireString("sessionId")
-            sessionController.cancelSession(sessionId)
+            sessionController.cancelSessionTree(sessionId)
             unregisterCreatedHomeSessionUiLease(sessionId)
             return JSONObject().put("ok", true)
         }

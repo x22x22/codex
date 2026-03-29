@@ -252,11 +252,7 @@ class SessionDetailActivity : Activity() {
         val topLevelActionNote = findViewById<TextView>(R.id.session_detail_top_level_action_note)
         findViewById<Button>(R.id.session_detail_cancel_button).apply {
             visibility = if (isTopLevelActive) View.VISIBLE else View.GONE
-            text = if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT && viewState.childSessions.isNotEmpty()) {
-                "Cancel Child Sessions"
-            } else {
-                "Cancel Session"
-            }
+            text = "Cancel Session"
         }
         findViewById<Button>(R.id.session_detail_delete_button).visibility =
             if (isTopLevelActive) View.GONE else View.VISIBLE
@@ -266,7 +262,7 @@ class SessionDetailActivity : Activity() {
             if (isTopLevelActive && viewState.childSessions.isEmpty()) {
                 "This Agent-anchored session is still planning targets."
             } else if (isTopLevelActive) {
-                "Cancelling the top-level session cancels all active child sessions."
+                "Cancelling the top-level session cancels the parent and all child sessions."
             } else {
                 "Deleting the top-level session removes it and its child sessions from the Agent UI."
             }
@@ -497,19 +493,7 @@ class SessionDetailActivity : Activity() {
         val topLevelSession = topLevelSession(latestSnapshot) ?: return
         thread {
             runCatching {
-                if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT) {
-                    val activeChildren = childSessions(latestSnapshot)
-                        .filterNot { isTerminalState(it.state) }
-                    if (activeChildren.isEmpty()) {
-                        sessionController.cancelSession(topLevelSession.sessionId)
-                    } else {
-                        activeChildren.forEach { childSession ->
-                            sessionController.cancelSession(childSession.sessionId)
-                        }
-                    }
-                } else {
-                    sessionController.cancelSession(topLevelSession.sessionId)
-                }
+                sessionController.cancelSessionTree(topLevelSession.sessionId)
             }.onFailure { err ->
                 showToast("Failed to cancel session: ${err.message}")
             }.onSuccess {
@@ -521,7 +505,7 @@ class SessionDetailActivity : Activity() {
                 )
                 showToast(
                     if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT) {
-                        "Cancelled active child sessions"
+                        "Cancelled ${topLevelSession.sessionId} and its child sessions"
                     } else {
                         "Cancelled ${topLevelSession.sessionId}"
                     },

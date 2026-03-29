@@ -157,7 +157,7 @@ class AgentFrameworkToolBridge(
             }
             CANCEL_SESSION_TOOL -> {
                 val sessionId = requireString(arguments, "sessionId")
-                sessionController.cancelSession(sessionId)
+                sessionController.cancelSessionTree(sessionId)
                 successText("Cancelled framework session $sessionId.")
             }
             else -> throw IOException("Unsupported framework session tool: $toolName")
