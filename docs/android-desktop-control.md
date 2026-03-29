@@ -81,6 +81,9 @@ The desktop entrypoint is:
 - `codex android sessions attach [--serial SERIAL] SESSION_ID`
   The attach flow forces `disable_paste_burst=true` for that TUI session so scripted
   prompt injection remains submit-safe when text and Enter arrive in a tight burst.
+  Attached planner and Genie sessions also mirror live framework events into the
+  TUI as `thread/frameworkEvent` notifications so child-session ids, framework
+  transport traces, questions, results, and framework errors are visible inline.
 
 `attach` opens the existing remote app-server-backed Codex TUI against a
 session websocket path returned by the device bridge, so the desktop attaches

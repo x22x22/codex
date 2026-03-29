@@ -884,6 +884,7 @@ server_notification_definitions! {
     Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
+    ThreadFrameworkEvent => "thread/frameworkEvent" (v2::ThreadFrameworkEventNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),

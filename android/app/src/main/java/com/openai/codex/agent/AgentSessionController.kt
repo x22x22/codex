@@ -25,6 +25,11 @@ class AgentSessionController(context: Context) {
         private const val QUESTION_ANSWER_RETRY_DELAY_MS = 50L
     }
 
+    private enum class ChildSessionLaunchMode {
+        IMMEDIATE,
+        IDLE_ATTACH,
+    }
+
     private val appContext = context.applicationContext
     private val agentManager = appContext.getSystemService(AgentManager::class.java)
     private val presentationPolicyStore = SessionPresentationPolicyStore(context)
@@ -251,6 +256,7 @@ class AgentSessionController(context: Context) {
     ): SessionStartResult {
         val manager = requireAgentManager()
         requireActiveDirectParentSession(manager, parentSessionId)
+        val childLaunchMode = childSessionLaunchMode(parentSessionId)
         val detachedPolicyTargets = plan.targets.filter { it.finalPresentationPolicy.requiresDetachedMode() }
         check(allowDetachedMode || detachedPolicyTargets.isEmpty()) {
             "Detached final presentation requires detached mode for ${detachedPolicyTargets.joinToString(", ") { it.packageName }}"
@@ -271,6 +277,13 @@ class AgentSessionController(context: Context) {
                 presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
                 executionSettingsStore.saveSettings(childSession.sessionId, executionSettings)
                 provisionSessionNetworkConfig(childSession.sessionId)
+                if (childLaunchMode == ChildSessionLaunchMode.IDLE_ATTACH) {
+                    DesktopInspectionRegistry.holdChildrenForAttachedPlanner(parentSessionId, listOf(childSession.sessionId))
+                    manager.publishTrace(
+                        childSession.sessionId,
+                        "Planner launched this Genie in idle desktop-attach mode. The delegated objective is staged, but the first turn will wait until the attached client sends a prompt or the planner detaches.",
+                    )
+                }
                 manager.publishTrace(
                     parentSessionId,
                     "Created child session ${childSession.sessionId} for ${target.packageName} with required final presentation ${target.finalPresentationPolicy.wireValue}.",
@@ -279,7 +292,7 @@ class AgentSessionController(context: Context) {
                 manager.startGenieSession(
                     childSession.sessionId,
                     geniePackage,
-                    buildDelegatedPrompt(target),
+                    childSessionStartupPrompt(target, childLaunchMode),
                     allowDetachedMode,
                 )
             }
@@ -472,6 +485,7 @@ class AgentSessionController(context: Context) {
         executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
     ): SessionStartResult {
         val manager = requireAgentManager()
+        val childLaunchMode = childSessionLaunchMode(parentSessionId)
         check(canStartSessionForTarget(target.packageName)) {
             "Target package ${target.packageName} is not eligible for session continuation"
         }
@@ -488,10 +502,17 @@ class AgentSessionController(context: Context) {
         presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
         executionSettingsStore.saveSettings(childSession.sessionId, executionSettings)
         provisionSessionNetworkConfig(childSession.sessionId)
+        if (childLaunchMode == ChildSessionLaunchMode.IDLE_ATTACH) {
+            DesktopInspectionRegistry.holdChildrenForAttachedPlanner(parentSessionId, listOf(childSession.sessionId))
+            manager.publishTrace(
+                childSession.sessionId,
+                "Planner launched this Genie in idle desktop-attach mode. The delegated objective is staged, but the first turn will wait until the attached client sends a prompt or the planner detaches.",
+            )
+        }
         manager.startGenieSession(
             childSession.sessionId,
             geniePackage,
-            buildDelegatedPrompt(target),
+            childSessionStartupPrompt(target, childLaunchMode),
             /* allowDetachedMode = */ true,
         )
         return SessionStartResult(
@@ -741,6 +762,25 @@ class AgentSessionController(context: Context) {
             appendLine("Required final target presentation: ${target.finalPresentationPolicy.wireValue}")
             append(target.finalPresentationPolicy.promptGuidance())
         }.trim()
+    }
+
+    private fun childSessionLaunchMode(parentSessionId: String): ChildSessionLaunchMode {
+        return if (DesktopInspectionRegistry.isPlannerAttached(parentSessionId)) {
+            ChildSessionLaunchMode.IDLE_ATTACH
+        } else {
+            ChildSessionLaunchMode.IMMEDIATE
+        }
+    }
+
+    private fun childSessionStartupPrompt(
+        target: AgentDelegationTarget,
+        launchMode: ChildSessionLaunchMode,
+    ): String {
+        val delegatedPrompt = buildDelegatedPrompt(target)
+        return when (launchMode) {
+            ChildSessionLaunchMode.IMMEDIATE -> delegatedPrompt
+            ChildSessionLaunchMode.IDLE_ATTACH -> DesktopSessionBootstrap.idleAttachPrompt(delegatedPrompt)
+        }
     }
 
     private fun findLastEventMessage(events: List<AgentSessionEvent>, type: Int): String? {

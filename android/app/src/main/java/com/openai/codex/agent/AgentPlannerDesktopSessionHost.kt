@@ -3,6 +3,7 @@ package com.openai.codex.agent
 import android.app.agent.AgentManager
 import android.content.Context
 import android.util.Log
+import com.openai.codex.bridge.FrameworkEventBridge
 import com.openai.codex.bridge.HostedCodexConfig
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.BufferedWriter
@@ -83,6 +84,8 @@ internal class AgentPlannerDesktopSessionHost(
     private var currentDesktopProxy: DesktopProxy? = null
     @Volatile
     private var remoteProxyState: RemoteProxyState? = null
+    @Volatile
+    private var lastReportedFrameworkEventCount = 0
 
     fun start() {
         executionSettings = sessionController.executionSettingsForSession(sessionId)
@@ -175,6 +178,7 @@ internal class AgentPlannerDesktopSessionHost(
         } ?: return
         if (remoteProxyState?.connectionId == connectionId) {
             remoteProxyState = null
+            lastReportedFrameworkEventCount = 0
         }
         DesktopInspectionRegistry.markPlannerDetached(sessionId)
         runCatching {
@@ -254,6 +258,7 @@ internal class AgentPlannerDesktopSessionHost(
             while (!closing.get()) {
                 val message = inboundMessages.poll(POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 if (message == null) {
+                    maybeEmitFrameworkEvents()
                     if (!process.isAlive) {
                         throw IOException("Planner app-server exited with code ${process.exitValue()}")
                     }
@@ -627,6 +632,7 @@ internal class AgentPlannerDesktopSessionHost(
                     connectionId = connectionId,
                     optOutNotificationMethods = optOut,
                 )
+                lastReportedFrameworkEventCount = 0
                 sendDesktopMessage(
                     JSONObject()
                         .put("id", remoteRequestId)
@@ -685,9 +691,42 @@ internal class AgentPlannerDesktopSessionHost(
 
     private fun handleRemoteProxyNotification(message: JSONObject) {
         when (message.optString("method")) {
-            "initialized" -> Unit
+            "initialized" -> maybeEmitFrameworkEvents()
             else -> sendMessage(JSONObject(message.toString()))
         }
+    }
+
+    private fun maybeEmitFrameworkEvents() {
+        val proxyState = remoteProxyState ?: return
+        if (proxyState.connectionId != currentDesktopProxy?.connectionId) {
+            return
+        }
+        if (
+            proxyState.optOutNotificationMethods.contains(
+                FrameworkEventBridge.THREAD_FRAMEWORK_EVENT_METHOD,
+            )
+        ) {
+            return
+        }
+        val threadId = currentThreadId ?: return
+        val agentManager = context.getSystemService(AgentManager::class.java) ?: return
+        val events = runCatching {
+            agentManager.getSessionEvents(sessionId)
+        }.getOrElse { err ->
+            Log.w(TAG, "Failed to load framework events for planner $sessionId", err)
+            return
+        }
+        if (lastReportedFrameworkEventCount > events.size) {
+            lastReportedFrameworkEventCount = 0
+        }
+        for (index in lastReportedFrameworkEventCount until events.size) {
+            val notification = FrameworkEventBridge.buildThreadFrameworkEventNotification(
+                threadId = threadId,
+                event = events[index],
+            ) ?: continue
+            sendDesktopMessage(notification, proxyState.connectionId)
+        }
+        lastReportedFrameworkEventCount = events.size
     }
 
     private fun buildRemoteAccountReadResult(): JSONObject {

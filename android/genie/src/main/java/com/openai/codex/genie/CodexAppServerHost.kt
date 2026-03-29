@@ -6,6 +6,7 @@ import android.app.agent.GenieService
 import android.content.Context
 import android.util.Log
 import com.openai.codex.bridge.DesktopSessionBootstrap
+import com.openai.codex.bridge.FrameworkEventBridge
 import com.openai.codex.bridge.HostedCodexConfig
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.io.BufferedWriter
@@ -53,13 +54,19 @@ class CodexAppServerHost(
         val errorMessage: String? = null,
     )
 
+    private data class FrameworkEventRecord(
+        val eventType: String,
+        val message: String,
+    )
+
     private val requestIdSequence = AtomicInteger(1)
     private val pendingResponses = ConcurrentHashMap<String, LinkedBlockingQueue<JSONObject>>()
     private val remotePendingRequests = ConcurrentHashMap<String, RemotePendingRequest>()
     private val inboundMessages = LinkedBlockingQueue<JSONObject>()
     private val writerLock = Any()
     private val streamedAgentMessages = mutableMapOf<String, StringBuilder>()
-    private val remoteProxyLock = Any()
+    private val frameworkEventLock = Any()
+    private val frameworkEventHistory = mutableListOf<FrameworkEventRecord>()
 
     private lateinit var process: Process
     private lateinit var writer: BufferedWriter
@@ -75,6 +82,8 @@ class CodexAppServerHost(
     @Volatile
     private var remoteProxyState: RemoteProxyState? = null
     private val idleDesktopAttachSession = DesktopSessionBootstrap.isIdleAttachPrompt(request.prompt)
+    private val stagedDelegatedPrompt = DesktopSessionBootstrap.stagedInitialPrompt(request.prompt)
+    private var initialTurnStarted = false
 
     fun run() {
         startProcess()
@@ -89,7 +98,7 @@ class CodexAppServerHost(
                     remoteProxyState = null
                     if (!reason.isNullOrBlank()) {
                         runCatching {
-                            callback.publishTrace(request.sessionId, "Desktop attach closed: $reason")
+                            publishFrameworkTrace("Desktop attach closed: $reason")
                         }.onFailure { err ->
                             Log.w(TAG, "Failed to publish desktop attach close trace for ${request.sessionId}", err)
                         }
@@ -103,17 +112,22 @@ class CodexAppServerHost(
         activeThreadId = threadId
         bridgeClient.registerAppServerThread(threadId)
         if (!idleDesktopAttachSession) {
-            startTurn(threadId, model)
+            startTurn(threadId, model, buildDelegatedPrompt())
+            initialTurnStarted = true
         }
-        callback.publishTrace(
-            request.sessionId,
+        publishFrameworkTrace(
             if (idleDesktopAttachSession) {
                 "Hosted idle codex app-server thread $threadId for ${request.targetPackage}."
             } else {
                 "Hosted codex app-server thread $threadId for ${request.targetPackage}."
             },
         )
-        eventLoop()
+        if (stagedDelegatedPrompt != null) {
+            publishFrameworkTrace(
+                "A delegated objective is staged for this Genie, but the first turn is paused while desktop attach inspection remains active.",
+            )
+        }
+        eventLoop(model)
     }
 
     override fun close() {
@@ -277,6 +291,7 @@ class CodexAppServerHost(
     private fun startTurn(
         threadId: String,
         model: String,
+        prompt: String,
     ) {
         Log.i(TAG, "Starting hosted turn for ${request.sessionId} with model=$model")
         request(
@@ -294,7 +309,7 @@ class CodexAppServerHost(
                     JSONArray().put(
                         JSONObject()
                             .put("type", "text")
-                            .put("text", buildDelegatedPrompt()),
+                            .put("text", prompt),
                     ),
                 ),
         )
@@ -308,10 +323,11 @@ class CodexAppServerHost(
             ?.takeIf(String::isNotBlank)
         ?: DEFAULT_HOSTED_MODEL
 
-    private fun eventLoop() {
+    private fun eventLoop(model: String) {
         while (!control.cancelled) {
             val message = inboundMessages.poll(POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             if (message == null) {
+                maybeReleaseStagedDelegatedTurn(model)
                 maybeApplyPendingTerminalTransition()?.let { return }
                 if (!process.isAlive) {
                     throw IOException("codex app-server exited with code ${process.exitValue()}")
@@ -339,7 +355,7 @@ class CodexAppServerHost(
             "item/tool/requestUserInput" -> handleRequestUserInput(requestId, params)
             "response/send" -> handleResponsesBridgeRequest(requestId, params)
             else -> {
-                callback.publishTrace(request.sessionId, "Unsupported codex app-server request: $method")
+                publishFrameworkTrace("Unsupported codex app-server request: $method")
                 sendError(
                     requestId = requestId,
                     code = -32601,
@@ -369,7 +385,7 @@ class CodexAppServerHost(
                 promptDetails = "Tool $toolName failed.\nError: ${err.message ?: err::class.java.simpleName}",
             )
         }
-        callback.publishTrace(request.sessionId, observation.summary)
+        publishFrameworkTrace(observation.summary)
         sendResult(
             requestId = requestId,
             result = JSONObject()
@@ -385,11 +401,11 @@ class CodexAppServerHost(
         val questions = params.optJSONArray("questions") ?: JSONArray()
         val renderedQuestion = renderAgentQuestion(questions)
         Log.i(TAG, "Requesting Agent input for ${request.sessionId}: $renderedQuestion")
-        callback.publishQuestion(request.sessionId, renderedQuestion)
-        callback.updateState(request.sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
+        publishFrameworkQuestion(renderedQuestion)
+        updateFrameworkState(AgentSessionInfo.STATE_WAITING_FOR_USER)
         val answer = control.waitForUserResponse()
-        callback.updateState(request.sessionId, AgentSessionInfo.STATE_RUNNING)
-        callback.publishTrace(request.sessionId, "Received Agent answer for ${request.targetPackage}.")
+        updateFrameworkState(AgentSessionInfo.STATE_RUNNING)
+        publishFrameworkTrace("Received Agent answer for ${request.targetPackage}.")
         Log.i(TAG, "Received Agent input for ${request.sessionId}: ${answer.take(160)}")
         sendResult(
             requestId = requestId,
@@ -402,7 +418,13 @@ class CodexAppServerHost(
         params: JSONObject,
     ) {
         val requestBody = params.optString("requestBody")
+        publishFrameworkTrace(
+            "Framework transport executing POST ${runtimeStatus.frameworkResponsesPath} via Agent bridge.",
+        )
         val httpResponse = bridgeClient.sendResponsesRequest(requestBody)
+        publishFrameworkTrace(
+            "Framework transport completed ${httpResponse.statusCode} for ${runtimeStatus.frameworkResponsesPath}.",
+        )
         sendResult(
             requestId = requestId,
             result = JSONObject()
@@ -419,7 +441,8 @@ class CodexAppServerHost(
                 finalAgentMessage = null
                 pendingTerminalTransition = null
                 streamedAgentMessages.clear()
-                callback.publishTrace(request.sessionId, "codex turn started for ${request.targetPackage}.")
+                initialTurnStarted = true
+                publishFrameworkTrace("codex turn started for ${request.targetPackage}.")
                 false
             }
             "item/agentMessage/delta" -> {
@@ -457,7 +480,7 @@ class CodexAppServerHost(
         when (item.optString("type")) {
             "dynamicToolCall" -> {
                 val tool = item.optString("tool")
-                callback.publishTrace(request.sessionId, "Codex requested dynamic tool $tool.")
+                publishFrameworkTrace("Codex requested dynamic tool $tool.")
             }
             "commandExecution" -> {
                 if (request.isDetachedModeAllowed && command != null) {
@@ -465,8 +488,7 @@ class CodexAppServerHost(
                         DetachedSessionGuard.violationMessage(request.targetPackage, command)
                     }
                 }
-                callback.publishTrace(
-                    request.sessionId,
+                publishFrameworkTrace(
                     "Codex started command execution: ${command ?: "command"}",
                 )
             }
@@ -509,19 +531,16 @@ class CodexAppServerHost(
                         .takeIf(String::isNotBlank)
                         ?.let { " Details: ${it.take(240)}" }
                         .orEmpty()
-                    callback.publishTrace(
-                        request.sessionId,
+                    publishFrameworkTrace(
                         "Command failed: $resolvedCommand (status=$status, exitCode=${exitCode ?: "unknown"}).$detailSuffix",
                     )
                     if (errorDetail.contains("package=com.android.shell does not belong to uid=")) {
-                        callback.publishTrace(
-                            request.sessionId,
+                        publishFrameworkTrace(
                             "This shell command requires com.android.shell privileges. The target is already running hidden; use detached-target dynamic tools to show or inspect it instead of retrying the same shell launch surface.",
                         )
                     }
                 } else {
-                    callback.publishTrace(
-                        request.sessionId,
+                    publishFrameworkTrace(
                         "Command completed: $resolvedCommand (status=$status, exitCode=${exitCode ?: "unknown"}).",
                     )
                 }
@@ -529,7 +548,7 @@ class CodexAppServerHost(
             "dynamicToolCall" -> {
                 val tool = item.optString("tool")
                 val status = item.optString("status")
-                callback.publishTrace(request.sessionId, "Dynamic tool $tool completed with status=$status.")
+                publishFrameworkTrace("Dynamic tool $tool completed with status=$status.")
             }
         }
     }
@@ -584,7 +603,7 @@ class CodexAppServerHost(
     ): Boolean {
         if (shouldKeepSessionOpenAfterTurn()) {
             pendingTerminalTransition = pendingTransition
-            callback.publishTrace(request.sessionId, keepOpenTrace)
+            publishFrameworkTrace(keepOpenTrace)
             return false
         }
         applyPendingTerminalTransition(pendingTransition)
@@ -604,15 +623,15 @@ class CodexAppServerHost(
         pendingTerminalTransition = null
         when (pendingTransition.terminalState) {
             AgentSessionInfo.STATE_COMPLETED -> {
-                callback.updateState(request.sessionId, AgentSessionInfo.STATE_COMPLETED)
+                updateFrameworkState(AgentSessionInfo.STATE_COMPLETED)
             }
             AgentSessionInfo.STATE_CANCELLED -> {
-                pendingTransition.errorMessage?.let { callback.publishError(request.sessionId, it) }
-                callback.updateState(request.sessionId, AgentSessionInfo.STATE_CANCELLED)
+                pendingTransition.errorMessage?.let(::publishFrameworkError)
+                updateFrameworkState(AgentSessionInfo.STATE_CANCELLED)
             }
             AgentSessionInfo.STATE_FAILED -> {
-                pendingTransition.errorMessage?.let { callback.publishError(request.sessionId, it) }
-                callback.updateState(request.sessionId, AgentSessionInfo.STATE_FAILED)
+                pendingTransition.errorMessage?.let(::publishFrameworkError)
+                updateFrameworkState(AgentSessionInfo.STATE_FAILED)
             }
         }
     }
@@ -630,12 +649,34 @@ class CodexAppServerHost(
         }
     }
 
+    private fun maybeReleaseStagedDelegatedTurn(model: String) {
+        if (!idleDesktopAttachSession || initialTurnStarted) {
+            return
+        }
+        val delegatedPrompt = stagedDelegatedPrompt ?: return
+        val threadId = activeThreadId ?: return
+        val inspectionHold = runCatching {
+            bridgeClient.readDesktopInspectionHold()
+        }.getOrElse { err ->
+            Log.w(TAG, "Failed to read desktop inspection hold for ${request.sessionId}", err)
+            return
+        }
+        if (inspectionHold) {
+            return
+        }
+        publishFrameworkTrace(
+            "Planner desktop attach released this Genie; starting the staged delegated objective.",
+        )
+        startTurn(threadId, model, delegatedPrompt)
+        initialTurnStarted = true
+    }
+
     private fun publishResultOnce(text: String) {
         if (resultPublished) {
             return
         }
         resultPublished = true
-        callback.publishResult(request.sessionId, text)
+        publishFrameworkResult(text)
     }
 
     private fun request(
@@ -807,8 +848,91 @@ class CodexAppServerHost(
 
     private fun handleRemoteProxyNotification(message: JSONObject) {
         when (message.optString("method")) {
-            "initialized" -> Unit
+            "initialized" -> replayFrameworkEventsToRemote()
             else -> sendMessage(JSONObject(message.toString()))
+        }
+    }
+
+    private fun publishFrameworkTrace(message: String) {
+        callback.publishTrace(request.sessionId, message)
+        recordFrameworkEvent(eventType = "trace", message = message)
+    }
+
+    private fun publishFrameworkQuestion(message: String) {
+        callback.publishQuestion(request.sessionId, message)
+        recordFrameworkEvent(eventType = "question", message = message)
+    }
+
+    private fun publishFrameworkResult(message: String) {
+        callback.publishResult(request.sessionId, message)
+        recordFrameworkEvent(eventType = "result", message = message)
+    }
+
+    private fun publishFrameworkError(message: String) {
+        callback.publishError(request.sessionId, message)
+        recordFrameworkEvent(eventType = "error", message = message)
+    }
+
+    private fun updateFrameworkState(state: Int) {
+        callback.updateState(request.sessionId, state)
+        recordFrameworkEvent(
+            eventType = "trace",
+            message = "Session state updated to ${stateLabel(state)}.",
+        )
+    }
+
+    private fun recordFrameworkEvent(
+        eventType: String,
+        message: String,
+    ) {
+        val record = FrameworkEventRecord(
+            eventType = eventType,
+            message = message,
+        )
+        synchronized(frameworkEventLock) {
+            frameworkEventHistory.add(record)
+        }
+        sendFrameworkEventToRemote(record)
+    }
+
+    private fun replayFrameworkEventsToRemote() {
+        val history = synchronized(frameworkEventLock) {
+            frameworkEventHistory.toList()
+        }
+        history.forEach(::sendFrameworkEventToRemote)
+    }
+
+    private fun sendFrameworkEventToRemote(record: FrameworkEventRecord) {
+        val proxyState = remoteProxyState ?: return
+        if (proxyState.connectionId != bridgeClient.currentRemoteConnectionId()) {
+            return
+        }
+        if (
+            proxyState.optOutNotificationMethods.contains(
+                FrameworkEventBridge.THREAD_FRAMEWORK_EVENT_METHOD,
+            )
+        ) {
+            return
+        }
+        val threadId = activeThreadId ?: return
+        val notification = FrameworkEventBridge.buildThreadFrameworkEventNotification(
+            threadId = threadId,
+            eventType = record.eventType,
+            message = record.message,
+        ) ?: return
+        bridgeClient.sendRemoteAppServerMessage(notification)
+    }
+
+    private fun stateLabel(state: Int): String {
+        return when (state) {
+            AgentSessionInfo.STATE_CREATED -> "CREATED"
+            AgentSessionInfo.STATE_QUEUED -> "QUEUED"
+            AgentSessionInfo.STATE_RUNNING -> "RUNNING"
+            AgentSessionInfo.STATE_WAITING_FOR_USER -> "WAITING_FOR_USER"
+            AgentSessionInfo.STATE_COMPLETED -> "COMPLETED"
+            AgentSessionInfo.STATE_CANCELLED -> "CANCELLED"
+            AgentSessionInfo.STATE_FAILED -> "FAILED"
+            else -> "UNKNOWN($state)"
         }
     }
 
@@ -858,6 +982,15 @@ class CodexAppServerHost(
         } else {
             ""
         }
+        val stagedDelegatedObjectiveInstructions = stagedDelegatedPrompt?.let { delegatedPrompt ->
+            """
+
+            A supervising Agent already prepared a staged delegated objective for this session, but the first turn is paused while desktop attach inspection remains active.
+            Staged delegated objective:
+            $delegatedPrompt
+            Treat that staged delegated objective as the current task context unless the first user message explicitly changes or overrides it.
+            """.trimIndent()
+        }.orEmpty()
         return """
             You are Codex acting as a child Android Genie bound to ${request.targetPackage}.
             The user interacts only with the supervising Agent.
@@ -879,6 +1012,7 @@ class CodexAppServerHost(
             If you need clarification or a decision from the supervising Agent, call request_user_input with concise free-form question text.
             Do not use hidden control protocols.
             Finish with a normal assistant message describing what you accomplished or what blocked you.
+            $stagedDelegatedObjectiveInstructions
             Detached target mode allowed: ${request.isDetachedModeAllowed}.
             Agent-owned runtime provider: ${runtimeStatus.modelProviderId}.
         """.trimIndent()

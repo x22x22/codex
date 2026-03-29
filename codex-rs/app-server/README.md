@@ -836,6 +836,8 @@ All filesystem paths in this section must be absolute.
 
 Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `thread/closed`, `turn/*`, and `item/*` notifications.
 
+- `thread/frameworkEvent` — external framework/runtime event forwarded into the thread stream by host-backed app-server implementations. Carries `{ threadId, eventType, message }`, where `eventType` is one of `trace`, `question`, `result`, or `error`. This is intended for environments such as Android Agent/Genie where the runtime also has a parallel framework event log.
+
 Thread realtime uses a separate thread-scoped notification surface. `thread/realtime/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
 
 ### Notification opt-out

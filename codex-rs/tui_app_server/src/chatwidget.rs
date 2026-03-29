@@ -73,6 +73,7 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadFrameworkEventType;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ToolRequestUserInputParams;
@@ -2689,6 +2690,32 @@ impl ChatWidget {
 
     fn on_warning(&mut self, message: impl Into<String>) {
         self.add_to_history(history_cell::new_warning_event(message.into()));
+        self.request_redraw();
+    }
+
+    fn on_thread_framework_event(&mut self, event_type: ThreadFrameworkEventType, message: String) {
+        match event_type {
+            ThreadFrameworkEventType::Trace => {
+                self.add_to_history(history_cell::new_info_event(
+                    format!("Framework trace: {message}"),
+                    /*hint*/ None,
+                ));
+            }
+            ThreadFrameworkEventType::Question => self.add_to_history(
+                history_cell::new_warning_event(format!("Framework question: {message}")),
+            ),
+            ThreadFrameworkEventType::Result => {
+                self.add_to_history(history_cell::new_info_event(
+                    format!("Framework result: {message}"),
+                    /*hint*/ None,
+                ));
+            }
+            ThreadFrameworkEventType::Error => {
+                self.add_to_history(history_cell::new_error_event(format!(
+                    "Framework error: {message}"
+                )));
+            }
+        }
         self.request_redraw();
     }
 
@@ -6207,6 +6234,9 @@ impl ChatWidget {
                     .map(|details| format!("{}: {details}", notification.summary))
                     .unwrap_or(notification.summary),
             ),
+            ServerNotification::ThreadFrameworkEvent(notification) => {
+                self.on_thread_framework_event(notification.event_type, notification.message);
+            }
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
                 self.on_guardian_review_notification(
                     notification.target_item_id,

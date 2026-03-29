@@ -3592,6 +3592,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/frameworkEvent"
+              ],
+              "title": "Thread/frameworkEventNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadFrameworkEventNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/frameworkEventNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/archived"
               ],
               "title": "Thread/archivedNotificationMethod",
@@ -12380,6 +12400,36 @@
         ],
         "title": "ThreadForkResponse",
         "type": "object"
+      },
+      "ThreadFrameworkEventNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "eventType": {
+            "$ref": "#/definitions/v2/ThreadFrameworkEventType"
+          },
+          "message": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventType",
+          "message",
+          "threadId"
+        ],
+        "title": "ThreadFrameworkEventNotification",
+        "type": "object"
+      },
+      "ThreadFrameworkEventType": {
+        "enum": [
+          "trace",
+          "question",
+          "result",
+          "error"
+        ],
+        "type": "string"
       },
       "ThreadId": {
         "type": "string"

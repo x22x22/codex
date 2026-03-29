@@ -55,6 +55,8 @@ use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillSummary;
 use codex_app_server_protocol::ThreadClosedNotification;
+use codex_app_server_protocol::ThreadFrameworkEventNotification;
+use codex_app_server_protocol::ThreadFrameworkEventType;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::Turn as AppServerTurn;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -12336,6 +12338,28 @@ async fn warning_event_adds_warning_history_cell() {
     assert!(
         rendered.contains("test warning message"),
         "warning cell missing content: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn framework_event_notification_adds_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_server_notification(
+        ServerNotification::ThreadFrameworkEvent(ThreadFrameworkEventNotification {
+            thread_id: "thread-1".to_string(),
+            event_type: ThreadFrameworkEventType::Trace,
+            message: "Created child session dd55e47f for com.android.deskclock.".to_string(),
+        }),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one framework event history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered
+            .contains("Framework trace: Created child session dd55e47f for com.android.deskclock."),
+        "framework event cell missing content: {rendered}"
     );
 }
 
