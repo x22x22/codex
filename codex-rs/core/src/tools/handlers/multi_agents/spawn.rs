@@ -69,13 +69,8 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let mut config =
+        let config =
             build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-        apply_role_to_config(&mut config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
-        apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-        apply_spawn_agent_overrides(&mut config, child_depth);
 
         let mut candidates_to_try = collect_spawn_agent_model_candidates(
             args.model_fallback_list.as_ref(),
@@ -100,6 +95,11 @@ impl ToolHandler for Handler {
                 candidate.reasoning_effort,
             )
             .await?;
+            apply_role_to_config(&mut candidate_config, role_name)
+                .await
+                .map_err(FunctionCallError::RespondToModel)?;
+            apply_spawn_agent_runtime_overrides(&mut candidate_config, turn.as_ref())?;
+            apply_spawn_agent_overrides(&mut candidate_config, child_depth);
             let attempt_result = session
                 .services
                 .agent_control
