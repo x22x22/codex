@@ -9,6 +9,8 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import org.java_websocket.WebSocket
 import org.java_websocket.handshake.ClientHandshake
@@ -26,6 +28,7 @@ object DesktopBridgeServer {
     private const val ATTACH_TOKEN_TTL_MS = 60_000L
     private const val ATTACH_THREAD_WAIT_MS = 5_000L
     private const val ATTACH_THREAD_POLL_MS = 100L
+    private const val BRIDGE_STARTUP_WAIT_MS = 5_000L
 
     private val authorizedTokens = ConcurrentHashMap.newKeySet<String>()
     private val attachTokens = ConcurrentHashMap<String, AttachedSessionTarget>()
@@ -43,17 +46,37 @@ object DesktopBridgeServer {
         authToken: String,
     ) {
         authorizedTokens += authToken
-        val existing = server
-        if (existing != null) {
+        val existing = synchronized(this) { server }
+        if (existing != null && existing.isStarted()) {
             return
         }
         synchronized(this) {
-            if (server != null) {
+            val running = server
+            if (running != null && running.isStarted()) {
                 return
             }
-            server = AgentDesktopBridgeSocketServer(context.applicationContext).also {
-                it.start()
-                Log.i(TAG, "Desktop bridge listening on ws://127.0.0.1:$LISTEN_PORT$CONTROL_PATH")
+            if (running != null) {
+                Log.w(TAG, "Desktop bridge reference exists but is not ready; restarting")
+                runCatching { running.stop(100) }
+                server = null
+            }
+            AgentDesktopBridgeSocketServer(context.applicationContext).also { candidate ->
+                server = candidate
+                candidate.start()
+                if (candidate.awaitStartup(BRIDGE_STARTUP_WAIT_MS)) {
+                    Log.i(TAG, "Desktop bridge listening on ws://127.0.0.1:$LISTEN_PORT$CONTROL_PATH")
+                    return
+                }
+                val startupFailure = candidate.startupFailureMessage()
+                if (startupFailure != null) {
+                    Log.w(TAG, "Desktop bridge failed to start after bootstrap: $startupFailure")
+                } else {
+                    Log.w(TAG, "Desktop bridge failed to start within ${BRIDGE_STARTUP_WAIT_MS}ms; clearing state")
+                }
+                runCatching { candidate.stop(100) }
+                if (server === candidate) {
+                    server = null
+                }
             }
         }
     }
@@ -62,6 +85,20 @@ object DesktopBridgeServer {
         private val context: Context,
     ) : WebSocketServer(InetSocketAddress(InetAddress.getByName("127.0.0.1"), LISTEN_PORT)) {
         private val sessionController = AgentSessionController(context)
+        private val startupLatch = CountDownLatch(1)
+        @Volatile
+        private var started = false
+        @Volatile
+        private var startupFailure: Exception? = null
+
+        fun awaitStartup(timeoutMs: Long): Boolean {
+            startupLatch.await(timeoutMs, TimeUnit.MILLISECONDS)
+            return started
+        }
+
+        fun isStarted(): Boolean = started
+
+        fun startupFailureMessage(): String? = startupFailure?.message
 
         override fun onOpen(
             conn: WebSocket,
@@ -151,10 +188,21 @@ object DesktopBridgeServer {
             ex: Exception,
         ) {
             Log.w(TAG, "Desktop bridge websocket failed", ex)
+            if (conn == null && !started) {
+                startupFailure = ex
+                startupLatch.countDown()
+                synchronized(this@DesktopBridgeServer) {
+                    if (server === this) {
+                        server = null
+                    }
+                }
+            }
         }
 
         override fun onStart() {
+            started = true
             connectionLostTimeout = 30
+            startupLatch.countDown()
         }
 
         private fun handleControlMessage(

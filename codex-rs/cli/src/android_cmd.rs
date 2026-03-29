@@ -313,14 +313,29 @@ impl AndroidBridgeClient {
         let local_port = allocate_forward_port(serial.as_deref()).await?;
         let forward_guard = AdbForwardGuard { local_port, serial };
         let auth_token = Uuid::new_v4().simple().to_string();
-        bootstrap_bridge(forward_guard.serial.as_deref(), &auth_token).await?;
-
         let bridge = Self {
             auth_token,
             forward_guard,
         };
-        drop(bridge.connect_websocket_with_retry(CONTROL_PATH).await?);
-        Ok(bridge)
+        let mut last_error = None;
+
+        for attempt in 0..2 {
+            bootstrap_bridge(bridge.forward_guard.serial.as_deref(), &bridge.auth_token).await?;
+            match bridge.connect_websocket_with_retry(CONTROL_PATH).await {
+                Ok(socket) => {
+                    drop(socket);
+                    return Ok(bridge);
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                    if attempt == 0 {
+                        sleep(CONNECT_RETRY_DELAY).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| anyhow!("failed to bootstrap Android desktop bridge")))
     }
 
     fn auth_token(&self) -> &str {
