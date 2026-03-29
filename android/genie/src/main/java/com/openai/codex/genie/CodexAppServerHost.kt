@@ -243,6 +243,7 @@ class CodexAppServerHost(
                     JSONObject(message.toString())
                         .put("id", remoteRequest.remoteRequestId)
                         .toString(),
+                    remoteRequest.connectionId,
                 )
             }
             return

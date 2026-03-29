@@ -131,6 +131,13 @@ class AgentBridgeClient(
 
     fun sendRemoteAppServerMessage(message: String) {
         val connectionId = currentRemoteConnectionId ?: return
+        sendRemoteAppServerMessage(message, connectionId)
+    }
+
+    fun sendRemoteAppServerMessage(
+        message: String,
+        connectionId: String,
+    ) {
         sendMessage(
             JSONObject()
                 .put("kind", KIND_REMOTE_SERVER_MESSAGE)

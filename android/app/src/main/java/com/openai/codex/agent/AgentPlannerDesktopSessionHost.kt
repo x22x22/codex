@@ -396,8 +396,13 @@ internal class AgentPlannerDesktopSessionHost(
                             childSessionIds = result.childSessionIds,
                         )
                     if (heldForInspection) {
+                        val childSummary = if (result.childSessionIds.size == 1) {
+                            "child session ${result.childSessionIds.single()} is paused and attachable"
+                        } else {
+                            "child sessions ${result.childSessionIds.joinToString(", ")} are paused and attachable"
+                        }
                         publishTrace(
-                            "Planner completed; child sessions remain attachable for inspection until this planner attach detaches.",
+                            "Planner completed; $childSummary. Attach ${if (result.childSessionIds.size == 1) "it" else "one of them"} from the desktop to continue while this planner remains attached.",
                         )
                     } else {
                         publishTrace(
