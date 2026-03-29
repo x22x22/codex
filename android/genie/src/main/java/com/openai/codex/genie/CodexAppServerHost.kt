@@ -81,6 +81,7 @@ class CodexAppServerHost(
     private var activeThreadId: String? = null
     @Volatile
     private var remoteProxyState: RemoteProxyState? = null
+    private var announcedStagedPromptAwaitingDesktopInput = false
     private val idleDesktopAttachSession = DesktopSessionBootstrap.isIdleAttachPrompt(request.prompt)
     private val stagedDelegatedPrompt = DesktopSessionBootstrap.stagedInitialPrompt(request.prompt)
     private var initialTurnStarted = false
@@ -655,6 +656,9 @@ class CodexAppServerHost(
             return
         }
         val delegatedPrompt = stagedDelegatedPrompt ?: return
+        if (hasActiveRemoteDesktopAttach()) {
+            return
+        }
         val threadId = activeThreadId ?: return
         val inspectionHold = runCatching {
             bridgeClient.readDesktopInspectionHold()
@@ -670,6 +674,11 @@ class CodexAppServerHost(
         )
         startTurn(threadId, model, delegatedPrompt)
         initialTurnStarted = true
+    }
+
+    private fun hasActiveRemoteDesktopAttach(): Boolean {
+        val proxyState = remoteProxyState ?: return false
+        return proxyState.connectionId == bridgeClient.currentRemoteConnectionId()
     }
 
     private fun publishResultOnce(text: String) {
@@ -849,9 +858,25 @@ class CodexAppServerHost(
 
     private fun handleRemoteProxyNotification(message: JSONObject) {
         when (message.optString("method")) {
-            "initialized" -> replayFrameworkEventsToRemote()
+            "initialized" -> {
+                replayFrameworkEventsToRemote()
+                maybeAnnounceStagedPromptAwaitingDesktopInput()
+            }
             else -> sendMessage(JSONObject(message.toString()))
         }
+    }
+
+    private fun maybeAnnounceStagedPromptAwaitingDesktopInput() {
+        if (!idleDesktopAttachSession || initialTurnStarted || stagedDelegatedPrompt == null) {
+            return
+        }
+        if (!hasActiveRemoteDesktopAttach() || announcedStagedPromptAwaitingDesktopInput) {
+            return
+        }
+        announcedStagedPromptAwaitingDesktopInput = true
+        publishFrameworkTrace(
+            "Desktop attach is active for this staged Genie. The delegated objective is loaded as context and will stay paused until you send the first prompt.",
+        )
     }
 
     private fun publishFrameworkTrace(message: String) {
