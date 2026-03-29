@@ -26,6 +26,7 @@
 //! progress indicators; once commentary completes and stream queues drain, we
 //! re-show it so users still see turn-in-progress state between output bursts.
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -2963,26 +2964,17 @@ impl ChatWidget {
         let mut failed = Vec::new();
         let mut cancelled = Vec::new();
 
-        if let Some(expected_servers) = &self.mcp_startup_expected_servers
-            && !expected_servers.is_empty()
-        {
-            for name in expected_servers {
-                match current.get(name) {
-                    Some(McpStartupStatus::Ready) => {}
-                    Some(McpStartupStatus::Failed { .. }) => failed.push(name.clone()),
-                    Some(McpStartupStatus::Cancelled | McpStartupStatus::Starting) | None => {
-                        cancelled.push(name.clone());
-                    }
-                }
-            }
-        } else {
-            for (name, state) in current {
-                match state {
-                    McpStartupStatus::Ready => {}
-                    McpStartupStatus::Failed { .. } => failed.push(name.clone()),
-                    McpStartupStatus::Cancelled | McpStartupStatus::Starting => {
-                        cancelled.push(name.clone());
-                    }
+        let mut server_names: BTreeSet<String> = current.keys().cloned().collect();
+        if let Some(expected_servers) = &self.mcp_startup_expected_servers {
+            server_names.extend(expected_servers.iter().cloned());
+        }
+
+        for name in server_names {
+            match current.get(&name) {
+                Some(McpStartupStatus::Ready) => {}
+                Some(McpStartupStatus::Failed { .. }) => failed.push(name),
+                Some(McpStartupStatus::Cancelled | McpStartupStatus::Starting) | None => {
+                    cancelled.push(name);
                 }
             }
         }
