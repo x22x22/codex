@@ -53,9 +53,14 @@ Attach lifecycle semantics:
   desktop TUI can send follow-up prompts.
 - When an attached planner session finishes planning and spawns child Genie
   sessions, the planner stays attached instead of closing.
-- Child Genie sessions spawned by an attached planner are held open for
-  inspection after their turn completes; they remain `attachable` until the
-  planner attach detaches.
+- Child Genie sessions spawned while the planner is attached now start in idle
+  desktop-attach mode instead of immediately running their delegated prompt.
+- Those child sessions receive the same bridge-provisioned setup state they
+  would have had for an immediate start, but their first turn is paused until
+  the attached desktop client sends a prompt.
+- The planner-computed delegated objective is staged inside the Genie runtime as
+  task context. If the planner later detaches before the user manually starts
+  the child, the Genie falls back to auto-starting that staged objective.
 - Detaching the planner releases that hold, allowing completed child sessions to
   finalize and the parent roll-up to settle normally.
 - Cancelling a direct AGENT parent session is tree-scoped: it cancels the
@@ -74,6 +79,8 @@ The desktop entrypoint is:
 - `codex android sessions cancel [--serial SERIAL] SESSION_ID`
 - `codex android sessions attach-target [--serial SERIAL] SESSION_ID`
 - `codex android sessions attach [--serial SERIAL] SESSION_ID`
+  The attach flow forces `disable_paste_burst=true` for that TUI session so scripted
+  prompt injection remains submit-safe when text and Enter arrive in a tight burst.
 
 `attach` opens the existing remote app-server-backed Codex TUI against a
 session websocket path returned by the device bridge, so the desktop attaches

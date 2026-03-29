@@ -262,6 +262,7 @@ pub async fn run(
                 let thread_id = required_string(&attach, "threadId")?;
                 let websocket_path = required_string(&attach, "websocketPath")?;
                 let remote = format!("ws://127.0.0.1:{}{websocket_path}", bridge.local_port());
+                let remote_auth_token = bridge.auth_token().to_string();
 
                 let mut interactive = root_interactive;
                 interactive.resume_picker = false;
@@ -282,15 +283,20 @@ pub async fn run(
                     .config_overrides
                     .raw_overrides
                     .push("features.tui_app_server=true".to_string());
+                interactive
+                    .config_overrides
+                    .raw_overrides
+                    .push("disable_paste_burst=true".to_string());
 
                 let exit_info = super::run_interactive_tui_with_remote_auth_token(
                     interactive,
                     Some(remote),
-                    Some(bridge.auth_token().to_string()),
+                    Some(remote_auth_token),
                     arg0_paths,
                 )
                 .await
                 .map_err(anyhow::Error::from)?;
+                drop(bridge);
                 Ok(Some(exit_info))
             }
         },
