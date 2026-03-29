@@ -226,7 +226,8 @@ fn strip_descriptions_tool(spec: &mut ToolSpec) {
         ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
             strip_descriptions_schema(parameters);
         }
-        ToolSpec::Freeform(_)
+        ToolSpec::Namespace(_)
+        | ToolSpec::Freeform(_)
         | ToolSpec::LocalShell {}
         | ToolSpec::ImageGeneration { .. }
         | ToolSpec::WebSearch { .. } => {}
@@ -2220,7 +2221,8 @@ fn search_tool_description_handles_no_enabled_apps() {
         panic!("expected tool_search tool");
     };
 
-    assert!(description.contains("None currently enabled."));
+    assert!(description.contains("agents"));
+    assert!(description.contains("Agent collaboration tools for spawning, messaging, waiting on, listing, and closing subagents."));
     assert!(!description.contains("{{app_descriptions}}"));
 }
 
