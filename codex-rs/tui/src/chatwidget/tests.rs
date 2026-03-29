@@ -2437,7 +2437,7 @@ fn status_line_text(chat: &ChatWidget) -> Option<String> {
 }
 
 async fn subagent_panel_is_not_flushed_into_transcript_history() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let state = Arc::new(StdMutex::new(SubagentPanelState {
         started_at: Instant::now(),
@@ -2452,7 +2452,10 @@ async fn subagent_panel_is_not_flushed_into_transcript_history() {
             latest_update_at: Instant::now(),
         }],
     }));
-    chat.on_subagent_panel_updated(Arc::new(SubagentStatusCell::new(Arc::clone(&state), true)));
+    chat.on_subagent_panel_updated(Arc::new(SubagentStatusCell::new(
+        Arc::clone(&state),
+        /*animations_enabled*/ true,
+    )));
 
     chat.add_to_history(history_cell::new_error_event("follow-up cell".to_string()));
 
@@ -2475,7 +2478,7 @@ async fn subagent_panel_is_not_flushed_into_transcript_history() {
 
 #[tokio::test]
 async fn subagent_panel_mounts_while_placeholder_active_cell_exists_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.active_cell = Some(ChatWidget::placeholder_session_header_cell(
         chat.config_ref(),
     ));
@@ -2498,7 +2501,10 @@ async fn subagent_panel_mounts_while_placeholder_active_cell_exists_snapshot() {
             latest_update_at: Instant::now(),
         }],
     }));
-    chat.on_subagent_panel_updated(Arc::new(SubagentStatusCell::new(Arc::clone(&state), false)));
+    chat.on_subagent_panel_updated(Arc::new(SubagentStatusCell::new(
+        Arc::clone(&state),
+        /*animations_enabled*/ false,
+    )));
 
     assert!(
         chat.active_cell
