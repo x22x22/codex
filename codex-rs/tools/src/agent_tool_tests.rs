@@ -63,10 +63,50 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         })
     );
     assert_eq!(required, Some(vec!["task_name".to_string()]));
+    let Some(JsonSchema::Array { items, .. }) = properties.get("model_fallback_list") else {
+        panic!("spawn_agent v2 should define model_fallback_list as an array of objects");
+    };
+    let JsonSchema::Object {
+        properties: model_fallback_item_properties,
+        required: Some(model_fallback_item_required),
+        ..
+    } = items.as_ref()
+    else {
+        panic!("spawn_agent v2 model_fallback_list items should be objects");
+    };
+    assert_eq!(
+        model_fallback_item_properties.get("model"),
+        Some(&JsonSchema::String {
+            description: Some(
+                "Model to try. Must be a model slug from the current model picker list."
+                    .to_string(),
+            ),
+        })
+    );
+    assert_eq!(model_fallback_item_required, &vec!["model".to_string()]);
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
         json!(["agent_id", "task_name", "nickname"])
     );
+}
+
+#[test]
+fn spawn_agent_tool_v1_includes_model_fallback_list() {
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) =
+        create_spawn_agent_tool_v1(SpawnAgentToolOptions {
+            available_models: &[model_preset("visible", /*show_in_picker*/ true)],
+            agent_type_description: "role help".to_string(),
+        })
+    else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let JsonSchema::Object { properties, .. } = parameters else {
+        panic!("spawn_agent should use object params");
+    };
+    let Some(JsonSchema::Array { .. }) = properties.get("model_fallback_list") else {
+        panic!("model_fallback_list should be an array");
+    };
+    assert!(properties.contains_key("model_fallback_list"));
 }
 
 #[test]
