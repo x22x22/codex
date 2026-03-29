@@ -47,9 +47,9 @@ mod mcp_server_elicitation;
 mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
+mod title_setup;
 pub(crate) use app_link_view::AppLinkElicitationTarget;
 pub(crate) use app_link_view::AppLinkSuggestionType;
-mod title_setup;
 pub(crate) use app_link_view::AppLinkView;
 pub(crate) use app_link_view::AppLinkViewParams;
 pub(crate) use approval_overlay::ApprovalOverlay;
@@ -144,7 +144,6 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
-use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -866,12 +865,6 @@ impl BottomPane {
         }
     }
 
-    /// Update custom prompts available for the slash popup.
-    pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
-        self.composer.set_custom_prompts(prompts);
-        self.request_redraw();
-    }
-
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }
@@ -1376,7 +1369,7 @@ mod tests {
         });
 
         // Start a running task so the status indicator is active above the composer.
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
 
         // Push an approval modal (e.g., command approval) which should hide the status view.
         pane.push_approval_request(exec_request(), &features);
@@ -1443,7 +1436,7 @@ mod tests {
         });
 
         // Begin a task: show initial status.
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
 
         // Use a height that allows the status line to be visible above the composer.
         let area = Rect::new(0, 0, 40, 6);
@@ -1470,10 +1463,10 @@ mod tests {
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
 
         // Use height == desired_height; expect spacer + status + composer rows without trailing padding.
-        let height = pane.desired_height(30);
+        let height = pane.desired_height(/*width*/ 30);
         assert!(
             height >= 3,
             "expected at least 3 rows to render spacer, status, and composer; got {height}"
@@ -1500,7 +1493,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
 
         let width = 48;
         let height = pane.desired_height(width);
@@ -1523,7 +1516,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
         let width = 120;
         let before = pane.desired_height(width);
 
@@ -1552,7 +1545,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
         pane.update_status(
             "Working".to_string(),
             Some("First detail line\nSecond detail line".to_string()),
@@ -1589,7 +1582,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
         pane.set_pending_input_preview(
             vec!["Queued follow-up question".to_string()],
             Vec::new(),
@@ -1621,7 +1614,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
         pane.set_pending_input_preview(
             vec!["Queued follow-up question".to_string()],
             Vec::new(),
@@ -1708,14 +1701,12 @@ mod tests {
                 interface: None,
                 dependencies: None,
                 policy: None,
-                permission_profile: None,
-                managed_network_override: None,
                 path_to_skills_md: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
 
         // Repro: a running task + skill popup + Esc should dismiss the popup, not interrupt.
         pane.insert_str("$");
@@ -1753,7 +1744,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
 
         // Repro: a running task + slash-command popup + Esc should not interrupt the task.
         pane.insert_str("/");
@@ -1788,7 +1779,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
 
         // Repro: `/agent ` hides the popup (cursor past command name). Esc should
         // keep editing command text instead of interrupting the running task.
@@ -1824,7 +1815,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
         pane.show_selection_view(SelectionViewParams {
             title: Some("Agents".to_string()),
             items: vec![SelectionItem {
@@ -1872,7 +1863,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
 
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 

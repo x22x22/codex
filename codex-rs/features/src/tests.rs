@@ -115,9 +115,9 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
-fn tool_suggest_is_stable_and_disabled_by_default() {
+fn tool_suggest_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolSuggest.stage(), Stage::Stable);
-    assert_eq!(Feature::ToolSuggest.default_enabled(), false);
+    assert_eq!(Feature::ToolSuggest.default_enabled(), true);
 }
 
 #[test]
@@ -145,9 +145,9 @@ fn image_generation_is_under_development() {
 }
 
 #[test]
-fn tool_call_mcp_elicitation_is_stable_and_disabled_by_default() {
+fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolCallMcpElicitation.stage(), Stage::Stable);
-    assert_eq!(Feature::ToolCallMcpElicitation.default_enabled(), false);
+    assert_eq!(Feature::ToolCallMcpElicitation.default_enabled(), true);
 }
 
 #[test]
@@ -195,10 +195,10 @@ fn enable_fanout_normalization_enables_multi_agent_one_way() {
 #[test]
 fn apps_require_feature_flag_and_chatgpt_auth() {
     let mut features = Features::with_defaults();
-    assert!(!features.apps_enabled_for_auth(None));
+    assert!(!features.apps_enabled_for_auth(/*auth*/ None));
 
     features.enable(Feature::Apps);
-    assert!(!features.apps_enabled_for_auth(None));
+    assert!(!features.apps_enabled_for_auth(/*auth*/ None));
 
     let api_key_auth = codex_login::CodexAuth::from_api_key("test-api-key");
     assert!(!features.apps_enabled_for_auth(Some(&api_key_auth)));
@@ -256,7 +256,7 @@ fn unstable_warning_event_only_mentions_enabled_under_development_features() {
 
     let warning = unstable_features_warning_event(
         Some(&configured_features),
-        false,
+        /*suppress_unstable_features_warning*/ false,
         &features,
         "/tmp/config.toml",
     )
