@@ -6053,12 +6053,7 @@ mod tests {
         });
 
         assert!(ignored);
-        let rendered = app
-            .transcript_cells
-            .last()
-            .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 80)))
-            .expect("expected info message after same-thread resume");
-        assert!(rendered.contains("Already viewing /tmp/project."));
+        assert_eq!(app.current_displayed_thread_id(), Some(thread_id));
     }
 
     #[tokio::test]
