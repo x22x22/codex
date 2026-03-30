@@ -32,8 +32,8 @@ use crate::user_shell_command::user_shell_command_record_item;
 use codex_sandboxing::SandboxType;
 
 use super::SessionTask;
-use super::TaskCompletion;
 use super::SessionTaskContext;
+use super::TaskCompletion;
 use crate::codex::Session;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;

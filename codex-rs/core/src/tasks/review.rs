@@ -30,8 +30,8 @@ use codex_protocol::user_input::UserInput;
 use std::sync::LazyLock;
 
 use super::SessionTask;
-use super::TaskCompletion;
 use super::SessionTaskContext;
+use super::TaskCompletion;
 
 static REVIEW_EXIT_SUCCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     let normalized =

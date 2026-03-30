@@ -53,8 +53,8 @@ use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::RolloutRecorderParams;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
-use crate::tasks::TaskCompletion;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::TaskCompletion;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -4559,7 +4559,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         Arc::clone(&tc),
         TaskCompletion::Completed(/*last_agent_message*/ None),
     )
-        .await;
+    .await;
 
     let history = sess.clone_history().await;
     let expected = ResponseItem::Message {

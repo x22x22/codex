@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use super::SessionTask;
-use super::TaskCompletion;
 use super::SessionTaskContext;
+use super::TaskCompletion;
 use crate::codex::TurnContext;
 use crate::state::TaskKind;
 use async_trait::async_trait;

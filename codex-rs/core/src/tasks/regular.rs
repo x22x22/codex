@@ -14,8 +14,8 @@ use tracing::Instrument;
 use tracing::trace_span;
 
 use super::SessionTask;
-use super::TaskCompletion;
 use super::SessionTaskContext;
+use super::TaskCompletion;
 
 #[derive(Default)]
 pub(crate) struct RegularTask;
