@@ -66,12 +66,16 @@ enum AndroidSessionsSubcommand {
     Read(AndroidSessionIdArgs),
     /// Create a new Android session draft without starting it.
     Create(AndroidCreateSessionArgs),
+    /// Create a new Android session draft and immediately attach to it.
+    CreateAttach(AndroidCreateAttachSessionArgs),
     /// Start a previously created Android session draft.
     Start(AndroidStartSessionArgs),
     /// Answer a waiting Android session question.
     Answer(AndroidAnswerSessionArgs),
     /// Cancel an Android session.
     Cancel(AndroidSessionIdArgs),
+    /// Delete every Android session on the target device.
+    Clear(AndroidClearSessionsArgs),
     /// Attach the target surface for an Android session.
     AttachTarget(AndroidSessionIdArgs),
     /// Attach the Codex TUI to a live Android session runtime.
@@ -120,6 +124,28 @@ struct AndroidCreateSessionArgs {
 }
 
 #[derive(Debug, Args)]
+struct AndroidCreateAttachSessionArgs {
+    #[clap(flatten)]
+    device: AndroidDeviceArgs,
+
+    /// Optional target package to create as an app-scoped HOME draft.
+    #[arg(long = "target-package", value_name = "PACKAGE")]
+    target_package: Option<String>,
+
+    /// Optional model override stored on the draft session.
+    #[arg(long = "model", value_name = "MODEL")]
+    model: Option<String>,
+
+    /// Optional reasoning effort override stored on the draft session.
+    #[arg(long = "reasoning-effort", value_name = "EFFORT")]
+    reasoning_effort: Option<String>,
+
+    /// Disable alternate screen mode for the attached TUI.
+    #[arg(long = "no-alt-screen", default_value_t = false)]
+    no_alt_screen: bool,
+}
+
+#[derive(Debug, Args)]
 struct AndroidStartSessionArgs {
     #[clap(flatten)]
     device: AndroidDeviceArgs,
@@ -145,6 +171,16 @@ struct AndroidAnswerSessionArgs {
     /// Free-form answer text sent back to the session.
     #[arg(long = "answer", value_name = "TEXT")]
     answer: String,
+}
+
+#[derive(Debug, Args)]
+struct AndroidClearSessionsArgs {
+    #[clap(flatten)]
+    device: AndroidDeviceArgs,
+
+    /// Required safeguard for deleting every Android session on the device.
+    #[arg(long = "all", required = true, default_value_t = false)]
+    all: bool,
 }
 
 #[derive(Debug, Args)]
@@ -186,20 +222,41 @@ pub async fn run(
                 Ok(None)
             }
             AndroidSessionsSubcommand::Create(args) => {
-                let bridge = AndroidBridgeClient::connect(args.device.serial).await?;
+                let bridge = AndroidBridgeClient::connect(args.device.serial.clone()).await?;
                 print_json(
-                    bridge
-                        .rpc(
-                            "androidSession/create",
-                            json!({
-                                "targetPackage": args.target_package,
-                                "model": args.model,
-                                "reasoningEffort": args.reasoning_effort,
-                            }),
-                        )
-                        .await?,
+                    create_session_draft(
+                        &bridge,
+                        args.target_package.as_ref(),
+                        args.model.as_ref(),
+                        args.reasoning_effort.as_ref(),
+                    )
+                    .await?,
                 )?;
                 Ok(None)
+            }
+            AndroidSessionsSubcommand::CreateAttach(args) => {
+                let device_serial = args.device.serial.clone();
+                let bridge = AndroidBridgeClient::connect(device_serial.clone()).await?;
+                let create_result = create_session_draft(
+                    &bridge,
+                    args.target_package.as_ref(),
+                    args.model.as_ref(),
+                    args.reasoning_effort.as_ref(),
+                )
+                .await?;
+                let session_id = required_string(&create_result, "sessionId")?;
+                let exit_info = attach_session_to_runtime(
+                    bridge,
+                    device_serial,
+                    session_id,
+                    root_config_overrides,
+                    root_interactive,
+                    /*interactive_args*/ None,
+                    args.no_alt_screen,
+                    arg0_paths,
+                )
+                .await?;
+                Ok(Some(exit_info))
             }
             AndroidSessionsSubcommand::Start(args) => {
                 let bridge = AndroidBridgeClient::connect(args.device.serial).await?;
@@ -243,6 +300,15 @@ pub async fn run(
                 )?;
                 Ok(None)
             }
+            AndroidSessionsSubcommand::Clear(args) => {
+                let bridge = AndroidBridgeClient::connect(args.device.serial).await?;
+                print_json(
+                    bridge
+                        .rpc("androidSession/clear", json!({ "all": args.all }))
+                        .await?,
+                )?;
+                Ok(None)
+            }
             AndroidSessionsSubcommand::AttachTarget(args) => {
                 let bridge = AndroidBridgeClient::connect(args.device.serial).await?;
                 print_json(
@@ -258,55 +324,95 @@ pub async fn run(
             AndroidSessionsSubcommand::Attach(args) => {
                 let device_serial = args.device.serial.clone();
                 let bridge = AndroidBridgeClient::connect(device_serial.clone()).await?;
-                let attach = bridge
-                    .rpc(
-                        "androidSession/attach",
-                        json!({ "sessionId": args.session_id }),
-                    )
-                    .await?;
-                let thread_id = required_string(&attach, "threadId")?;
-                let websocket_path = required_string(&attach, "websocketPath")?;
-                let remote = format!("ws://127.0.0.1:{}{websocket_path}", bridge.local_port());
-                let remote_auth_token = bridge.auth_token().to_string();
-                start_desktop_attach_keepalive(device_serial.as_deref()).await?;
-
-                let mut interactive = root_interactive;
-                interactive.resume_picker = false;
-                interactive.resume_last = false;
-                interactive.resume_session_id = Some(thread_id);
-                interactive.resume_show_all = false;
-                interactive.resume_include_non_interactive = false;
-                interactive.fork_picker = false;
-                interactive.fork_last = false;
-                interactive.fork_session_id = None;
-                interactive.fork_show_all = false;
-                super::merge_interactive_cli_flags(&mut interactive, args.interactive);
-                super::prepend_config_flags(
-                    &mut interactive.config_overrides,
+                let no_alt_screen = args.interactive.no_alt_screen;
+                let exit_info = attach_session_to_runtime(
+                    bridge,
+                    device_serial,
+                    args.session_id,
                     root_config_overrides,
-                );
-                interactive
-                    .config_overrides
-                    .raw_overrides
-                    .push("features.tui_app_server=true".to_string());
-                interactive
-                    .config_overrides
-                    .raw_overrides
-                    .push("disable_paste_burst=true".to_string());
-
-                let exit_info = super::run_interactive_tui_with_remote_auth_token(
-                    interactive,
-                    Some(remote),
-                    Some(remote_auth_token),
+                    root_interactive,
+                    Some(args.interactive),
+                    no_alt_screen,
                     arg0_paths,
                 )
-                .await
-                .map_err(anyhow::Error::from)?;
-                drop(bridge);
+                .await?;
                 Ok(Some(exit_info))
             }
         },
     }
+}
+
+async fn create_session_draft(
+    bridge: &AndroidBridgeClient,
+    target_package: Option<&String>,
+    model: Option<&String>,
+    reasoning_effort: Option<&String>,
+) -> anyhow::Result<Value> {
+    bridge
+        .rpc(
+            "androidSession/create",
+            json!({
+                "targetPackage": target_package,
+                "model": model,
+                "reasoningEffort": reasoning_effort,
+            }),
+        )
+        .await
+}
+
+async fn attach_session_to_runtime(
+    bridge: AndroidBridgeClient,
+    device_serial: Option<String>,
+    session_id: String,
+    root_config_overrides: CliConfigOverrides,
+    root_interactive: TuiCli,
+    interactive_args: Option<TuiCli>,
+    no_alt_screen: bool,
+    arg0_paths: Arg0DispatchPaths,
+) -> anyhow::Result<AppExitInfo> {
+    let attach = bridge
+        .rpc("androidSession/attach", json!({ "sessionId": session_id }))
+        .await?;
+    let thread_id = required_string(&attach, "threadId")?;
+    let websocket_path = required_string(&attach, "websocketPath")?;
+    let remote = format!("ws://127.0.0.1:{}{websocket_path}", bridge.local_port());
+    let remote_auth_token = bridge.auth_token().to_string();
+    start_desktop_attach_keepalive(device_serial.as_deref()).await?;
+
+    let mut interactive = root_interactive;
+    interactive.resume_picker = false;
+    interactive.resume_last = false;
+    interactive.resume_session_id = Some(thread_id);
+    interactive.resume_show_all = false;
+    interactive.resume_include_non_interactive = false;
+    interactive.fork_picker = false;
+    interactive.fork_last = false;
+    interactive.fork_session_id = None;
+    interactive.fork_show_all = false;
+    if let Some(interactive_args) = interactive_args {
+        super::merge_interactive_cli_flags(&mut interactive, interactive_args);
+    }
+    interactive.no_alt_screen = interactive.no_alt_screen || no_alt_screen;
+    super::prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
+    interactive
+        .config_overrides
+        .raw_overrides
+        .push("features.tui_app_server=true".to_string());
+    interactive
+        .config_overrides
+        .raw_overrides
+        .push("disable_paste_burst=true".to_string());
+
+    let exit_info = super::run_interactive_tui_with_remote_auth_token(
+        interactive,
+        Some(remote),
+        Some(remote_auth_token),
+        arg0_paths,
+    )
+    .await
+    .map_err(anyhow::Error::from)?;
+    drop(bridge);
+    Ok(exit_info)
 }
 
 struct AndroidBridgeClient {

@@ -250,6 +250,7 @@ object DesktopBridgeServer {
                     "androidSession/start" -> startSession(params)
                     "androidSession/answer" -> answerQuestion(params)
                     "androidSession/cancel" -> cancelSession(params)
+                    "androidSession/clear" -> clearSessions(params)
                     "androidSession/attachTarget" -> attachTarget(params)
                     "androidSession/attach" -> attachSession(params)
                     else -> {
@@ -345,6 +346,58 @@ object DesktopBridgeServer {
             sessionController.cancelSessionTree(sessionId)
             unregisterCreatedHomeSessionUiLease(sessionId)
             return JSONObject().put("ok", true)
+        }
+
+        private fun clearSessions(params: JSONObject?): JSONObject {
+            require(params?.optBoolean("all") == true) { "sessions clear requires --all" }
+
+            val clearedSessionIds = linkedSetOf<String>()
+            val failedSessionIds = linkedMapOf<String, String>()
+            repeat(32) {
+                val sessions = sessionController.loadSnapshot(null).sessions
+                if (sessions.isEmpty()) {
+                    return JSONObject()
+                        .put("ok", failedSessionIds.isEmpty())
+                        .put("clearedSessionIds", JSONArray(clearedSessionIds.toList()))
+                        .put("failedSessionIds", JSONObject(failedSessionIds))
+                        .put("remainingSessionIds", JSONArray())
+                }
+
+                val sessionIdsBefore = sessions.map(AgentSessionDetails::sessionId).toSet()
+                val sessionsById = sessions.associateBy(AgentSessionDetails::sessionId)
+                val candidates = sessions.filter { session ->
+                    session.parentSessionId == null ||
+                        !sessionsById.containsKey(session.parentSessionId)
+                }.ifEmpty { sessions }
+
+                candidates.forEach { session ->
+                    runCatching {
+                        sessionController.cancelSessionTree(session.sessionId)
+                        unregisterCreatedHomeSessionUiLease(session.sessionId)
+                    }.onFailure { err ->
+                        failedSessionIds[session.sessionId] = err.message ?: err::class.java.simpleName
+                    }
+                }
+
+                val remainingSessions = sessionController.loadSnapshot(null).sessions
+                val remainingSessionIds = remainingSessions.map(AgentSessionDetails::sessionId).toSet()
+                clearedSessionIds += sessionIdsBefore - remainingSessionIds
+                if (remainingSessionIds.size == sessionIdsBefore.size) {
+                    return JSONObject()
+                        .put("ok", false)
+                        .put("clearedSessionIds", JSONArray(clearedSessionIds.toList()))
+                        .put("failedSessionIds", JSONObject(failedSessionIds))
+                        .put("remainingSessionIds", JSONArray(remainingSessionIds.toList()))
+                }
+            }
+
+            val remainingSessionIds = sessionController.loadSnapshot(null).sessions
+                .map(AgentSessionDetails::sessionId)
+            return JSONObject()
+                .put("ok", false)
+                .put("clearedSessionIds", JSONArray(clearedSessionIds.toList()))
+                .put("failedSessionIds", JSONObject(failedSessionIds))
+                .put("remainingSessionIds", JSONArray(remainingSessionIds))
         }
 
         private fun attachTarget(params: JSONObject?): JSONObject {

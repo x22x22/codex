@@ -35,10 +35,12 @@ available in the device UI:
 
 - `codex android sessions list`
 - `codex android sessions create`
+- `codex android sessions create-attach`
 - `codex android sessions start`
 - `codex android sessions read`
 - `codex android sessions answer`
 - `codex android sessions cancel`
+- `codex android sessions clear --all`
 - `codex android sessions attach-target`
 - `codex android sessions attach`
 
@@ -81,9 +83,11 @@ The desktop entrypoint is:
 - `codex android sessions list [--serial SERIAL]`
 - `codex android sessions read [--serial SERIAL] SESSION_ID`
 - `codex android sessions create [--serial SERIAL] [--target-package PACKAGE] [--model MODEL] [--reasoning-effort EFFORT]`
+- `codex android sessions create-attach [--serial SERIAL] [--target-package PACKAGE] [--model MODEL] [--reasoning-effort EFFORT]`
 - `codex android sessions start [--serial SERIAL] SESSION_ID --prompt "..."`
 - `codex android sessions answer [--serial SERIAL] SESSION_ID --answer "..."`
 - `codex android sessions cancel [--serial SERIAL] SESSION_ID`
+- `codex android sessions clear [--serial SERIAL] --all`
 - `codex android sessions attach-target [--serial SERIAL] SESSION_ID`
 - `codex android sessions attach [--serial SERIAL] SESSION_ID`
   The attach flow forces `disable_paste_burst=true` for that TUI session so scripted
@@ -115,9 +119,17 @@ Draft-session behavior:
 - `sessions start` remains the non-interactive path for draft launch when the
   caller wants to provide the first prompt on the command line instead of
   through an attached TUI.
+- `sessions create-attach` is the convenience path for
+  `sessions create` followed immediately by `sessions attach` on the new draft.
 - HOME-scoped drafts require a session-UI lease while they remain
   `STATE_CREATED`; the desktop bridge holds that lease on behalf of the CLI
   until idle attach, `sessions start`, or `sessions cancel`.
+
+Session cleanup behavior:
+
+- `sessions clear --all` is an explicit destructive command that cancels and
+  removes every visible Agent and Genie session on the target device until the
+  framework session list is empty or no further progress is possible.
 
 ## Android-side design
 

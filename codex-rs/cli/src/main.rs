@@ -1972,6 +1972,28 @@ mod tests {
     }
 
     #[test]
+    fn android_sessions_create_attach_subcommand_parses() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "android",
+            "sessions",
+            "create-attach",
+            "--target-package",
+            "com.android.settings",
+            "--no-alt-screen",
+        ])
+        .expect("parse");
+        assert!(matches!(cli.subcommand, Some(Subcommand::Android(_))));
+    }
+
+    #[test]
+    fn android_sessions_clear_all_subcommand_parses() {
+        let cli = MultitoolCli::try_parse_from(["codex", "android", "sessions", "clear", "--all"])
+            .expect("parse");
+        assert!(matches!(cli.subcommand, Some(Subcommand::Android(_))));
+    }
+
+    #[test]
     fn reject_remote_mode_for_non_interactive_subcommands() {
         let err = reject_remote_mode_for_subcommand(Some("127.0.0.1:4500"), None, "exec")
             .expect_err("non-interactive subcommands should reject --remote");
