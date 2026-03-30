@@ -12,6 +12,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
+use crate::provider_auth::ProviderAuthResolver;
 use crate::request_auth::RequestUnauthorizedRecovery;
 use crate::request_auth::UnauthorizedRecoveryOutcome;
 use crate::request_auth::resolve_request_auth;
@@ -183,6 +184,7 @@ pub struct ModelsManager {
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
     provider: ModelProviderInfo,
+    provider_auth: ProviderAuthResolver,
 }
 
 impl ModelsManager {
@@ -234,6 +236,7 @@ impl ModelsManager {
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
+            provider_auth: ProviderAuthResolver::new(&provider),
             provider,
         }
     }
@@ -398,7 +401,9 @@ impl ModelsManager {
             return Ok(());
         }
 
-        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt) {
+        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt)
+            && !self.provider.has_command_auth()
+        {
             if matches!(
                 refresh_strategy,
                 RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
@@ -438,13 +443,18 @@ impl ModelsManager {
             self.auth_manager.codex_api_key_env_enabled(),
         );
         let client_version = crate::models_manager::client_version_to_whole();
-        let mut unauthorized_recovery = RequestUnauthorizedRecovery::new(Some(&self.auth_manager));
+        let mut unauthorized_recovery =
+            RequestUnauthorizedRecovery::new(Some(&self.auth_manager), &self.provider_auth);
 
         // Only loop after a successful auth-recovery step so `/models` retries with
         // the same freshly resolved auth state as normal request paths.
         loop {
-            let request_auth =
-                resolve_request_auth(Some(&self.auth_manager), &self.provider).await?;
+            let request_auth = resolve_request_auth(
+                Some(&self.auth_manager),
+                &self.provider,
+                &self.provider_auth,
+            )
+            .await?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
                 auth_mode: request_auth
