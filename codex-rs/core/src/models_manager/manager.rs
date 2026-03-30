@@ -12,6 +12,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
+use crate::provider_auth::request_auth_source;
 use crate::request_auth::RequestAuthContext;
 use crate::request_auth::UnauthorizedRecoveryOutcome;
 use crate::response_debug_context::extract_response_debug_context;
@@ -232,7 +233,7 @@ impl ModelsManager {
             collaboration_modes_config,
             request_auth: RequestAuthContext::new(
                 Some(auth_manager.clone()),
-                /*external_request_auth_source*/ None,
+                request_auth_source(&provider),
             ),
             etag: RwLock::new(None),
             cache_manager,

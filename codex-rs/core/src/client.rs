@@ -102,6 +102,7 @@ use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+use crate::provider_auth::request_auth_source;
 use crate::request_auth::RequestAuthContext;
 use crate::request_auth::RequestUnauthorizedRecovery;
 use crate::request_auth::ResolvedRequestAuth;
@@ -261,10 +262,7 @@ impl ModelClient {
         let auth_env_telemetry = collect_auth_env_telemetry(&provider, codex_api_key_env_enabled);
         Self {
             state: Arc::new(ModelClientState {
-                request_auth: RequestAuthContext::new(
-                    auth_manager,
-                    /*external_request_auth_source*/ None,
-                ),
+                request_auth: RequestAuthContext::new(auth_manager, request_auth_source(&provider)),
                 conversation_id,
                 provider,
                 auth_env_telemetry,

@@ -9,6 +9,7 @@ use crate::auth::AuthMode;
 use crate::error::EnvVarError;
 use codex_api::Provider as ApiProvider;
 use codex_api::provider::RetryConfig as ApiRetryConfig;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use http::HeaderMap;
 use http::header::HeaderName;
 use http::header::HeaderValue;
@@ -17,8 +18,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
+use std::num::NonZeroU64;
 use std::time::Duration;
 
+const DEFAULT_PROVIDER_AUTH_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_PROVIDER_AUTH_REFRESH_INTERVAL_MS: u64 = 300_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
@@ -66,6 +70,73 @@ impl<'de> Deserialize<'de> for WireApi {
     }
 }
 
+/// Configuration for obtaining a provider bearer token from a command.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelProviderAuthInfo {
+    /// Command to execute. Bare names are resolved via `PATH`; paths are resolved against `cwd`.
+    pub command: String,
+
+    /// Command arguments.
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Maximum time to wait for the token command to exit successfully.
+    #[serde(default = "default_provider_auth_timeout_ms")]
+    pub timeout_ms: NonZeroU64,
+
+    /// Maximum age for the cached token before rerunning the command.
+    #[serde(default = "default_provider_auth_refresh_interval_ms")]
+    pub refresh_interval_ms: NonZeroU64,
+
+    /// Working directory used when running the token command.
+    #[serde(default = "default_provider_auth_cwd")]
+    pub cwd: AbsolutePathBuf,
+}
+
+impl ModelProviderAuthInfo {
+    pub(crate) fn timeout(&self) -> Duration {
+        Duration::from_millis(self.timeout_ms.get())
+    }
+
+    pub(crate) fn refresh_interval(&self) -> Duration {
+        Duration::from_millis(self.refresh_interval_ms.get())
+    }
+}
+
+fn default_provider_auth_timeout_ms() -> NonZeroU64 {
+    non_zero_u64(
+        DEFAULT_PROVIDER_AUTH_TIMEOUT_MS,
+        "model_providers.<id>.auth.timeout_ms",
+    )
+}
+
+fn default_provider_auth_refresh_interval_ms() -> NonZeroU64 {
+    non_zero_u64(
+        DEFAULT_PROVIDER_AUTH_REFRESH_INTERVAL_MS,
+        "model_providers.<id>.auth.refresh_interval_ms",
+    )
+}
+
+fn non_zero_u64(value: u64, field_name: &str) -> NonZeroU64 {
+    match NonZeroU64::new(value) {
+        Some(value) => value,
+        None => panic!("{field_name} must be non-zero"),
+    }
+}
+
+fn default_provider_auth_cwd() -> AbsolutePathBuf {
+    let deserializer = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(".");
+    if let Ok(cwd) = AbsolutePathBuf::deserialize(deserializer) {
+        return cwd;
+    }
+
+    match AbsolutePathBuf::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => panic!("provider auth cwd must resolve: {err}"),
+    }
+}
+
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -85,6 +156,9 @@ pub struct ModelProviderInfo {
     /// config is discouraged in favor of `env_key` for security reasons, but
     /// this may be necessary when using this programmatically.
     pub experimental_bearer_token: Option<String>,
+
+    /// Command-backed bearer-token configuration for this provider.
+    pub auth: Option<ModelProviderAuthInfo>,
 
     /// Which wire protocol this provider expects.
     #[serde(default)]
@@ -130,6 +204,36 @@ pub struct ModelProviderInfo {
 }
 
 impl ModelProviderInfo {
+    pub(crate) fn validate(&self) -> std::result::Result<(), String> {
+        let Some(auth) = self.auth.as_ref() else {
+            return Ok(());
+        };
+
+        if auth.command.trim().is_empty() {
+            return Err("provider auth.command must not be empty".to_string());
+        }
+
+        let mut conflicts = Vec::new();
+        if self.env_key.is_some() {
+            conflicts.push("env_key");
+        }
+        if self.experimental_bearer_token.is_some() {
+            conflicts.push("experimental_bearer_token");
+        }
+        if self.requires_openai_auth {
+            conflicts.push("requires_openai_auth");
+        }
+
+        if conflicts.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "provider auth cannot be combined with {}",
+                conflicts.join(", ")
+            ))
+        }
+    }
+
     fn build_header_map(&self) -> crate::error::Result<HeaderMap> {
         let capacity = self.http_headers.as_ref().map_or(0, HashMap::len)
             + self.env_http_headers.as_ref().map_or(0, HashMap::len);
@@ -246,6 +350,7 @@ impl ModelProviderInfo {
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
+            auth: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
@@ -276,6 +381,10 @@ impl ModelProviderInfo {
 
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
+    }
+
+    pub(crate) fn has_command_auth(&self) -> bool {
+        self.auth.is_some()
     }
 }
 
@@ -338,6 +447,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         wire_api,
         query_params: None,
         http_headers: None,
