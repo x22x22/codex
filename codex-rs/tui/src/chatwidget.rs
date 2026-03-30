@@ -26,6 +26,7 @@
 //! progress indicators; once commentary completes and stream queues drain, we
 //! re-show it so users still see turn-in-progress state between output bursts.
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -76,6 +77,8 @@ use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
@@ -795,6 +798,16 @@ pub(crate) struct ChatWidget {
     /// bottom pane is treated as "running" while this is populated, even if no agent turn is
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    /// Expected MCP servers for the current startup round, seeded from enabled local config.
+    mcp_startup_expected_servers: Option<HashSet<String>>,
+    /// After startup settles, ignore stale updates until enough notifications confirm a new round.
+    mcp_startup_ignore_updates_until_next_start: bool,
+    /// A lag signal for the next round means terminal-only updates are enough to settle it.
+    mcp_startup_allow_terminal_only_next_round: bool,
+    /// Buffers post-settle MCP startup updates until they cover a full fresh round.
+    mcp_startup_pending_next_round: HashMap<String, McpStartupStatus>,
+    /// Tracks whether the buffered next round has seen any `Starting` update yet.
+    mcp_startup_pending_next_round_saw_starting: bool,
     connectors_cache: ConnectorsCacheState,
     connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
@@ -2780,16 +2793,114 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    #[cfg(test)]
-    fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
-        let mut status = self.mcp_startup_status.take().unwrap_or_default();
-        if let McpStartupStatus::Failed { error } = &ev.status {
-            self.on_warning(error);
+    /// Record one MCP startup update, promoting it into either the active startup
+    /// round or a buffered "next" round.
+    ///
+    /// This path has to deal with lossy app-server delivery. After
+    /// `finish_mcp_startup()` or `finish_mcp_startup_after_lag()`, we briefly
+    /// ignore incoming updates so stale events from the just-finished round do not
+    /// reopen startup. While that guard is active we buffer updates for a possible
+    /// next round, and only reactivate once the buffered set is coherent enough to
+    /// treat as a fresh startup round.
+    fn update_mcp_startup_status(
+        &mut self,
+        server: String,
+        status: McpStartupStatus,
+        complete_when_settled: bool,
+    ) {
+        let mut activated_pending_round = false;
+        let startup_status = if self.mcp_startup_ignore_updates_until_next_start {
+            // Ignore-mode buffers the next plausible round so stale post-finish
+            // updates cannot immediately reopen startup. A fresh `Starting`
+            // update resets the buffer only if we have not already seen a
+            // pending-round `Starting`; this preserves valid interleavings like
+            // `alpha: Starting -> alpha: Ready -> beta: Starting`.
+            if matches!(status, McpStartupStatus::Starting)
+                && !self.mcp_startup_pending_next_round_saw_starting
+            {
+                self.mcp_startup_pending_next_round.clear();
+                self.mcp_startup_allow_terminal_only_next_round = false;
+            }
+            self.mcp_startup_pending_next_round_saw_starting |=
+                matches!(status, McpStartupStatus::Starting);
+            self.mcp_startup_pending_next_round.insert(server, status);
+            let Some(expected_servers) = &self.mcp_startup_expected_servers else {
+                return;
+            };
+            let saw_full_round = expected_servers.is_empty()
+                || expected_servers
+                    .iter()
+                    .all(|name| self.mcp_startup_pending_next_round.contains_key(name));
+            let saw_starting = self
+                .mcp_startup_pending_next_round
+                .values()
+                .any(|state| matches!(state, McpStartupStatus::Starting));
+            if !(saw_full_round
+                && (saw_starting || self.mcp_startup_allow_terminal_only_next_round))
+            {
+                return;
+            }
+
+            // The buffered map now looks like a complete next round, so promote it
+            // to the active round and resume normal completion tracking.
+            self.mcp_startup_ignore_updates_until_next_start = false;
+            self.mcp_startup_allow_terminal_only_next_round = false;
+            self.mcp_startup_pending_next_round_saw_starting = false;
+            activated_pending_round = true;
+            std::mem::take(&mut self.mcp_startup_pending_next_round)
+        } else {
+            // Normal path: fold the update into the active round and surface
+            // per-server failures immediately.
+            let mut startup_status = self.mcp_startup_status.take().unwrap_or_default();
+            if let McpStartupStatus::Failed { error } = &status {
+                self.on_warning(error);
+            }
+            startup_status.insert(server, status);
+            startup_status
+        };
+        if activated_pending_round {
+            // A promoted buffered round may already contain terminal failures.
+            for state in startup_status.values() {
+                if let McpStartupStatus::Failed { error } = state {
+                    self.on_warning(error);
+                }
+            }
         }
-        status.insert(ev.server, ev.status);
-        self.mcp_startup_status = Some(status);
+        self.mcp_startup_status = Some(startup_status);
         self.update_task_running_state();
+
+        // App-server-backed startup completes when every expected server has
+        // reported a non-Starting status. Lag handling can force an earlier
+        // settle via `finish_mcp_startup_after_lag()`.
+        if complete_when_settled
+            && let Some(current) = &self.mcp_startup_status
+            && let Some(expected_servers) = &self.mcp_startup_expected_servers
+            && !current.is_empty()
+            && expected_servers
+                .iter()
+                .all(|name| current.contains_key(name))
+            && current
+                .values()
+                .all(|state| !matches!(state, McpStartupStatus::Starting))
+        {
+            let mut failed = Vec::new();
+            let mut cancelled = Vec::new();
+            for (name, state) in current {
+                match state {
+                    McpStartupStatus::Ready => {}
+                    McpStartupStatus::Failed { .. } => failed.push(name.clone()),
+                    McpStartupStatus::Cancelled => cancelled.push(name.clone()),
+                    McpStartupStatus::Starting => {}
+                }
+            }
+            failed.sort();
+            cancelled.sort();
+            self.finish_mcp_startup(failed, cancelled);
+            return;
+        }
         if let Some(current) = &self.mcp_startup_status {
+            // Otherwise keep the status header focused on the remaining
+            // in-progress servers for the active round.
             let total = current.len();
             let mut starting: Vec<_> = current
                 .iter()
@@ -2827,27 +2938,102 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn set_mcp_startup_expected_servers<I>(&mut self, server_names: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.mcp_startup_expected_servers = Some(server_names.into_iter().collect());
+    }
+
     #[cfg(test)]
-    fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
-        let mut parts = Vec::new();
-        if !ev.failed.is_empty() {
-            let failed_servers: Vec<_> = ev.failed.iter().map(|f| f.server.clone()).collect();
-            parts.push(format!("failed: {}", failed_servers.join(", ")));
-        }
-        if !ev.cancelled.is_empty() {
+    fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
+        self.update_mcp_startup_status(ev.server, ev.status, /*complete_when_settled*/ false);
+    }
+
+    fn finish_mcp_startup(&mut self, failed: Vec<String>, cancelled: Vec<String>) {
+        if !cancelled.is_empty() {
             self.on_warning(format!(
                 "MCP startup interrupted. The following servers were not initialized: {}",
-                ev.cancelled.join(", ")
+                cancelled.join(", ")
             ));
+        }
+        let mut parts = Vec::new();
+        if !failed.is_empty() {
+            parts.push(format!("failed: {}", failed.join(", ")));
         }
         if !parts.is_empty() {
             self.on_warning(format!("MCP startup incomplete ({})", parts.join("; ")));
         }
 
         self.mcp_startup_status = None;
+        self.mcp_startup_ignore_updates_until_next_start = true;
+        self.mcp_startup_allow_terminal_only_next_round = false;
+        self.mcp_startup_pending_next_round.clear();
+        self.mcp_startup_pending_next_round_saw_starting = false;
         self.update_task_running_state();
         self.maybe_send_next_queued_input();
         self.request_redraw();
+    }
+
+    pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
+        if self.mcp_startup_ignore_updates_until_next_start {
+            if self.mcp_startup_pending_next_round.is_empty() {
+                self.mcp_startup_pending_next_round_saw_starting = false;
+            }
+            self.mcp_startup_allow_terminal_only_next_round = true;
+        }
+
+        let Some(current) = &self.mcp_startup_status else {
+            return;
+        };
+
+        let mut failed = Vec::new();
+        let mut cancelled = Vec::new();
+
+        let mut server_names: BTreeSet<String> = current.keys().cloned().collect();
+        if let Some(expected_servers) = &self.mcp_startup_expected_servers {
+            server_names.extend(expected_servers.iter().cloned());
+        }
+
+        for name in server_names {
+            match current.get(&name) {
+                Some(McpStartupStatus::Ready) => {}
+                Some(McpStartupStatus::Failed { .. }) => failed.push(name),
+                Some(McpStartupStatus::Cancelled | McpStartupStatus::Starting) | None => {
+                    cancelled.push(name);
+                }
+            }
+        }
+
+        failed.sort();
+        failed.dedup();
+        cancelled.sort();
+        cancelled.dedup();
+        self.finish_mcp_startup(failed, cancelled);
+    }
+
+    #[cfg(test)]
+    fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
+        let failed = ev.failed.into_iter().map(|f| f.server).collect();
+        self.finish_mcp_startup(failed, ev.cancelled);
+    }
+
+    fn on_mcp_server_status_updated(&mut self, notification: McpServerStatusUpdatedNotification) {
+        let status = match notification.status {
+            McpServerStartupState::Starting => McpStartupStatus::Starting,
+            McpServerStartupState::Ready => McpStartupStatus::Ready,
+            McpServerStartupState::Failed => McpStartupStatus::Failed {
+                error: notification.error.unwrap_or_else(|| {
+                    format!("MCP client for `{}` failed to start", notification.name)
+                }),
+            },
+            McpServerStartupState::Cancelled => McpStartupStatus::Cancelled,
+        };
+        self.update_mcp_startup_status(
+            notification.name,
+            status,
+            /*complete_when_settled*/ true,
+        );
     }
 
     /// Handle a turn aborted due to user interrupt (Esc).
@@ -4552,6 +4738,11 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_turn_copyable_output: None,
+            mcp_startup_expected_servers: None,
+            mcp_startup_ignore_updates_until_next_start: false,
+            mcp_startup_allow_terminal_only_next_round: false,
+            mcp_startup_pending_next_round: HashMap::new(),
+            mcp_startup_pending_next_round_saw_starting: false,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
@@ -4617,9 +4808,6 @@ impl ChatWidget {
             last_non_retry_error: None,
         };
 
-        widget.bottom_pane.set_voice_transcription_enabled(
-            widget.config.features.enabled(Feature::VoiceTranscription),
-        );
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
@@ -6318,6 +6506,9 @@ impl ChatWidget {
                     .map(|details| format!("{}: {details}", notification.summary))
                     .unwrap_or(notification.summary),
             ),
+            ServerNotification::McpServerStatusUpdated(notification) => {
+                self.on_mcp_server_status_updated(notification)
+            }
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
                 self.on_guardian_review_notification(
                     notification.target_item_id,
@@ -6401,7 +6592,6 @@ impl ChatWidget {
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
             | ServerNotification::McpToolCallProgress(_)
-            | ServerNotification::McpServerStatusUpdated(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::FsChanged(_)
@@ -6821,9 +7011,6 @@ impl ChatWidget {
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
-            EventMsg::ListCustomPromptsResponse(_) => {
-                tracing::warn!("ignoring unsupported custom prompt list response in TUI");
-            }
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(AppCommand::list_skills(
@@ -9192,9 +9379,6 @@ impl ChatWidget {
             );
         }
         let enabled = self.config.features.enabled(feature);
-        if feature == Feature::VoiceTranscription {
-            self.bottom_pane.set_voice_transcription_enabled(enabled);
-        }
         if feature == Feature::RealtimeConversation {
             let realtime_conversation_enabled = self.realtime_conversation_enabled();
             self.bottom_pane
@@ -10682,22 +10866,16 @@ impl ChatWidget {
 
 #[cfg(not(target_os = "linux"))]
 impl ChatWidget {
-    pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
-        self.bottom_pane.replace_transcription(id, text);
-        // Ensure the UI redraws to reflect the updated transcription.
-        self.request_redraw();
-    }
-
-    pub(crate) fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
-        let updated = self.bottom_pane.update_transcription_in_place(id, text);
+    pub(crate) fn update_recording_meter_in_place(&mut self, id: &str, text: &str) -> bool {
+        let updated = self.bottom_pane.update_recording_meter_in_place(id, text);
         if updated {
             self.request_redraw();
         }
         updated
     }
 
-    pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
-        self.bottom_pane.remove_transcription_placeholder(id);
+    pub(crate) fn remove_recording_meter_placeholder(&mut self, id: &str) {
+        self.bottom_pane.remove_recording_meter_placeholder(id);
         // Ensure the UI redraws to reflect placeholder removal.
         self.request_redraw();
     }
