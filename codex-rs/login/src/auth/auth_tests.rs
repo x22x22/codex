@@ -206,6 +206,16 @@ fn unauthorized_recovery_reports_mode_and_step_names() {
 }
 
 #[test]
+fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
+    let err = AuthDotJson::from_external_tokens(&ExternalAuthTokens::access_token_only("token"))
+        .expect_err("ChatGPT auth should require ChatGPT metadata");
+    assert_eq!(
+        err.to_string(),
+        "external auth tokens are missing ChatGPT metadata"
+    );
+}
+
+#[test]
 fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
     let codex_home = tempdir().unwrap();
     write_auth_file(

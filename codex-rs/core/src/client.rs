@@ -102,12 +102,12 @@ use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+use crate::request_auth::RequestAuthContext;
 use crate::request_auth::RequestUnauthorizedRecovery;
 use crate::request_auth::ResolvedRequestAuth;
 use crate::request_auth::UnauthorizedRecoveryError;
 use crate::request_auth::UnauthorizedRecoveryExecution;
 use crate::request_auth::UnauthorizedRecoveryOutcome;
-use crate::request_auth::resolve_request_auth;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::extract_response_debug_context_from_api_error;
 use crate::response_debug_context::telemetry_api_error_message;
@@ -135,7 +135,7 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 /// configuration is per turn and is passed explicitly to streaming/unary methods.
 #[derive(Debug)]
 struct ModelClientState {
-    auth_manager: Option<Arc<AuthManager>>,
+    request_auth: RequestAuthContext,
     conversation_id: ThreadId,
     provider: ModelProviderInfo,
     auth_env_telemetry: AuthEnvTelemetry,
@@ -261,7 +261,10 @@ impl ModelClient {
         let auth_env_telemetry = collect_auth_env_telemetry(&provider, codex_api_key_env_enabled);
         Self {
             state: Arc::new(ModelClientState {
-                auth_manager,
+                request_auth: RequestAuthContext::new(
+                    auth_manager,
+                    /*external_request_auth_source*/ None,
+                ),
                 conversation_id,
                 provider,
                 auth_env_telemetry,
@@ -324,6 +327,13 @@ impl ModelClient {
 
         self.store_cached_websocket_session(WebsocketSession::default());
         activated
+    }
+
+    pub(crate) async fn resolve_provider_bearer_token(&self) -> Result<Option<String>> {
+        self.state
+            .request_auth
+            .resolve_external_request_auth_access_token()
+            .await
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -518,7 +528,7 @@ impl ModelClient {
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<ResolvedRequestAuth> {
-        resolve_request_auth(self.state.auth_manager.as_ref(), &self.state.provider).await
+        self.state.request_auth.resolve(&self.state.provider).await
     }
 
     /// Opens a websocket connection using the same header and telemetry wiring as normal turns.
@@ -997,13 +1007,15 @@ impl ModelClientSession {
             return Ok(stream);
         }
 
-        let mut unauthorized_recovery =
-            RequestUnauthorizedRecovery::new(self.client.state.auth_manager.as_ref());
+        let mut unauthorized_recovery = self.client.state.request_auth.unauthorized_recovery();
         let mut pending_retry = PendingUnauthorizedRetry::default();
         // Only loop after a successful auth-recovery step. Each retry must rebuild
         // the client and request headers before issuing the same streaming request again.
         loop {
             let client_setup = self.client.current_client_setup().await?;
+            unauthorized_recovery.set_current_request_auth_access_token(
+                client_setup.request_auth_access_token.clone(),
+            );
             let transport = ReqwestTransport::new(build_reqwest_client());
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
@@ -1085,13 +1097,15 @@ impl ModelClientSession {
         warmup: bool,
         request_trace: Option<W3cTraceContext>,
     ) -> Result<WebsocketStreamOutcome> {
-        let mut unauthorized_recovery =
-            RequestUnauthorizedRecovery::new(self.client.state.auth_manager.as_ref());
+        let mut unauthorized_recovery = self.client.state.request_auth.unauthorized_recovery();
         let mut pending_retry = PendingUnauthorizedRetry::default();
         // Only loop after a successful auth-recovery step. WebSocket auth is attached
         // during connect, so a recovered token requires a fresh connection attempt.
         loop {
             let client_setup = self.client.current_client_setup().await?;
+            unauthorized_recovery.set_current_request_auth_access_token(
+                client_setup.request_auth_access_token.clone(),
+            );
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 &client_setup.api_auth,
@@ -1148,6 +1162,9 @@ impl ModelClientSession {
                         session_telemetry,
                     )
                     .await?;
+                    if recovery.refreshes_request_auth {
+                        self.reset_websocket_session();
+                    }
                     pending_retry = PendingUnauthorizedRetry::from_recovery(recovery);
                     continue;
                 }
@@ -1628,6 +1645,29 @@ async fn handle_unauthorized(
                 Err(CodexErr::Io(other))
             }
         },
+        Err(UnauthorizedRecoveryError::RequestAuthSource { execution, error }) => {
+            session_telemetry.record_auth_recovery(
+                execution.mode,
+                execution.phase,
+                "recovery_failed_permanent",
+                debug.request_id.as_deref(),
+                debug.cf_ray.as_deref(),
+                debug.auth_error.as_deref(),
+                debug.auth_error_code.as_deref(),
+                /*recovery_reason*/ None,
+                /*auth_state_changed*/ None,
+            );
+            emit_feedback_auth_recovery_tags(
+                execution.mode,
+                execution.phase,
+                "recovery_failed_permanent",
+                debug.request_id.as_deref(),
+                debug.cf_ray.as_deref(),
+                debug.auth_error.as_deref(),
+                debug.auth_error_code.as_deref(),
+            );
+            Err(error)
+        }
     }
 }
 

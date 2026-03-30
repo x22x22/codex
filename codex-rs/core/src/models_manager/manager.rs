@@ -12,9 +12,8 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
-use crate::request_auth::RequestUnauthorizedRecovery;
+use crate::request_auth::RequestAuthContext;
 use crate::request_auth::UnauthorizedRecoveryOutcome;
-use crate::request_auth::resolve_request_auth;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::telemetry_transport_error_message;
 use crate::util::FeedbackRequestTags;
@@ -179,7 +178,7 @@ pub struct ModelsManager {
     remote_models: RwLock<Vec<ModelInfo>>,
     catalog_mode: CatalogMode,
     collaboration_modes_config: CollaborationModesConfig,
-    auth_manager: Arc<AuthManager>,
+    request_auth: RequestAuthContext,
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
     provider: ModelProviderInfo,
@@ -231,7 +230,10 @@ impl ModelsManager {
             remote_models: RwLock::new(remote_models),
             catalog_mode,
             collaboration_modes_config,
-            auth_manager,
+            request_auth: RequestAuthContext::new(
+                Some(auth_manager.clone()),
+                /*external_request_auth_source*/ None,
+            ),
             etag: RwLock::new(None),
             cache_manager,
             provider,
@@ -398,7 +400,13 @@ impl ModelsManager {
             return Ok(());
         }
 
-        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt) {
+        if self
+            .request_auth
+            .auth_manager()
+            .and_then(|auth_manager| auth_manager.auth_mode())
+            != Some(AuthMode::Chatgpt)
+            && !self.provider.has_command_auth()
+        {
             if matches!(
                 refresh_strategy,
                 RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
@@ -435,16 +443,20 @@ impl ModelsManager {
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth_env = collect_auth_env_telemetry(
             &self.provider,
-            self.auth_manager.codex_api_key_env_enabled(),
+            self.request_auth
+                .auth_manager()
+                .is_some_and(|manager| manager.codex_api_key_env_enabled()),
         );
         let client_version = crate::models_manager::client_version_to_whole();
-        let mut unauthorized_recovery = RequestUnauthorizedRecovery::new(Some(&self.auth_manager));
+        let mut unauthorized_recovery = self.request_auth.unauthorized_recovery();
 
         // Only loop after a successful auth-recovery step so `/models` retries with
         // the same freshly resolved auth state as normal request paths.
         loop {
-            let request_auth =
-                resolve_request_auth(Some(&self.auth_manager), &self.provider).await?;
+            let request_auth = self.request_auth.resolve(&self.provider).await?;
+            unauthorized_recovery.set_current_request_auth_access_token(
+                request_auth.request_auth_access_token.clone(),
+            );
             let transport = ReqwestTransport::new(build_reqwest_client());
             let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
                 auth_mode: request_auth
@@ -544,7 +556,12 @@ impl ModelsManager {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
-        let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
+        let chatgpt_mode = matches!(
+            self.request_auth
+                .auth_manager()
+                .and_then(|auth_manager| auth_manager.auth_mode()),
+            Some(AuthMode::Chatgpt)
+        );
         presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
 
         ModelPreset::mark_default_by_picker_visibility(&mut presets);
