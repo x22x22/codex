@@ -14,6 +14,7 @@ use tracing::Instrument;
 use tracing::trace_span;
 
 use super::SessionTask;
+use super::TaskCompletion;
 use super::SessionTaskContext;
 
 #[derive(Default)]
@@ -41,7 +42,7 @@ impl SessionTask for RegularTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TaskCompletion {
         let sess = session.clone_session();
         let run_turn_span = trace_span!("run_turn");
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
@@ -57,7 +58,9 @@ impl SessionTask for RegularTask {
             .consume_startup_prewarm_for_regular_turn(&cancellation_token)
             .await
         {
-            SessionStartupPrewarmResolution::Cancelled => return None,
+            SessionStartupPrewarmResolution::Cancelled => {
+                return TaskCompletion::Completed(None);
+            }
             SessionStartupPrewarmResolution::Unavailable { .. } => None,
             SessionStartupPrewarmResolution::Ready(prewarmed_client_session) => {
                 Some(*prewarmed_client_session)

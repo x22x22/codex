@@ -30,6 +30,7 @@ use codex_protocol::user_input::UserInput;
 use std::sync::LazyLock;
 
 use super::SessionTask;
+use super::TaskCompletion;
 use super::SessionTaskContext;
 
 static REVIEW_EXIT_SUCCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
@@ -64,7 +65,7 @@ impl SessionTask for ReviewTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TaskCompletion {
         let _ = session.session.services.session_telemetry.counter(
             "codex.task.review",
             /*inc*/ 1,
@@ -86,7 +87,7 @@ impl SessionTask for ReviewTask {
         if !cancellation_token.is_cancelled() {
             exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
         }
-        None
+        TaskCompletion::Completed(None)
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {

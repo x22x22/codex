@@ -29,6 +29,7 @@ use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
+use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
@@ -99,6 +100,11 @@ pub(crate) struct SessionTaskContext {
     session: Arc<Session>,
 }
 
+pub(crate) enum TaskCompletion {
+    Completed(Option<String>),
+    Failed(ErrorEvent),
+}
+
 impl SessionTaskContext {
     pub(crate) fn new(session: Arc<Session>) -> Self {
         Self { session }
@@ -140,15 +146,15 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// `ctx`, returning an optional final agent message when finished. The
     /// provided `cancellation_token` is cancelled when the session requests an
     /// abort; implementers should watch for it and terminate quickly once it
-    /// fires. Returning [`Some`] yields a final message that
-    /// [`Session::on_task_finished`] will emit to the client.
+    /// fires. The returned [`TaskCompletion`] determines the single terminal
+    /// event emitted by [`Session::on_task_finished`].
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String>;
+    ) -> TaskCompletion;
 
     /// Gives the task a chance to perform cleanup after an abort.
     ///
@@ -209,7 +215,7 @@ impl Session {
             tokio::spawn(
                 async move {
                     let ctx_for_finish = Arc::clone(&ctx);
-                    let last_agent_message = task_for_run
+                    let completion = task_for_run
                         .run(
                             Arc::clone(&session_ctx),
                             ctx,
@@ -221,7 +227,7 @@ impl Session {
                     sess.flush_rollout().await;
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                        sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
+                        sess.on_task_finished(Arc::clone(&ctx_for_finish), completion)
                             .await;
                     }
                     done_clone.notify_waiters();
@@ -314,7 +320,7 @@ impl Session {
     pub async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-        last_agent_message: Option<String>,
+        completion: TaskCompletion,
     ) {
         turn_context
             .turn_metadata_state
@@ -431,10 +437,15 @@ impl Session {
                 &[("token_type", "reasoning_output"), tmp_mem],
             );
         }
-        let event = EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: turn_context.sub_id.clone(),
-            last_agent_message,
-        });
+        let event = match completion {
+            TaskCompletion::Completed(last_agent_message) => {
+                EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: turn_context.sub_id.clone(),
+                    last_agent_message,
+                })
+            }
+            TaskCompletion::Failed(error) => EventMsg::Error(error),
+        };
         self.send_event(turn_context.as_ref(), event).await;
     }
 

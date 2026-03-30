@@ -32,6 +32,7 @@ use crate::user_shell_command::user_shell_command_record_item;
 use codex_sandboxing::SandboxType;
 
 use super::SessionTask;
+use super::TaskCompletion;
 use super::SessionTaskContext;
 use crate::codex::Session;
 use codex_protocol::models::ResponseInputItem;
@@ -78,7 +79,7 @@ impl SessionTask for UserShellCommandTask {
         turn_context: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TaskCompletion {
         execute_user_shell_command(
             session.clone_session(),
             turn_context,
@@ -87,7 +88,7 @@ impl SessionTask for UserShellCommandTask {
             UserShellCommandMode::StandaloneTurn,
         )
         .await;
-        None
+        TaskCompletion::Completed(None)
     }
 }
 

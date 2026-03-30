@@ -9,6 +9,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::AgentStatus;
 use crate::protocol::AskForApproval;
+use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::NetworkSandboxPolicy;
@@ -19,6 +20,7 @@ use crate::protocol::SubAgentSource;
 use crate::protocol::TurnCompleteEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
+use crate::tasks::TaskCompletion;
 use crate::tasks::SessionTaskContext;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
@@ -112,6 +114,9 @@ fn history_contains_inter_agent_communication(
 #[derive(Clone, Copy)]
 struct NeverEndingTask;
 
+#[derive(Clone, Copy)]
+struct FailingTask;
+
 #[async_trait::async_trait]
 impl SessionTask for NeverEndingTask {
     fn kind(&self) -> TaskKind {
@@ -128,9 +133,33 @@ impl SessionTask for NeverEndingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TaskCompletion {
         cancellation_token.cancelled().await;
-        None
+        TaskCompletion::Completed(None)
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionTask for FailingTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.multi_agent_failing"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<UserInput>,
+        _cancellation_token: CancellationToken,
+    ) -> TaskCompletion {
+        TaskCompletion::Failed(ErrorEvent {
+            message: "boom".to_string(),
+            codex_error_info: None,
+        })
     }
 }
 
@@ -1117,6 +1146,271 @@ async fn multi_agent_v2_assign_task_interrupts_busy_child_without_losing_message
         .submit(Op::Shutdown {})
         .await
         .expect("shutdown should submit");
+}
+
+#[tokio::test]
+async fn multi_agent_v2_assign_task_completion_notifies_parent_after_reuse() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "boot worker",
+                "task_name": "worker"
+            })),
+        ))
+        .await
+        .expect("spawn worker");
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist");
+    let worker_path = AgentPath::try_from("/root/worker").expect("agent path");
+
+    let first_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            first_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: first_turn.sub_id.clone(),
+                last_agent_message: Some("done once".to_string()),
+            }),
+        )
+        .await;
+
+    AssignTaskHandlerV2
+        .handle(invocation(
+            session,
+            turn,
+            "assign_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "items": [{"type": "text", "text": "continue"}]
+            })),
+        ))
+        .await
+        .expect("assign_task should succeed");
+
+    let second_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            second_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: second_turn.sub_id.clone(),
+                last_agent_message: Some("done twice".to_string()),
+            }),
+        )
+        .await;
+
+    let expected_first = (
+        root.thread_id,
+        Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                worker_path.clone(),
+                AgentPath::root(),
+                Vec::new(),
+                crate::session_prefix::format_subagent_notification_message(
+                    worker_path.as_str(),
+                    &AgentStatus::Completed(Some("done once".to_string())),
+                ),
+                /*trigger_turn*/ false,
+            ),
+        },
+    );
+    let expected_second = (
+        root.thread_id,
+        Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                worker_path,
+                AgentPath::root(),
+                Vec::new(),
+                crate::session_prefix::format_subagent_notification_message(
+                    "/root/worker",
+                    &AgentStatus::Completed(Some("done twice".to_string())),
+                ),
+                /*trigger_turn*/ false,
+            ),
+        },
+    );
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let captured = manager.captured_ops();
+            if captured.contains(&expected_first) && captured.contains(&expected_second) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("reused worker should notify parent on both completed turns");
+}
+
+#[tokio::test]
+async fn multi_agent_v2_failed_turn_forwards_only_error_status_after_reuse() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "boot worker",
+                "task_name": "worker"
+            })),
+        ))
+        .await
+        .expect("spawn worker");
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist");
+    let worker_path = AgentPath::try_from("/root/worker").expect("agent path");
+
+    let first_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .send_event(
+            first_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: first_turn.sub_id.clone(),
+                last_agent_message: Some("done once".to_string()),
+            }),
+        )
+        .await;
+
+    AssignTaskHandlerV2
+        .handle(invocation(
+            session,
+            turn,
+            "assign_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "items": [{"type": "text", "text": "continue"}]
+            })),
+        ))
+        .await
+        .expect("assign_task should succeed");
+
+    let second_turn = thread.codex.session.new_default_turn().await;
+    thread
+        .codex
+        .session
+        .spawn_task(
+            Arc::clone(&second_turn),
+            vec![UserInput::Text {
+                text: "continue".to_string(),
+                text_elements: Vec::new(),
+            }],
+            FailingTask,
+        )
+        .await;
+
+    let expected_first = (
+        root.thread_id,
+        Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                worker_path.clone(),
+                AgentPath::root(),
+                Vec::new(),
+                crate::session_prefix::format_subagent_notification_message(
+                    worker_path.as_str(),
+                    &AgentStatus::Completed(Some("done once".to_string())),
+                ),
+                /*trigger_turn*/ false,
+            ),
+        },
+    );
+    let expected_error = (
+        root.thread_id,
+        Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                worker_path.clone(),
+                AgentPath::root(),
+                Vec::new(),
+                crate::session_prefix::format_subagent_notification_message(
+                    worker_path.as_str(),
+                    &AgentStatus::Errored("boom".to_string()),
+                ),
+                /*trigger_turn*/ false,
+            ),
+        },
+    );
+    let unexpected_completed = (
+        root.thread_id,
+        Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                worker_path,
+                AgentPath::root(),
+                Vec::new(),
+                crate::session_prefix::format_subagent_notification_message(
+                    "/root/worker",
+                    &AgentStatus::Completed(None),
+                ),
+                /*trigger_turn*/ false,
+            ),
+        },
+    );
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let captured = manager.captured_ops();
+            if captured.contains(&expected_first)
+                && captured.contains(&expected_error)
+                && !captured.contains(&unexpected_completed)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("failed reused worker turn should only notify parent with the errored status");
 }
 
 #[tokio::test]

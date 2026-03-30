@@ -14,6 +14,7 @@ use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
+use crate::agent::status::is_final;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::commit_attribution::commit_message_trailer_instruction;
@@ -334,6 +335,7 @@ use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::TaskCompletion;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::JsReplHandle;
@@ -2641,6 +2643,15 @@ impl Session {
             .await;
         self.maybe_clear_realtime_handoff_for_event(&legacy_source)
             .await;
+        if let Some(status) = agent_status_from_event(&legacy_source)
+            && is_final(&status)
+            && turn_context.session_source.get_agent_path().is_some()
+        {
+            self.services
+                .agent_control
+                .forward_child_final_status_to_parent(&turn_context.session_source, &status)
+                .await;
+        }
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
@@ -5586,9 +5597,9 @@ pub(crate) async fn run_turn(
     input: Vec<UserInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
-) -> Option<String> {
+) -> TaskCompletion {
     if input.is_empty() && !sess.has_pending_input().await {
-        return None;
+        return TaskCompletion::Completed(None);
     }
 
     let model_info = turn_context.model_info.clone();
@@ -5602,7 +5613,7 @@ pub(crate) async fn run_turn(
         .is_err()
     {
         error!("Failed to run pre-sampling compact");
-        return None;
+        return TaskCompletion::Completed(None);
     }
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
@@ -5632,7 +5643,7 @@ pub(crate) async fn run_turn(
             .await
         {
             Ok(mcp_tools) => mcp_tools,
-            Err(_) if turn_context.apps_enabled() => return None,
+            Err(_) if turn_context.apps_enabled() => return TaskCompletion::Completed(None),
             Err(_) => HashMap::new(),
         }
     } else {
@@ -5730,7 +5741,7 @@ pub(crate) async fn run_turn(
         .collect::<Vec<_>>();
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return None;
+        return TaskCompletion::Completed(None);
     }
     let additional_contexts = if input.is_empty() {
         Vec::new()
@@ -5750,7 +5761,7 @@ pub(crate) async fn run_turn(
                 user_prompt_submit_outcome.additional_contexts,
             )
             .await;
-            return None;
+            return TaskCompletion::Completed(None);
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await;
@@ -5913,7 +5924,7 @@ pub(crate) async fn run_turn(
                     .await
                     .is_err()
                     {
-                        return None;
+                        return TaskCompletion::Completed(None);
                     }
                     continue;
                 }
@@ -6025,15 +6036,10 @@ pub(crate) async fn run_turn(
                         }
                     }
                     if let Some(message) = abort_message {
-                        sess.send_event(
-                            &turn_context,
-                            EventMsg::Error(ErrorEvent {
-                                message,
-                                codex_error_info: None,
-                            }),
-                        )
-                        .await;
-                        return None;
+                        return TaskCompletion::Failed(ErrorEvent {
+                            message,
+                            codex_error_info: None,
+                        });
                     }
                     break;
                 }
@@ -6051,25 +6057,21 @@ pub(crate) async fn run_turn(
                 if state.history.replace_last_turn_images("Invalid image") {
                     continue;
                 }
-                let event = EventMsg::Error(ErrorEvent {
+                let error = ErrorEvent {
                     message: "Invalid image in your last message. Please remove it and try again."
                         .to_string(),
                     codex_error_info: Some(CodexErrorInfo::BadRequest),
-                });
-                sess.send_event(&turn_context, event).await;
-                break;
+                };
+                return TaskCompletion::Failed(error);
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
-                sess.send_event(&turn_context, event).await;
-                // let the user continue the conversation
-                break;
+                return TaskCompletion::Failed(e.to_error_event(/*message_prefix*/ None));
             }
         }
     }
 
-    last_agent_message
+    TaskCompletion::Completed(last_agent_message)
 }
 
 async fn run_pre_sampling_compact(

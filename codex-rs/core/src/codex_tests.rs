@@ -35,6 +35,7 @@ use tracing::Span;
 
 use crate::protocol::CompactedItem;
 use crate::protocol::CreditsSnapshot;
+use crate::protocol::ErrorEvent;
 use crate::protocol::InitialHistory;
 use crate::protocol::NetworkApprovalProtocol;
 use crate::protocol::RateLimitSnapshot;
@@ -52,6 +53,7 @@ use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::RolloutRecorderParams;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
+use crate::tasks::TaskCompletion;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
@@ -3138,13 +3140,13 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
             _ctx: Arc<TurnContext>,
             _input: Vec<UserInput>,
             _cancellation_token: CancellationToken,
-        ) -> Option<String> {
+        ) -> TaskCompletion {
             let mut trace = self
                 .captured_trace
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *trace = current_span_w3c_trace_context();
-            None
+            TaskCompletion::Completed(None)
         }
     }
 
@@ -4380,6 +4382,9 @@ struct NeverEndingTask {
     listen_to_cancellation_token: bool,
 }
 
+#[derive(Clone, Copy)]
+struct FailingTask;
+
 #[async_trait::async_trait]
 impl SessionTask for NeverEndingTask {
     fn kind(&self) -> TaskKind {
@@ -4396,14 +4401,38 @@ impl SessionTask for NeverEndingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> Option<String> {
+    ) -> TaskCompletion {
         if self.listen_to_cancellation_token {
             cancellation_token.cancelled().await;
-            return None;
+            return TaskCompletion::Completed(None);
         }
         loop {
             sleep(Duration::from_secs(60)).await;
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionTask for FailingTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.failing"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<UserInput>,
+        _cancellation_token: CancellationToken,
+    ) -> TaskCompletion {
+        TaskCompletion::Failed(ErrorEvent {
+            message: "boom".to_string(),
+            codex_error_info: None,
+        })
     }
 }
 
@@ -4438,6 +4467,30 @@ async fn abort_regular_task_emits_turn_aborted_only() {
         other => panic!("unexpected event: {other:?}"),
     }
     // No extra events should be emitted after an abort.
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_log::test]
+async fn failing_regular_task_emits_error_without_turn_complete() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(Arc::clone(&tc), input, FailingTask).await;
+
+    let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("timeout waiting for event")
+        .expect("event");
+    match evt.msg {
+        EventMsg::Error(ErrorEvent {
+            message,
+            codex_error_info: None,
+        }) => assert_eq!(message, "boom"),
+        other => panic!("unexpected event: {other:?}"),
+    }
     assert!(rx.try_recv().is_err());
 }
 
@@ -4502,7 +4555,10 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     .await
     .expect("inject pending input into active turn");
 
-    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+    sess.on_task_finished(
+        Arc::clone(&tc),
+        TaskCompletion::Completed(/*last_agent_message*/ None),
+    )
         .await;
 
     let history = sess.clone_history().await;

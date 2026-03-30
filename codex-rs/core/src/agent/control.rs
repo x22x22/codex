@@ -527,6 +527,37 @@ impl AgentControl {
         result
     }
 
+    pub(crate) async fn forward_child_final_status_to_parent(
+        &self,
+        session_source: &SessionSource,
+        status: &AgentStatus,
+    ) {
+        let Some(parent_thread_id) = thread_spawn_parent_thread_id(session_source) else {
+            return;
+        };
+        let Some(child_agent_path) = session_source.get_agent_path() else {
+            return;
+        };
+        let Some(parent_agent_path) = child_agent_path
+            .as_str()
+            .rsplit_once('/')
+            .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
+        else {
+            return;
+        };
+        let message = format_subagent_notification_message(child_agent_path.as_str(), status);
+        let communication = InterAgentCommunication::new(
+            child_agent_path,
+            parent_agent_path,
+            Vec::new(),
+            message,
+            /*trigger_turn*/ false,
+        );
+        let _ = self
+            .send_inter_agent_communication(parent_thread_id, communication)
+            .await;
+    }
+
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
@@ -782,6 +813,11 @@ impl AgentControl {
         child_reference: String,
         child_agent_path: Option<AgentPath>,
     ) {
+        // Agent-path children now forward final status directly from `Session::send_event`,
+        // which keeps reused spawned agents notifying their parent on every completed turn.
+        if child_agent_path.is_some() {
+            return;
+        }
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         })) = session_source
