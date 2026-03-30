@@ -164,18 +164,23 @@ fn extract_x_error_json_code(headers: Option<&HeaderMap>) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(crate) fn auth_provider_from_auth(
-    auth: Option<CodexAuth>,
+pub(crate) fn provider_bearer_token(
     provider: &ModelProviderInfo,
-) -> crate::error::Result<CoreAuthProvider> {
+    resolved_provider_token: Option<String>,
+) -> crate::error::Result<Option<String>> {
     if let Some(api_key) = provider.api_key()? {
-        return Ok(CoreAuthProvider {
-            token: Some(api_key),
-            account_id: None,
-        });
+        return Ok(Some(api_key));
     }
 
-    if let Some(token) = provider.experimental_bearer_token.clone() {
+    Ok(resolved_provider_token.or_else(|| provider.experimental_bearer_token.clone()))
+}
+
+pub(crate) fn auth_provider_from_resolved_provider_token(
+    auth: Option<CodexAuth>,
+    provider: &ModelProviderInfo,
+    resolved_provider_token: Option<String>,
+) -> crate::error::Result<CoreAuthProvider> {
+    if let Some(token) = provider_bearer_token(provider, resolved_provider_token)? {
         return Ok(CoreAuthProvider {
             token: Some(token),
             account_id: None,
