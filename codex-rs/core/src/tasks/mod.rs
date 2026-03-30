@@ -30,7 +30,6 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
-use crate::protocol::TokenUsage;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
@@ -417,20 +416,6 @@ impl Session {
         self.send_event(turn_context.as_ref(), event).await;
     }
 
-    async fn register_new_active_task(
-        &self,
-        task: RunningTask,
-        token_usage_at_turn_start: TokenUsage,
-    ) {
-        self.reset_turn_agent_send_input_flag();
-        let mut active = self.active_turn.lock().await;
-        let mut turn = ActiveTurn::default();
-        let mut turn_state = turn.turn_state.lock().await;
-        turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
-        drop(turn_state);
-        turn.add_task(task);
-        *active = Some(turn);
-    }
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
         active.take()

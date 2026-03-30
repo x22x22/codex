@@ -7,7 +7,6 @@
 //! which role to use; the multi-agent tool handler owns that orchestration.
 
 use crate::config::AgentRoleConfig;
-use crate::config::AgentRoleSpawnMode;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::agent_roles::parse_agent_role_file_contents;
@@ -27,16 +26,6 @@ use toml::Value as TomlValue;
 /// The role name used when a caller omits `agent_type`.
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
-
-pub(crate) fn default_spawn_mode_for_role(
-    config: &Config,
-    role_name: Option<&str>,
-) -> AgentRoleSpawnMode {
-    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    resolve_role_config(config, role_name)
-        .and_then(|role| role.spawn_mode)
-        .unwrap_or_default()
-}
 
 pub(crate) fn watchdog_interval_for_role(config: &Config, role_name: Option<&str>) -> Option<i64> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);

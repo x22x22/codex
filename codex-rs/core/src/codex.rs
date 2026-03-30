@@ -2191,26 +2191,6 @@ impl Session {
         self.active_turn.lock().await.is_some()
     }
 
-    pub(crate) async fn parent_thread_id(&self) -> Option<ThreadId> {
-        let state = self.state.lock().await;
-        match &state.session_configuration.session_source {
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id, ..
-            }) => Some(*parent_thread_id),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn mark_turn_used_agent_send_input(&self) {
-        self.turn_used_agent_send_input
-            .store(true, Ordering::Release);
-    }
-
-    pub(crate) fn reset_turn_agent_send_input_flag(&self) {
-        self.turn_used_agent_send_input
-            .store(false, Ordering::Release);
-    }
-
     pub(crate) fn snapshot_agent_send_input_on_turn_complete(&self) {
         let used_agent_send_input = self
             .turn_used_agent_send_input
