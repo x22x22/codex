@@ -118,7 +118,7 @@ impl CodeModeTurnHost for CoreTurnHost {
         input: Option<JsonValue>,
         cancellation_token: CancellationToken,
     ) -> Result<JsonValue, String> {
-        call_nested_tool(
+        call_code_mode_function(
             self.exec.clone(),
             self.tool_runtime.clone(),
             tool_name,
@@ -284,7 +284,7 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<codex_code_mode::ToolDefinit
 }
 
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
-    let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
+    let code_mode_functions_config = exec.turn.tools_config.for_code_mode_nested_tools();
     let mcp_tools = exec
         .session
         .services
@@ -298,7 +298,7 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         .collect();
 
     ToolRouter::from_config(
-        &nested_tools_config,
+        &code_mode_functions_config,
         ToolRouterParams {
             mcp_tools: Some(mcp_tools),
             app_tools: None,
@@ -308,7 +308,7 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     )
 }
 
-async fn call_nested_tool(
+async fn call_code_mode_function(
     exec: ExecContext,
     tool_runtime: ToolCallRuntime,
     tool_name: String,
@@ -332,7 +332,7 @@ async fn call_nested_tool(
                 Err(error) => return Err(FunctionCallError::RespondToModel(error)),
             }
         } else {
-            match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
+            match build_code_mode_function_call_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
                 Ok(payload) => payload,
                 Err(error) => return Err(FunctionCallError::RespondToModel(error)),
             }
@@ -367,7 +367,7 @@ fn tool_kind_for_name(
         .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
 }
 
-fn build_nested_tool_payload(
+fn build_code_mode_function_call_payload(
     spec: Option<ToolSpec>,
     tool_name: &str,
     input: Option<JsonValue>,

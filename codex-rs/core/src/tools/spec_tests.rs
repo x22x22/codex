@@ -3038,7 +3038,7 @@ fn code_mode_only_restricts_model_tools_to_exec_tools() {
 }
 
 #[test]
-fn code_mode_only_exec_description_includes_full_nested_tool_details() {
+fn code_mode_only_exec_description_includes_full_details_for_code_mode_functions() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
@@ -3067,7 +3067,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
         panic!("expected freeform tool");
     };
 
-    assert!(!description.contains("Enabled nested tools:"));
+    assert!(!description.contains("Enabled functions:"));
     assert!(!description.contains("Nested tool reference:"));
     assert!(description.starts_with(
         "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
@@ -3077,7 +3077,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
 }
 
 #[test]
-fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only() {
+fn code_mode_exec_description_omits_details_for_code_mode_functions_when_not_code_mode_only() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();

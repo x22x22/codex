@@ -546,7 +546,7 @@ impl ToolsConfig {
         self
     }
 
-    pub fn for_code_mode_nested_tools(&self) -> Self {
+    pub fn for_code_mode_functions(&self) -> Self {
         let mut nested = self.clone();
         nested.code_mode_enabled = false;
         nested.code_mode_only_enabled = false;
@@ -2460,7 +2460,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
     if config.code_mode_enabled {
-        let nested_config = config.for_code_mode_nested_tools();
+        let nested_config = config.for_code_mode_functions();
         let (nested_specs, _) = build_specs_with_discoverable_tools(
             &nested_config,
             mcp_tools.clone(),

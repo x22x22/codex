@@ -316,7 +316,7 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_only_can_call_nested_tools() -> Result<()> {
+async fn code_mode_only_can_call_functions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -328,7 +328,7 @@ async fn code_mode_only_can_call_nested_tools() -> Result<()> {
                 "call-1",
                 "exec",
                 r#"
-const output = await functions.exec_command({ cmd: "printf code_mode_only_nested_tool_marker" });
+const output = await functions.exec_command({ cmd: "printf code_mode_only_function_call_marker" });
 text(output.output);
 "#,
             ),
@@ -349,7 +349,7 @@ text(output.output);
         let _ = config.features.enable(Feature::CodeModeOnly);
     });
     let test = builder.build(&server).await?;
-    test.submit_turn("use exec to run nested tool in code mode only")
+    test.submit_turn("use exec to run function in code mode only")
         .await?;
 
     let request = follow_up_mock.single_request();
@@ -357,15 +357,15 @@ text(output.output);
     assert_ne!(
         success,
         Some(false),
-        "code_mode_only nested tool call failed unexpectedly: {output}"
+        "code_mode_only function call failed unexpectedly: {output}"
     );
-    assert_eq!(output, "code_mode_only_nested_tool_marker");
+    assert_eq!(output, "code_mode_only_function_call_marker");
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_update_plan_nested_tool_result_is_empty_object() -> Result<()> {
+async fn code_mode_update_plan_function_call_result_is_empty_object() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -398,7 +398,7 @@ text(JSON.stringify(result));
 
 #[cfg_attr(windows, ignore = "flaky on windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
+async fn code_mode_function_call_calls_can_run_in_parallel() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -580,7 +580,7 @@ async fn code_mode_exec_surfaces_handler_errors_as_exceptions() -> Result<()> {
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "surface nested tool handler failures as script exceptions",
+        "surface function call handler failures as script exceptions",
         r#"
 try {
   await functions.exec_command({});
@@ -598,7 +598,7 @@ try {
     assert_ne!(
         success,
         Some(false),
-        "script should catch the nested tool error: {output}"
+        "script should catch the tool error: {output}"
     );
     assert!(
         output.contains("caught:"),
@@ -606,7 +606,7 @@ try {
     );
     assert!(
         !output.contains("no-exception"),
-        "nested tool error should not allow success path: {output}"
+        "tool error should not allow success path: {output}"
     );
 
     Ok(())
@@ -1879,7 +1879,7 @@ image(out);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
+async fn code_mode_can_apply_patch_via_function_call() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
