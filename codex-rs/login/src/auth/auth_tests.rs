@@ -4,6 +4,7 @@ use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
 use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
+use async_trait::async_trait;
 use codex_protocol::account::PlanType as AccountPlanType;
 
 use base64::Engine;
@@ -12,6 +13,7 @@ use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -263,6 +265,122 @@ fn external_auth_tokens_without_chatgpt_metadata_cannot_seed_chatgpt_auth() {
         err.to_string(),
         "external auth tokens are missing ChatGPT metadata"
     );
+}
+
+#[tokio::test]
+async fn auth_manager_with_external_bearer_refresher_returns_provider_token_only_for_derived_manager()
+ {
+    let base_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("base-token"));
+    let derived_manager =
+        base_manager.with_external_bearer_refresher(Arc::new(StaticExternalAuthRefresher::new(
+            Some(ExternalAuthTokens::access_token_only("provider-token")),
+            ExternalAuthTokens::access_token_only("refreshed-provider-token"),
+        )));
+
+    assert_eq!(
+        base_manager
+            .auth()
+            .await
+            .and_then(|auth| auth.api_key().map(str::to_string)),
+        Some("base-token".to_string())
+    );
+    assert_eq!(
+        derived_manager
+            .auth()
+            .await
+            .and_then(|auth| auth.api_key().map(str::to_string)),
+        Some("provider-token".to_string())
+    );
+}
+
+#[tokio::test]
+async fn auth_manager_with_external_bearer_refresher_does_not_fallback_to_base_auth_when_resolve_fails()
+ {
+    let base_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("base-token"));
+
+    let none_manager =
+        base_manager.with_external_bearer_refresher(Arc::new(StaticExternalAuthRefresher::new(
+            None,
+            ExternalAuthTokens::access_token_only("refreshed-provider-token"),
+        )));
+    let err_manager = base_manager.with_external_bearer_refresher(Arc::new(
+        StaticExternalAuthRefresher::new_failing(
+            "boom",
+            ExternalAuthTokens::access_token_only("refreshed-provider-token"),
+        ),
+    ));
+
+    assert_eq!(none_manager.auth().await, None);
+    assert_eq!(err_manager.auth().await, None);
+}
+
+#[tokio::test]
+async fn unauthorized_recovery_uses_external_refresh_for_bearer_manager() {
+    let base_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("base-token"));
+    let refresher = Arc::new(StaticExternalAuthRefresher::new(
+        Some(ExternalAuthTokens::access_token_only("provider-token")),
+        ExternalAuthTokens::access_token_only("refreshed-provider-token"),
+    ));
+    let derived_manager = base_manager.with_external_bearer_refresher(refresher.clone());
+    let mut recovery = derived_manager.unauthorized_recovery();
+
+    assert!(recovery.has_next());
+    assert_eq!(recovery.mode_name(), "external");
+    assert_eq!(recovery.step_name(), "external_refresh");
+
+    let result = recovery
+        .next()
+        .await
+        .expect("external refresh should succeed");
+
+    assert_eq!(result.auth_state_changed(), Some(true));
+    assert_eq!(*refresher.refresh_calls.lock().unwrap(), 1);
+}
+
+#[derive(Debug)]
+struct StaticExternalAuthRefresher {
+    resolved: Option<ExternalAuthTokens>,
+    resolve_error: Option<String>,
+    refreshed: ExternalAuthTokens,
+    refresh_calls: Mutex<usize>,
+}
+
+impl StaticExternalAuthRefresher {
+    fn new(resolved: Option<ExternalAuthTokens>, refreshed: ExternalAuthTokens) -> Self {
+        Self {
+            resolved,
+            resolve_error: None,
+            refreshed,
+            refresh_calls: Mutex::new(0),
+        }
+    }
+
+    fn new_failing(error: impl Into<String>, refreshed: ExternalAuthTokens) -> Self {
+        Self {
+            resolved: None,
+            resolve_error: Some(error.into()),
+            refreshed,
+            refresh_calls: Mutex::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl ExternalAuthRefresher for StaticExternalAuthRefresher {
+    async fn resolve(&self) -> std::io::Result<Option<ExternalAuthTokens>> {
+        if let Some(error) = &self.resolve_error {
+            return Err(std::io::Error::other(error.clone()));
+        }
+        Ok(self.resolved.clone())
+    }
+
+    async fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> std::io::Result<ExternalAuthTokens> {
+        *self.refresh_calls.lock().unwrap() += 1;
+        Ok(self.refreshed.clone())
+    }
 }
 
 struct AuthFileParams {
