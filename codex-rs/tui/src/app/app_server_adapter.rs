@@ -762,18 +762,18 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
                     turn_id: turn.id.clone(),
                     outcome: TurnOutcome::Failed {
                         error: ErrorEvent {
-                        message: turn
-                            .error
-                            .as_ref()
-                            .map(|error| error.message.clone())
-                            .unwrap_or_default(),
-                        codex_error_info: turn.error.as_ref().and_then(|error| {
-                            error
-                                .codex_error_info
-                                .clone()
-                                .and_then(app_server_codex_error_info_to_core)
-                        }),
-                    },
+                            message: turn
+                                .error
+                                .as_ref()
+                                .map(|error| error.message.clone())
+                                .unwrap_or_default(),
+                            codex_error_info: turn.error.as_ref().and_then(|error| {
+                                error
+                                    .codex_error_info
+                                    .clone()
+                                    .and_then(app_server_codex_error_info_to_core)
+                            }),
+                        },
                     },
                 }),
             });
