@@ -144,8 +144,8 @@ wrapper runs cover test-only call sites by default. The Bazel entrypoints use
 manual `*-unit-tests-bin` Rust targets explicitly, so inline `#[cfg(test)]`
 call sites are covered without pulling in unrelated manual release targets.
 
-Repo runs also promote `uncommented_anonymous_literal_argument` to an error by
-default:
+Repo runs also promote `argument_comment_mismatch` and
+`uncommented_anonymous_literal_argument` to errors by default:
 
 ```bash
 ./tools/argument-comment-lint/run-prebuilt-linter.py -p codex-core
@@ -158,7 +158,7 @@ rustc incremental compilation ICE locally. To override that behavior for an ad
 hoc run:
 
 ```bash
-DYLINT_RUSTFLAGS="-A uncommented-anonymous-literal-argument" \
+DYLINT_RUSTFLAGS="-A argument-comment-mismatch -A uncommented-anonymous-literal-argument" \
 CARGO_INCREMENTAL=1 \
   ./tools/argument-comment-lint/run.py -p codex-core
 ```
