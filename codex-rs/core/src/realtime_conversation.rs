@@ -1,5 +1,6 @@
 use crate::CodexAuth;
 use crate::api_bridge::map_api_error;
+use crate::api_bridge::provider_bearer_token;
 use crate::auth::read_openai_api_key_from_env;
 use crate::codex::Session;
 use crate::config::RealtimeWsMode;
@@ -453,7 +454,12 @@ async fn prepare_realtime_start(
 ) -> CodexResult<PreparedRealtimeConversationStart> {
     let provider = sess.provider().await;
     let auth = sess.services.auth_manager.auth().await;
-    let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
+    let provider_token = sess
+        .services
+        .model_client
+        .resolve_provider_bearer_token()
+        .await?;
+    let realtime_api_key = realtime_api_key(auth.as_ref(), &provider, provider_token)?;
     let mut api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey))?;
     let config = sess.get_config().await;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
@@ -628,13 +634,10 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
 fn realtime_api_key(
     auth: Option<&CodexAuth>,
     provider: &crate::ModelProviderInfo,
+    provider_token: Option<String>,
 ) -> CodexResult<String> {
-    if let Some(api_key) = provider.api_key()? {
+    if let Some(api_key) = provider_bearer_token(provider, provider_token)? {
         return Ok(api_key);
-    }
-
-    if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(token);
     }
 
     if let Some(api_key) = auth.and_then(CodexAuth::api_key) {

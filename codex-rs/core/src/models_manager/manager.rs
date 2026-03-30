@@ -1,9 +1,7 @@
 use super::cache::ModelsCacheManager;
-use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
 use crate::auth::AuthMode;
-use crate::auth::CodexAuth;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::config::Config;
@@ -14,6 +12,10 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
+use crate::provider_auth::ProviderAuthResolver;
+use crate::request_auth::RequestUnauthorizedRecovery;
+use crate::request_auth::UnauthorizedRecoveryOutcome;
+use crate::request_auth::resolve_request_auth;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::telemetry_transport_error_message;
 use crate::util::FeedbackRequestTags;
@@ -22,6 +24,7 @@ use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::TransportError;
+use codex_api::error::ApiError;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
@@ -181,6 +184,7 @@ pub struct ModelsManager {
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
     provider: ModelProviderInfo,
+    provider_auth: ProviderAuthResolver,
 }
 
 impl ModelsManager {
@@ -232,6 +236,7 @@ impl ModelsManager {
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
+            provider_auth: ProviderAuthResolver::new(&provider),
             provider,
         }
     }
@@ -396,7 +401,9 @@ impl ModelsManager {
             return Ok(());
         }
 
-        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt) {
+        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt)
+            && !self.provider.has_command_auth()
+        {
             if matches!(
                 refresh_strategy,
                 RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
@@ -431,39 +438,63 @@ impl ModelsManager {
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
-        let auth = self.auth_manager.auth().await;
-        let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
-        let api_provider = self.provider.to_api_provider(auth_mode)?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let auth_env = collect_auth_env_telemetry(
             &self.provider,
             self.auth_manager.codex_api_key_env_enabled(),
         );
-        let transport = ReqwestTransport::new(build_reqwest_client());
-        let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
-            auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
-            auth_header_attached: api_auth.auth_header_attached(),
-            auth_header_name: api_auth.auth_header_name(),
-            auth_env,
-        });
-        let client = ModelsClient::new(transport, api_provider, api_auth)
-            .with_telemetry(Some(request_telemetry));
-
         let client_version = crate::models_manager::client_version_to_whole();
-        let (models, etag) = timeout(
-            MODELS_REFRESH_TIMEOUT,
-            client.list_models(&client_version, HeaderMap::new()),
-        )
-        .await
-        .map_err(|_| CodexErr::Timeout)?
-        .map_err(map_api_error)?;
+        let mut unauthorized_recovery =
+            RequestUnauthorizedRecovery::new(Some(&self.auth_manager), &self.provider_auth);
 
-        self.apply_remote_models(models.clone()).await;
-        *self.etag.write().await = etag.clone();
-        self.cache_manager
-            .persist_cache(&models, etag, client_version)
-            .await;
-        Ok(())
+        loop {
+            let request_auth = resolve_request_auth(
+                Some(&self.auth_manager),
+                &self.provider,
+                &self.provider_auth,
+            )
+            .await?;
+            let transport = ReqwestTransport::new(build_reqwest_client());
+            let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
+                auth_mode: request_auth
+                    .auth_mode
+                    .map(|mode| TelemetryAuthMode::from(mode).to_string()),
+                auth_header_attached: request_auth.api_auth.auth_header_attached(),
+                auth_header_name: request_auth.api_auth.auth_header_name(),
+                auth_env: auth_env.clone(),
+            });
+            let client =
+                ModelsClient::new(transport, request_auth.api_provider, request_auth.api_auth)
+                    .with_telemetry(Some(request_telemetry));
+
+            match timeout(
+                MODELS_REFRESH_TIMEOUT,
+                client.list_models(&client_version, HeaderMap::new()),
+            )
+            .await
+            .map_err(|_| CodexErr::Timeout)?
+            {
+                Ok((models, etag)) => {
+                    self.apply_remote_models(models.clone()).await;
+                    *self.etag.write().await = etag.clone();
+                    self.cache_manager
+                        .persist_cache(&models, etag, client_version)
+                        .await;
+                    return Ok(());
+                }
+                Err(ApiError::Transport(
+                    unauthorized_transport @ TransportError::Http { status, .. },
+                )) if status == http::StatusCode::UNAUTHORIZED => {
+                    match unauthorized_recovery.next().await {
+                        Ok(UnauthorizedRecoveryOutcome::Recovered(_)) => continue,
+                        Ok(UnauthorizedRecoveryOutcome::Unavailable(_)) => {
+                            return Err(map_api_error(ApiError::Transport(unauthorized_transport)));
+                        }
+                        Err(error) => return Err(error.into_codex_err()),
+                    }
+                }
+                Err(err) => return Err(map_api_error(err)),
+            }
+        }
     }
 
     async fn get_etag(&self) -> Option<String> {

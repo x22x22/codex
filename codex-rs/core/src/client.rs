@@ -31,9 +31,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use crate::api_bridge::CoreAuthProvider;
-use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
-use crate::auth::UnauthorizedRecovery;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_api::CompactClient as ApiCompactClient;
@@ -104,6 +102,13 @@ use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+use crate::provider_auth::ProviderAuthResolver;
+use crate::request_auth::RequestUnauthorizedRecovery;
+use crate::request_auth::ResolvedRequestAuth;
+use crate::request_auth::UnauthorizedRecoveryError;
+use crate::request_auth::UnauthorizedRecoveryExecution;
+use crate::request_auth::UnauthorizedRecoveryOutcome;
+use crate::request_auth::resolve_request_auth;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::extract_response_debug_context_from_api_error;
 use crate::response_debug_context::telemetry_api_error_message;
@@ -134,6 +139,7 @@ struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
     conversation_id: ThreadId,
     provider: ModelProviderInfo,
+    provider_auth: ProviderAuthResolver,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
@@ -142,16 +148,6 @@ struct ModelClientState {
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
-}
-
-/// Resolved API client setup for a single request attempt.
-///
-/// Keeping this as a single bundle ensures prewarm and normal request paths
-/// share the same auth/provider setup flow.
-struct CurrentClientSetup {
-    auth: Option<CodexAuth>,
-    api_provider: codex_api::Provider,
-    api_auth: CoreAuthProvider,
 }
 
 #[derive(Clone, Copy)]
@@ -269,6 +265,7 @@ impl ModelClient {
             state: Arc::new(ModelClientState {
                 auth_manager,
                 conversation_id,
+                provider_auth: ProviderAuthResolver::new(&provider),
                 provider,
                 auth_env_telemetry,
                 session_source,
@@ -330,6 +327,10 @@ impl ModelClient {
 
         self.store_cached_websocket_session(WebsocketSession::default());
         activated
+    }
+
+    pub(crate) async fn resolve_provider_bearer_token(&self) -> Result<Option<String>> {
+        self.state.provider_auth.resolve_token().await
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -523,21 +524,13 @@ impl ModelClient {
     ///
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
-    async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
-        let auth = match self.state.auth_manager.as_ref() {
-            Some(manager) => manager.auth().await,
-            None => None,
-        };
-        let api_provider = self
-            .state
-            .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-        Ok(CurrentClientSetup {
-            auth,
-            api_provider,
-            api_auth,
-        })
+    async fn current_client_setup(&self) -> Result<ResolvedRequestAuth> {
+        resolve_request_auth(
+            self.state.auth_manager.as_ref(),
+            &self.state.provider,
+            &self.state.provider_auth,
+        )
+        .await
     }
 
     /// Opens a websocket connection using the same header and telemetry wiring as normal turns.
@@ -1016,10 +1009,10 @@ impl ModelClientSession {
             return Ok(stream);
         }
 
-        let auth_manager = self.client.state.auth_manager.clone();
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(super::auth::AuthManager::unauthorized_recovery);
+        let mut unauthorized_recovery = RequestUnauthorizedRecovery::new(
+            self.client.state.auth_manager.as_ref(),
+            &self.client.state.provider_auth,
+        );
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
@@ -1065,7 +1058,7 @@ impl ModelClientSession {
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
-                            &mut auth_recovery,
+                            &mut unauthorized_recovery,
                             session_telemetry,
                         )
                         .await?,
@@ -1104,11 +1097,10 @@ impl ModelClientSession {
         warmup: bool,
         request_trace: Option<W3cTraceContext>,
     ) -> Result<WebsocketStreamOutcome> {
-        let auth_manager = self.client.state.auth_manager.clone();
-
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(super::auth::AuthManager::unauthorized_recovery);
+        let mut unauthorized_recovery = RequestUnauthorizedRecovery::new(
+            self.client.state.auth_manager.as_ref(),
+            &self.client.state.provider_auth,
+        );
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
@@ -1162,14 +1154,16 @@ impl ModelClientSession {
                 Err(ApiError::Transport(
                     unauthorized_transport @ TransportError::Http { status, .. },
                 )) if status == StatusCode::UNAUTHORIZED => {
-                    pending_retry = PendingUnauthorizedRetry::from_recovery(
-                        handle_unauthorized(
-                            unauthorized_transport,
-                            &mut auth_recovery,
-                            session_telemetry,
-                        )
-                        .await?,
-                    );
+                    let recovery = handle_unauthorized(
+                        unauthorized_transport,
+                        &mut unauthorized_recovery,
+                        session_telemetry,
+                    )
+                    .await?;
+                    if recovery.mode == "provider_exec" {
+                        self.reset_websocket_session();
+                    }
+                    pending_retry = PendingUnauthorizedRetry::from_recovery(recovery);
                     continue;
                 }
                 Err(err) => return Err(map_api_error(err)),
@@ -1484,16 +1478,6 @@ where
     (ResponseStream { rx_event }, rx_last_response)
 }
 
-/// Handles a 401 response by optionally refreshing ChatGPT tokens once.
-///
-/// When refresh succeeds, the caller should retry the API call; otherwise
-/// the mapped `CodexErr` is returned to the caller.
-#[derive(Clone, Copy, Debug)]
-struct UnauthorizedRecoveryExecution {
-    mode: &'static str,
-    phase: &'static str,
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 struct PendingUnauthorizedRetry {
     retry_after_unauthorized: bool,
@@ -1553,43 +1537,62 @@ struct WebsocketConnectParams<'a> {
 
 async fn handle_unauthorized(
     transport: TransportError,
-    auth_recovery: &mut Option<UnauthorizedRecovery>,
+    unauthorized_recovery: &mut RequestUnauthorizedRecovery,
     session_telemetry: &SessionTelemetry,
 ) -> Result<UnauthorizedRecoveryExecution> {
     let debug = extract_response_debug_context(&transport);
-    if let Some(recovery) = auth_recovery
-        && recovery.has_next()
-    {
-        let mode = recovery.mode_name();
-        let phase = recovery.step_name();
-        return match recovery.next().await {
-            Ok(step_result) => {
+    match unauthorized_recovery.next().await {
+        Ok(UnauthorizedRecoveryOutcome::Recovered(recovery)) => {
+            session_telemetry.record_auth_recovery(
+                recovery.mode,
+                recovery.phase,
+                "recovery_succeeded",
+                debug.request_id.as_deref(),
+                debug.cf_ray.as_deref(),
+                debug.auth_error.as_deref(),
+                debug.auth_error_code.as_deref(),
+                /*recovery_reason*/ None,
+                recovery.auth_state_changed,
+            );
+            emit_feedback_auth_recovery_tags(
+                recovery.mode,
+                recovery.phase,
+                "recovery_succeeded",
+                debug.request_id.as_deref(),
+                debug.cf_ray.as_deref(),
+                debug.auth_error.as_deref(),
+                debug.auth_error_code.as_deref(),
+            );
+            Ok(recovery)
+        }
+        Ok(UnauthorizedRecoveryOutcome::Unavailable(unavailable)) => {
+            session_telemetry.record_auth_recovery(
+                unavailable.mode,
+                unavailable.phase,
+                "recovery_not_run",
+                debug.request_id.as_deref(),
+                debug.cf_ray.as_deref(),
+                debug.auth_error.as_deref(),
+                debug.auth_error_code.as_deref(),
+                Some(unavailable.reason),
+                /*auth_state_changed*/ None,
+            );
+            emit_feedback_auth_recovery_tags(
+                unavailable.mode,
+                unavailable.phase,
+                "recovery_not_run",
+                debug.request_id.as_deref(),
+                debug.cf_ray.as_deref(),
+                debug.auth_error.as_deref(),
+                debug.auth_error_code.as_deref(),
+            );
+            Err(map_api_error(ApiError::Transport(transport)))
+        }
+        Err(UnauthorizedRecoveryError::Chatgpt { execution, error }) => match error {
+            RefreshTokenError::Permanent(failed) => {
                 session_telemetry.record_auth_recovery(
-                    mode,
-                    phase,
-                    "recovery_succeeded",
-                    debug.request_id.as_deref(),
-                    debug.cf_ray.as_deref(),
-                    debug.auth_error.as_deref(),
-                    debug.auth_error_code.as_deref(),
-                    /*recovery_reason*/ None,
-                    step_result.auth_state_changed(),
-                );
-                emit_feedback_auth_recovery_tags(
-                    mode,
-                    phase,
-                    "recovery_succeeded",
-                    debug.request_id.as_deref(),
-                    debug.cf_ray.as_deref(),
-                    debug.auth_error.as_deref(),
-                    debug.auth_error_code.as_deref(),
-                );
-                Ok(UnauthorizedRecoveryExecution { mode, phase })
-            }
-            Err(RefreshTokenError::Permanent(failed)) => {
-                session_telemetry.record_auth_recovery(
-                    mode,
-                    phase,
+                    execution.mode,
+                    execution.phase,
                     "recovery_failed_permanent",
                     debug.request_id.as_deref(),
                     debug.cf_ray.as_deref(),
@@ -1599,8 +1602,8 @@ async fn handle_unauthorized(
                     /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
-                    mode,
-                    phase,
+                    execution.mode,
+                    execution.phase,
                     "recovery_failed_permanent",
                     debug.request_id.as_deref(),
                     debug.cf_ray.as_deref(),
@@ -1609,10 +1612,10 @@ async fn handle_unauthorized(
                 );
                 Err(CodexErr::RefreshTokenFailed(failed))
             }
-            Err(RefreshTokenError::Transient(other)) => {
+            RefreshTokenError::Transient(other) => {
                 session_telemetry.record_auth_recovery(
-                    mode,
-                    phase,
+                    execution.mode,
+                    execution.phase,
                     "recovery_failed_transient",
                     debug.request_id.as_deref(),
                     debug.cf_ray.as_deref(),
@@ -1622,8 +1625,8 @@ async fn handle_unauthorized(
                     /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
-                    mode,
-                    phase,
+                    execution.mode,
+                    execution.phase,
                     "recovery_failed_transient",
                     debug.request_id.as_deref(),
                     debug.cf_ray.as_deref(),
@@ -1632,39 +1635,31 @@ async fn handle_unauthorized(
                 );
                 Err(CodexErr::Io(other))
             }
-        };
+        },
+        Err(UnauthorizedRecoveryError::Provider { execution, error }) => {
+            session_telemetry.record_auth_recovery(
+                execution.mode,
+                execution.phase,
+                "recovery_failed_permanent",
+                debug.request_id.as_deref(),
+                debug.cf_ray.as_deref(),
+                debug.auth_error.as_deref(),
+                debug.auth_error_code.as_deref(),
+                /*recovery_reason*/ None,
+                /*auth_state_changed*/ None,
+            );
+            emit_feedback_auth_recovery_tags(
+                execution.mode,
+                execution.phase,
+                "recovery_failed_permanent",
+                debug.request_id.as_deref(),
+                debug.cf_ray.as_deref(),
+                debug.auth_error.as_deref(),
+                debug.auth_error_code.as_deref(),
+            );
+            Err(error)
+        }
     }
-
-    let (mode, phase, recovery_reason) = match auth_recovery.as_ref() {
-        Some(recovery) => (
-            recovery.mode_name(),
-            recovery.step_name(),
-            Some(recovery.unavailable_reason()),
-        ),
-        None => ("none", "none", Some("auth_manager_missing")),
-    };
-    session_telemetry.record_auth_recovery(
-        mode,
-        phase,
-        "recovery_not_run",
-        debug.request_id.as_deref(),
-        debug.cf_ray.as_deref(),
-        debug.auth_error.as_deref(),
-        debug.auth_error_code.as_deref(),
-        recovery_reason,
-        /*auth_state_changed*/ None,
-    );
-    emit_feedback_auth_recovery_tags(
-        mode,
-        phase,
-        "recovery_not_run",
-        debug.request_id.as_deref(),
-        debug.cf_ray.as_deref(),
-        debug.auth_error.as_deref(),
-        debug.auth_error_code.as_deref(),
-    );
-
-    Err(map_api_error(ApiError::Transport(transport)))
 }
 
 fn api_error_http_status(error: &ApiError) -> Option<u16> {
