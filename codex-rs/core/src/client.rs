@@ -1539,6 +1539,13 @@ struct WebsocketConnectParams<'a> {
     request_route_telemetry: RequestRouteTelemetry,
 }
 
+/// Handles a `401 Unauthorized` from the transport used by the request loops above.
+///
+/// The helper centralizes three coupled concerns:
+/// - ask `RequestUnauthorizedRecovery` whether another recovery step is available
+/// - record the matching telemetry / feedback tags for the outcome of that step
+/// - return the recovery execution to the caller so it can rebuild auth state and retry,
+///   or map the failure into the `CodexErr` that should terminate the loop
 async fn handle_unauthorized(
     transport: TransportError,
     unauthorized_recovery: &mut RequestUnauthorizedRecovery,
