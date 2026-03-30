@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::api_bridge::CoreAuthProvider;
-use crate::api_bridge::auth_provider_from_auth;
+use crate::api_bridge::auth_provider_from_resolved_provider_token;
 use crate::auth::AuthManager;
 use crate::auth::AuthMode;
 use crate::auth::CodexAuth;
@@ -10,6 +10,7 @@ use crate::auth::UnauthorizedRecovery;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::provider_auth::ProviderAuthResolver;
 
 #[derive(Clone)]
 pub(crate) struct ResolvedRequestAuth {
@@ -22,14 +23,17 @@ pub(crate) struct ResolvedRequestAuth {
 pub(crate) async fn resolve_request_auth(
     auth_manager: Option<&Arc<AuthManager>>,
     provider: &ModelProviderInfo,
+    provider_auth: &ProviderAuthResolver,
 ) -> Result<ResolvedRequestAuth> {
     let auth = match auth_manager {
         Some(manager) => manager.auth().await,
         None => None,
     };
     let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
+    let provider_token = provider_auth.resolve_token().await?;
     let api_provider = provider.to_api_provider(auth_mode)?;
-    let api_auth = auth_provider_from_auth(auth.clone(), provider)?;
+    let api_auth =
+        auth_provider_from_resolved_provider_token(auth.clone(), provider, provider_token)?;
     Ok(ResolvedRequestAuth {
         auth,
         auth_mode,
@@ -64,6 +68,10 @@ pub(crate) enum UnauthorizedRecoveryError {
         execution: UnauthorizedRecoveryExecution,
         error: RefreshTokenError,
     },
+    Provider {
+        execution: UnauthorizedRecoveryExecution,
+        error: CodexErr,
+    },
 }
 
 impl UnauthorizedRecoveryError {
@@ -73,6 +81,7 @@ impl UnauthorizedRecoveryError {
                 RefreshTokenError::Permanent(failed) => CodexErr::RefreshTokenFailed(failed),
                 RefreshTokenError::Transient(error) => CodexErr::Io(error),
             },
+            Self::Provider { error, .. } => error,
         }
     }
 }
@@ -82,12 +91,19 @@ impl UnauthorizedRecoveryError {
 /// The request loops reuse the same instance across retries so this type can enforce the
 /// recovery ordering and make sure each one-shot step only runs once.
 pub(crate) struct RequestUnauthorizedRecovery {
+    provider_auth: ProviderAuthResolver,
+    provider_auth_retry_available: bool,
     auth_recovery: Option<UnauthorizedRecovery>,
 }
 
 impl RequestUnauthorizedRecovery {
-    pub(crate) fn new(auth_manager: Option<&Arc<AuthManager>>) -> Self {
+    pub(crate) fn new(
+        auth_manager: Option<&Arc<AuthManager>>,
+        provider_auth: &ProviderAuthResolver,
+    ) -> Self {
         Self {
+            provider_auth: provider_auth.clone(),
+            provider_auth_retry_available: provider_auth.is_configured(),
             auth_recovery: auth_manager.map(AuthManager::unauthorized_recovery),
         }
     }
@@ -101,6 +117,24 @@ impl RequestUnauthorizedRecovery {
     pub(crate) async fn next(
         &mut self,
     ) -> std::result::Result<UnauthorizedRecoveryOutcome, UnauthorizedRecoveryError> {
+        if self.provider_auth_retry_available {
+            self.provider_auth_retry_available = false;
+            let execution = UnauthorizedRecoveryExecution {
+                mode: "provider_exec",
+                phase: "refresh",
+                auth_state_changed: None,
+            };
+            return match self.provider_auth.refresh_after_unauthorized().await {
+                Ok(auth_state_changed) => Ok(UnauthorizedRecoveryOutcome::Recovered(
+                    UnauthorizedRecoveryExecution {
+                        auth_state_changed,
+                        ..execution
+                    },
+                )),
+                Err(error) => Err(UnauthorizedRecoveryError::Provider { execution, error }),
+            };
+        }
+
         if let Some(recovery) = self.auth_recovery.as_mut()
             && recovery.has_next()
         {
