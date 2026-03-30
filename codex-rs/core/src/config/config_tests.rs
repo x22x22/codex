@@ -84,6 +84,29 @@ fn http_mcp(url: &str) -> McpServerConfig {
     }
 }
 
+async fn load_isolated_config_from_home(codex_home: &TempDir) -> std::io::Result<Config> {
+    let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+    let config_toml = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => {
+            let value = toml::from_str(&contents)
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+            deserialize_config_toml_with_base(value, codex_home.path())?
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => ConfigToml::default(),
+        Err(err) => return Err(err),
+    };
+
+    Config::load_config_with_layer_stack(
+        config_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+        ConfigLayerStack::default(),
+    )
+}
+
 #[test]
 fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
     let expected_cwd = AbsolutePathBuf::relative_to_current_dir("nested")?;
@@ -5748,12 +5771,7 @@ shell_tool = true
 async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -> std::io::Result<()>
 {
     let codex_home = TempDir::new()?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = load_isolated_config_from_home(&codex_home).await?;
 
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
@@ -5770,11 +5788,7 @@ guardian_approval = true
 "#,
     )?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = load_isolated_config_from_home(&codex_home).await?;
 
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
@@ -5790,11 +5804,7 @@ async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> 
 "#,
     )?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = load_isolated_config_from_home(&codex_home).await?;
 
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
@@ -5813,11 +5823,7 @@ approvals_reviewer = "guardian_subagent"
 "#,
     )?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = load_isolated_config_from_home(&codex_home).await?;
 
     assert_eq!(
         config.approvals_reviewer,
@@ -5836,11 +5842,7 @@ smart_approvals = true
 "#,
     )?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = load_isolated_config_from_home(&codex_home).await?;
 
     assert!(!config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
@@ -5865,11 +5867,7 @@ smart_approvals = true
 "#,
     )?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = load_isolated_config_from_home(&codex_home).await?;
 
     assert!(!config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
