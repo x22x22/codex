@@ -138,7 +138,9 @@ If no package selection is provided, `just argument-comment-lint` now defaults
 to the Bazel aspect path over `//codex-rs/...`. The Python wrappers remain the
 package-scoped escape hatch and still default the underlying Cargo invocation
 to `--all-targets` unless you explicitly narrow the target set, so targeted
-wrapper runs cover test-only call sites by default.
+wrapper runs cover test-only call sites by default. The Bazel config also sets
+`--build_manual_tests` so wildcard lint runs include the internal
+`*-unit-tests-bin` Rust targets and catch inline `#[cfg(test)]` call sites.
 
 Repo runs also promote `uncommented_anonymous_literal_argument` to an error by
 default:
