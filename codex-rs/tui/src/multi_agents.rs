@@ -613,6 +613,7 @@ mod tests {
                 spawn_mode: AgentSpawnMode::Spawn,
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
+                spawn_mode: AgentSpawnMode::Spawn,
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {
@@ -752,6 +753,7 @@ mod tests {
                 spawn_mode: AgentSpawnMode::Spawn,
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
+                spawn_mode: AgentSpawnMode::Spawn,
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {
