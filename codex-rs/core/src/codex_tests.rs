@@ -2369,7 +2369,6 @@ enabled = false
             description: None,
             model: None,
             config_file: Some(role_path),
-            spawn_mode: None,
             watchdog_interval_s: None,
             nickname_candidates: None,
             fork_context: None,
