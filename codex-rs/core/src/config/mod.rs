@@ -2431,7 +2431,7 @@ impl Config {
             .or_else(|| {
                 features
                     .enabled(Feature::Personality)
-                    .then_some(Personality::Pragmatic)
+                    .then_some(Personality::pragmatic())
             });
 
         let experimental_compact_prompt_path = config_profile

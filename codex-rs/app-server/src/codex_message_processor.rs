@@ -83,6 +83,8 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::PersonalitiesListParams;
+use codex_app_server_protocol::PersonalitiesListResponse;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -777,6 +779,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PersonalitiesList { request_id, params } => {
+                self.personalities_list(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::PluginList { request_id, params } => {
@@ -5787,6 +5793,61 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn personalities_list(
+        &self,
+        request_id: ConnectionRequestId,
+        params: PersonalitiesListParams,
+    ) {
+        let cwds = params
+            .cwds
+            .map(|cwds| {
+                cwds.into_iter()
+                    .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|cwds| !cwds.is_empty())
+            .unwrap_or_else(|| vec![self.config.cwd.to_path_buf()]);
+
+        let cli_overrides = self.current_cli_overrides();
+        let mut data = Vec::new();
+        for cwd in cwds {
+            let cwd_abs = match AbsolutePathBuf::try_from(cwd.as_path()) {
+                Ok(path) => path,
+                Err(err) => {
+                    self.send_invalid_request_error(request_id, err.to_string())
+                        .await;
+                    return;
+                }
+            };
+            let config_layer_stack = match load_config_layers_state(
+                &self.config.codex_home,
+                Some(cwd_abs),
+                &cli_overrides,
+                LoaderOverrides::default(),
+                CloudRequirementsLoader::default(),
+            )
+            .await
+            {
+                Ok(config_layer_stack) => config_layer_stack,
+                Err(err) => {
+                    self.outgoing
+                        .send_error(request_id, config_load_error(&err))
+                        .await;
+                    return;
+                }
+            };
+            let catalog = codex_core::personalities::catalog_from_layer_stack(&config_layer_stack);
+            data.push(codex_app_server_protocol::PersonalitiesListEntry {
+                cwd,
+                personalities: personalities_to_info(catalog.personalities()),
+            });
+        }
+
+        self.outgoing
+            .send_response(request_id, PersonalitiesListResponse { data })
+            .await;
+    }
+
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams {
@@ -6390,7 +6451,7 @@ impl CodexMessageProcessor {
                         summary: params.summary,
                         service_tier: params.service_tier,
                         collaboration_mode,
-                        personality: params.personality,
+                        personality: params.personality.clone(),
                     },
                 )
                 .await;
@@ -7983,6 +8044,32 @@ fn skills_to_info(
                 enabled,
             }
         })
+        .collect()
+}
+
+fn personalities_to_info(
+    personalities: &[codex_core::personalities::PersonalityDefinition],
+) -> Vec<codex_app_server_protocol::PersonalityMetadata> {
+    personalities
+        .iter()
+        .map(
+            |personality| codex_app_server_protocol::PersonalityMetadata {
+                name: personality.name.to_string(),
+                description: personality.description.clone(),
+                scope: match personality.scope {
+                    codex_core::personalities::PersonalityScope::Builtin => {
+                        codex_app_server_protocol::PersonalityScope::Builtin
+                    }
+                    codex_core::personalities::PersonalityScope::User => {
+                        codex_app_server_protocol::PersonalityScope::User
+                    }
+                    codex_core::personalities::PersonalityScope::Repo => {
+                        codex_app_server_protocol::PersonalityScope::Repo
+                    }
+                },
+                is_built_in: personality.is_builtin,
+            },
+        )
         .collect()
 }
 

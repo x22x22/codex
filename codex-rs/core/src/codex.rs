@@ -33,6 +33,7 @@ use crate::models_manager::manager::RefreshStrategy;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
+use crate::personalities::catalog_for_config;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
@@ -572,7 +573,7 @@ impl Codex {
             .base_instructions
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone()));
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -618,7 +619,7 @@ impl Codex {
             service_tier: config.service_tier,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
-            personality: config.personality,
+            personality: config.personality.clone(),
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
@@ -970,7 +971,7 @@ impl TurnContext {
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
             collaboration_mode,
-            personality: self.personality,
+            personality: self.personality.clone(),
             approval_policy: self.approval_policy.clone(),
             sandbox_policy: self.sandbox_policy.clone(),
             file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
@@ -1017,7 +1018,7 @@ impl TurnContext {
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
             model: self.model_info.slug.clone(),
-            personality: self.personality,
+            personality: self.personality.clone(),
             collaboration_mode: Some(self.collaboration_mode.clone()),
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort,
@@ -1133,7 +1134,7 @@ impl SessionConfiguration {
             cwd: self.cwd.to_path_buf(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
-            personality: self.personality,
+            personality: self.personality.clone(),
             session_source: self.session_source.clone(),
         }
     }
@@ -1154,7 +1155,7 @@ impl SessionConfiguration {
         if let Some(service_tier) = updates.service_tier {
             next_configuration.service_tier = service_tier;
         }
-        if let Some(personality) = updates.personality {
+        if let Some(personality) = updates.personality.clone() {
             next_configuration.personality = Some(personality);
         }
         if let Some(approval_policy) = updates.approval_policy {
@@ -1297,7 +1298,7 @@ impl Session {
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.service_tier = session_configuration.service_tier;
-        per_turn_config.personality = session_configuration.personality;
+        per_turn_config.personality = session_configuration.personality.clone();
         per_turn_config.approvals_reviewer = session_configuration.approvals_reviewer;
         let resolved_web_search_mode = resolve_web_search_mode_for_turn(
             &per_turn_config.web_search_mode,
@@ -1436,7 +1437,7 @@ impl Session {
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
-            personality: session_configuration.personality,
+            personality: session_configuration.personality.clone(),
             approval_policy: session_configuration.approval_policy.clone(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
             file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
@@ -1884,6 +1885,7 @@ impl Session {
             auth_manager: Arc::clone(&auth_manager),
             session_telemetry,
             models_manager: Arc::clone(&models_manager),
+            personality_catalog: Arc::new(catalog_for_config(config.as_ref())),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             plugins_manager: Arc::clone(&plugins_manager),
@@ -2628,6 +2630,7 @@ impl Session {
             current_context,
             shell.as_ref(),
             exec_policy.as_ref(),
+            self.services.personality_catalog.as_ref(),
             self.features.enabled(Feature::Personality),
         )
     }
@@ -3613,16 +3616,19 @@ impl Session {
             developer_sections.push(realtime_update.into_text());
         }
         if self.features.enabled(Feature::Personality)
-            && let Some(personality) = turn_context.personality
+            && let Some(personality) = turn_context.personality.clone()
         {
             let model_info = turn_context.model_info.clone();
-            let has_baked_personality = model_info.supports_personality()
-                && base_instructions == model_info.get_model_instructions(Some(personality));
+            let has_baked_personality = personality.is_builtin()
+                && model_info.supports_personality()
+                && base_instructions
+                    == model_info.get_model_instructions(Some(personality.clone()));
             if !has_baked_personality
                 && let Some(personality_message) =
                     crate::context_manager::updates::personality_message_for(
                         &model_info,
-                        personality,
+                        &self.services.personality_catalog,
+                        &personality,
                     )
             {
                 developer_sections.push(
@@ -5541,7 +5547,7 @@ async fn spawn_review_thread(
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
-        personality: parent_turn_context.personality,
+        personality: parent_turn_context.personality.clone(),
         approval_policy: parent_turn_context.approval_policy.clone(),
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
@@ -6418,7 +6424,7 @@ pub(crate) fn build_prompt(
         tools,
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
-        personality: turn_context.personality,
+        personality: turn_context.personality.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
     }
 }

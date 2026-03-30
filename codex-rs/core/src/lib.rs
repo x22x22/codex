@@ -63,6 +63,7 @@ pub mod message_history;
 mod model_provider_info;
 pub mod utils;
 pub use utils::path_utils;
+pub mod personalities;
 pub mod personality_migration;
 pub mod plugins;
 mod provider_auth;

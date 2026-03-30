@@ -452,7 +452,20 @@ def generate_v2_all() -> None:
             ],
             cwd=sdk_root(),
         )
+    _widen_generated_personality_type(out_path)
     _normalize_generated_timestamps(out_path)
+
+
+def _widen_generated_personality_type(out_path: Path) -> None:
+    source = out_path.read_text()
+    updated = re.sub(
+        r"class Personality\(Enum\):\n(?:    .+\n)+",
+        "Personality = str\n\n",
+        source,
+        count=1,
+    )
+    if updated != source:
+        out_path.write_text(updated)
 
 
 def _notification_specs() -> list[tuple[str, str]]:
@@ -544,6 +557,11 @@ FIELD_ANNOTATION_OVERRIDES: dict[str, str] = {
     # Keep public API typed without falling back to `Any`.
     "config": "JsonObject",
     "output_schema": "JsonObject",
+    "personality": "PersonalityLike",
+}
+
+FIELD_SERIALIZATION_OVERRIDES: dict[str, str] = {
+    "personality": "personality_value(personality)",
 }
 
 
@@ -636,7 +654,11 @@ def _kw_signature_lines(fields: list[PublicFieldSpec]) -> list[str]:
 def _model_arg_lines(
     fields: list[PublicFieldSpec], *, indent: str = "            "
 ) -> list[str]:
-    return [f"{indent}{field.wire_name}={field.py_name}," for field in fields]
+    lines = []
+    for field in fields:
+        value = FIELD_SERIALIZATION_OVERRIDES.get(field.wire_name, field.py_name)
+        lines.append(f"{indent}{field.wire_name}={value},")
+    return lines
 
 
 def _replace_generated_block(source: str, block_name: str, body: str) -> str:

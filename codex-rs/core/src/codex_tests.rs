@@ -1268,7 +1268,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
-        personality: turn_context.personality,
+        personality: turn_context.personality.clone(),
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort,
@@ -1801,11 +1801,11 @@ async fn set_rate_limits_retains_previous_credits() {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -1899,11 +1899,11 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2243,11 +2243,11 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2505,11 +2505,11 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2602,11 +2602,11 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -2682,6 +2682,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         auth_manager: auth_manager.clone(),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
+        personality_catalog: Arc::new(crate::personalities::catalog_for_config(config.as_ref())),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         skills_manager,
         plugins_manager,
@@ -3104,7 +3105,7 @@ async fn user_turn_updates_approvals_reviewer() {
             service_tier: None,
             final_output_json_schema: None,
             collaboration_mode: None,
-            personality: config.personality,
+            personality: config.personality.clone(),
         },
     )
     .await;
@@ -3445,11 +3446,11 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
-        personality: config.personality,
+        personality: config.personality.clone(),
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality.clone())),
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         approvals_reviewer: config.approvals_reviewer,
@@ -3525,6 +3526,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         auth_manager: Arc::clone(&auth_manager),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
+        personality_catalog: Arc::new(crate::personalities::catalog_for_config(config.as_ref())),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         skills_manager,
         plugins_manager,
@@ -4944,13 +4946,16 @@ async fn sample_rollout(
             && content.iter().any(|c| {
                 matches!(c, ContentItem::InputText { text } if text.contains("<personality_spec>"))
             }))
-    }) && let Some(p) = reconstruction_turn.personality
+    }) && let Some(p) = reconstruction_turn.personality.as_ref()
         && session.features.enabled(Feature::Personality)
         && let Some(personality_message) = reconstruction_turn
             .model_info
             .model_messages
             .as_ref()
-            .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
+            .and_then(|m| {
+                m.get_personality_message(Some(p.clone()))
+                    .filter(|s| !s.is_empty())
+            })
     {
         let msg = DeveloperInstructions::personality_spec_message(personality_message).into();
         let insert_at = initial_context
