@@ -109,7 +109,7 @@ impl ToolHandler for Handler {
             role_name,
             /*task_name*/ None,
         )?;
-        let mut candidates_to_try = if fork_context {
+        let candidates_to_try = if fork_context {
             vec![SpawnAgentModelCandidate {
                 model: None,
                 reasoning_effort: None,

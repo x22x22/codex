@@ -114,7 +114,7 @@ impl ToolHandler for Handler {
             }
             (_, initial_operation) => initial_operation,
         };
-        let mut candidates_to_try = if fork_context {
+        let candidates_to_try = if fork_context {
             vec![SpawnAgentModelCandidate {
                 model: None,
                 reasoning_effort: None,
