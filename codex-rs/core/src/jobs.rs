@@ -1,0 +1,323 @@
+//! Runtime-only thread-local job scheduling for follow-on turns.
+//!
+//! This module owns the in-memory job registry, limited schedule parsing, and
+//! the hidden turn context injected when a job fires so the model can act on
+//! the scheduled prompt and deschedule itself via `JobDelete(currentJobId)`.
+
+use chrono::DateTime;
+use chrono::Duration as ChronoDuration;
+use chrono::Utc;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
+
+pub const AFTER_TURN_CRON_EXPRESSION: &str = "@after-turn";
+const EVERY_PREFIX: &str = "@every ";
+const EVERY_SECONDS_PREFIX: &str = "@every:";
+pub const JOB_UPDATED_BACKGROUND_EVENT_PREFIX: &str = "job_updated:";
+pub const JOB_FIRED_BACKGROUND_EVENT_PREFIX: &str = "job_fired:";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadJob {
+    pub id: String,
+    pub cron_expression: String,
+    pub prompt: String,
+    pub run_once: bool,
+    pub created_at: i64,
+    pub next_run_at: Option<i64>,
+    pub last_run_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct JobTurnContext {
+    pub(crate) current_job_id: String,
+    pub(crate) prompt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClaimedJob {
+    pub(crate) job: ThreadJob,
+    pub(crate) context: JobTurnContext,
+    pub(crate) deleted_run_once_job: bool,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct JobsState {
+    jobs: HashMap<String, JobRuntime>,
+}
+
+#[derive(Debug)]
+struct JobRuntime {
+    job: ThreadJob,
+    schedule: JobSchedule,
+    pending_run: bool,
+    timer_cancel: Option<CancellationToken>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JobSchedule {
+    AfterTurn,
+    EverySeconds(u64),
+}
+
+impl JobSchedule {
+    pub(crate) fn parse(cron_expression: &str) -> Result<Self, String> {
+        if cron_expression == AFTER_TURN_CRON_EXPRESSION {
+            return Ok(Self::AfterTurn);
+        }
+
+        if let Some(seconds) = cron_expression
+            .strip_prefix(EVERY_PREFIX)
+            .map(str::trim)
+            .and_then(parse_duration_literal)
+        {
+            return Ok(Self::EverySeconds(seconds));
+        }
+
+        if let Some(seconds) = cron_expression
+            .strip_prefix(EVERY_SECONDS_PREFIX)
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+        {
+            return Ok(Self::EverySeconds(seconds));
+        }
+
+        Err(format!(
+            "unsupported cron_expression `{cron_expression}`; supported values are `{AFTER_TURN_CRON_EXPRESSION}`, `@every 5m`, or `@every:300`"
+        ))
+    }
+
+    fn next_run_at(self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        match self {
+            Self::AfterTurn => None,
+            Self::EverySeconds(seconds) => Some(now + ChronoDuration::seconds(seconds as i64)),
+        }
+    }
+}
+
+impl JobsState {
+    pub(crate) fn list_jobs(&self) -> Vec<ThreadJob> {
+        let mut jobs = self
+            .jobs
+            .values()
+            .map(|runtime| runtime.job.clone())
+            .collect::<Vec<_>>();
+        jobs.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        jobs
+    }
+
+    pub(crate) fn create_job(
+        &mut self,
+        id: String,
+        cron_expression: String,
+        prompt: String,
+        run_once: bool,
+        now: DateTime<Utc>,
+        timer_cancel: Option<CancellationToken>,
+    ) -> Result<ThreadJob, String> {
+        let schedule = JobSchedule::parse(&cron_expression)?;
+        let job = ThreadJob {
+            id: id.clone(),
+            cron_expression,
+            prompt,
+            run_once,
+            created_at: now.timestamp(),
+            next_run_at: schedule.next_run_at(now).map(|value| value.timestamp()),
+            last_run_at: None,
+        };
+        self.jobs.insert(
+            id,
+            JobRuntime {
+                job: job.clone(),
+                schedule,
+                pending_run: matches!(schedule, JobSchedule::AfterTurn),
+                timer_cancel,
+            },
+        );
+        Ok(job)
+    }
+
+    pub(crate) fn delete_job(&mut self, id: &str) -> bool {
+        let Some(runtime) = self.jobs.remove(id) else {
+            return false;
+        };
+        if let Some(cancel) = runtime.timer_cancel {
+            cancel.cancel();
+        }
+        true
+    }
+
+    pub(crate) fn mark_after_turn_jobs_due(&mut self) {
+        for runtime in self.jobs.values_mut() {
+            if matches!(runtime.schedule, JobSchedule::AfterTurn) {
+                runtime.pending_run = true;
+            }
+        }
+    }
+
+    pub(crate) fn mark_job_due(&mut self, id: &str, now: DateTime<Utc>) {
+        let Some(runtime) = self.jobs.get_mut(id) else {
+            return;
+        };
+        runtime.pending_run = true;
+        runtime.job.next_run_at = runtime
+            .schedule
+            .next_run_at(now)
+            .map(|value| value.timestamp());
+    }
+
+    pub(crate) fn claim_next_job(&mut self, now: DateTime<Utc>) -> Option<ClaimedJob> {
+        let next_job_id = self
+            .jobs
+            .values()
+            .filter(|runtime| runtime.pending_run)
+            .min_by(|left, right| {
+                left.job
+                    .created_at
+                    .cmp(&right.job.created_at)
+                    .then_with(|| left.job.id.cmp(&right.job.id))
+            })
+            .map(|runtime| runtime.job.id.clone())?;
+
+        let runtime = self.jobs.remove(&next_job_id)?;
+        let JobRuntime {
+            mut job,
+            schedule,
+            pending_run: _,
+            timer_cancel,
+        } = runtime;
+        let deleted_run_once_job = job.run_once;
+        if deleted_run_once_job {
+            if let Some(cancel) = timer_cancel {
+                cancel.cancel();
+            }
+        } else {
+            job.last_run_at = Some(now.timestamp());
+            self.jobs.insert(
+                job.id.clone(),
+                JobRuntime {
+                    job: job.clone(),
+                    schedule,
+                    pending_run: false,
+                    timer_cancel,
+                },
+            );
+        }
+        Some(ClaimedJob {
+            job: job.clone(),
+            context: JobTurnContext {
+                current_job_id: job.id,
+                prompt: job.prompt,
+            },
+            deleted_run_once_job,
+        })
+    }
+}
+
+pub(crate) fn job_turn_developer_instructions(job: &JobTurnContext) -> String {
+    format!(
+        "This turn was triggered by a thread job.\ncurrentJobId: {}\n\nThe job prompt has already been injected as hidden context for this turn.\nIf you determine the job should stop, call JobDelete with currentJobId. Do not expose scheduler internals unless they matter to the user.",
+        job.current_job_id
+    )
+}
+
+pub(crate) fn job_prompt_input_item(prompt: &str) -> ResponseInputItem {
+    ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: prompt.to_string(),
+        }],
+    }
+}
+
+fn parse_duration_literal(raw: &str) -> Option<u64> {
+    let mut digits = String::new();
+    let mut unit = String::new();
+    for ch in raw.chars() {
+        if ch.is_ascii_digit() && unit.is_empty() {
+            digits.push(ch);
+        } else if !ch.is_whitespace() {
+            unit.push(ch);
+        }
+    }
+    let value = digits.parse::<u64>().ok().filter(|value| *value > 0)?;
+    match unit.as_str() {
+        "s" | "sec" | "secs" | "second" | "seconds" => Some(value),
+        "m" | "min" | "mins" | "minute" | "minutes" => value.checked_mul(60),
+        "h" | "hr" | "hrs" | "hour" | "hours" => value.checked_mul(60 * 60),
+        "d" | "day" | "days" => value.checked_mul(60 * 60 * 24),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AFTER_TURN_CRON_EXPRESSION;
+    use super::JobSchedule;
+    use super::JobsState;
+    use super::job_prompt_input_item;
+    use chrono::TimeZone;
+    use chrono::Utc;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseInputItem;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parses_supported_job_schedules() {
+        assert_eq!(
+            JobSchedule::parse(AFTER_TURN_CRON_EXPRESSION),
+            Ok(JobSchedule::AfterTurn)
+        );
+        assert_eq!(
+            JobSchedule::parse("@every 5m"),
+            Ok(JobSchedule::EverySeconds(300))
+        );
+        assert_eq!(
+            JobSchedule::parse("@every:3600"),
+            Ok(JobSchedule::EverySeconds(3600))
+        );
+    }
+
+    #[test]
+    fn claim_run_once_job_removes_it() {
+        let now = Utc.timestamp_opt(100, 0).single().expect("valid timestamp");
+        let mut jobs = JobsState::default();
+        let job = jobs
+            .create_job(
+                "job-1".to_string(),
+                AFTER_TURN_CRON_EXPRESSION.to_string(),
+                "run tests".to_string(),
+                true,
+                now,
+                None,
+            )
+            .expect("job should be created");
+        assert_eq!(jobs.list_jobs(), vec![job]);
+
+        let claimed = jobs.claim_next_job(now).expect("job should be claimed");
+        assert_eq!(claimed.context.current_job_id, "job-1");
+        assert!(claimed.deleted_run_once_job);
+        assert!(jobs.list_jobs().is_empty());
+    }
+
+    #[test]
+    fn job_prompt_input_is_hidden_developer_input() {
+        let item = job_prompt_input_item("run tests");
+        assert_eq!(
+            item,
+            ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "run tests".to_string(),
+                }],
+            }
+        );
+    }
+}

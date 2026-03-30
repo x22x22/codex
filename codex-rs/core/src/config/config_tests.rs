@@ -34,6 +34,7 @@ use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use core_test_support::test_absolute_path;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -5724,79 +5725,95 @@ shell_tool = true
 }
 
 #[tokio::test]
+#[serial]
 async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -> std::io::Result<()>
 {
     let codex_home = TempDir::new()?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
 
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
 }
 
 #[tokio::test]
+#[serial]
 async fn approvals_reviewer_stays_manual_only_when_guardian_feature_is_enabled()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
+    let raw_config = r#"[features]
 guardian_approval = true
-"#,
-    )?;
+"#;
+    std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), raw_config)?;
+    let config_toml = toml::from_str::<ConfigToml>(raw_config)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
 
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
 }
 
 #[tokio::test]
+#[serial]
 async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> std::io::Result<()>
 {
     let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"approvals_reviewer = "user"
-"#,
-    )?;
+    let raw_config = r#"approvals_reviewer = "user"
+"#;
+    std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), raw_config)?;
+    let config_toml = toml::from_str::<ConfigToml>(raw_config)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
 
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
 }
 
 #[tokio::test]
+#[serial]
 async fn approvals_reviewer_can_be_set_in_profile_without_guardian_approval() -> std::io::Result<()>
 {
     let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"profile = "guardian"
+    let raw_config = r#"profile = "guardian"
 
 [profiles.guardian]
 approvals_reviewer = "guardian_subagent"
-"#,
-    )?;
+"#;
+    std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), raw_config)?;
+    let config_toml = toml::from_str::<ConfigToml>(raw_config)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
 
     assert_eq!(
         config.approvals_reviewer,
@@ -5806,20 +5823,24 @@ approvals_reviewer = "guardian_subagent"
 }
 
 #[tokio::test]
+#[serial]
 async fn smart_approvals_alias_is_ignored() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
+    let raw_config = r#"[features]
 smart_approvals = true
-"#,
-    )?;
+"#;
+    std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), raw_config)?;
+    let config_toml = toml::from_str::<ConfigToml>(raw_config)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
 
     assert!(!config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
@@ -5833,22 +5854,26 @@ smart_approvals = true
 }
 
 #[tokio::test]
+#[serial]
 async fn smart_approvals_alias_is_ignored_in_profiles() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"profile = "guardian"
+    let raw_config = r#"profile = "guardian"
 
 [profiles.guardian.features]
 smart_approvals = true
-"#,
-    )?;
+"#;
+    std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), raw_config)?;
+    let config_toml = toml::from_str::<ConfigToml>(raw_config)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
 
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
+    let config = Config::load_from_base_config_with_overrides(
+        config_toml,
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
 
     assert!(!config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);

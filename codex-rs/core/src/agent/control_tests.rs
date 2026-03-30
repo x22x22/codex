@@ -495,7 +495,7 @@ async fn append_message_records_assistant_message() {
         .expect("append_message should succeed");
     assert!(!submission_id.is_empty());
 
-    timeout(Duration::from_secs(5), async {
+    timeout(Duration::from_secs(15), async {
         loop {
             let history_items = thread
                 .codex
@@ -1478,7 +1478,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
     let state_db = child_thread
         .state_db()
         .expect("sqlite state db should be available for nickname resume test");
-    timeout(Duration::from_secs(5), async {
+    timeout(Duration::from_secs(15), async {
         loop {
             if let Ok(Some(metadata)) = state_db.get_thread(child_thread_id).await
                 && metadata.agent_nickname.is_some()

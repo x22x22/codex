@@ -200,14 +200,14 @@ use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
 async fn test_config() -> Config {
-    // Use base defaults to avoid depending on host state.
-    let codex_home = std::env::temp_dir();
-    ConfigBuilder::default()
-        .codex_home(codex_home.clone())
-        .fallback_cwd(Some(PathBuf::from(test_path_display("/tmp/project"))))
-        .build()
-        .await
-        .expect("config")
+    // Start from built-in defaults so test feature state does not inherit
+    // host config layers or managed requirements from the machine.
+    let mut config = Config::load_default_with_cli_overrides(Vec::new()).expect("config");
+    config.codex_home = std::env::temp_dir();
+    config.cwd =
+        AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp/project"))).expect("cwd");
+    config.config_layer_stack = codex_core::config_loader::ConfigLayerStack::default();
+    config
 }
 
 fn test_project_path() -> PathBuf {
@@ -2123,6 +2123,7 @@ async fn make_chatwidget_manual(
         pending_turn_copyable_output: None,
         running_commands: HashMap::new(),
         collab_agent_metadata: HashMap::new(),
+        thread_jobs: Vec::new(),
         pending_collab_spawn_requests: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -9741,6 +9742,7 @@ async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.config.notices.hide_full_access_warning = None;
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
     chat.open_approvals_popup();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -10409,6 +10411,7 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
         chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
     }
     chat.config.notices.hide_full_access_warning = Some(true);
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
 
     chat.open_permissions_popup();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
@@ -10509,6 +10512,7 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled() 
         chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
     }
     chat.config.notices.hide_full_access_warning = Some(true);
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, /*width*/ 120);
@@ -10529,6 +10533,7 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_ev
         chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
     }
     chat.config.notices.hide_full_access_warning = Some(true);
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
     chat.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     chat.config
         .permissions
@@ -10765,6 +10770,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
         chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
     }
     chat.config.notices.hide_full_access_warning = None;
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
 
     chat.open_permissions_popup();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
