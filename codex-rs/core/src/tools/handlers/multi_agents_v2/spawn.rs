@@ -4,7 +4,9 @@ use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::agent::role::default_fork_context_for_role;
 use codex_protocol::AgentPath;
+use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 
@@ -49,6 +51,10 @@ impl ToolHandler for Handler {
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
         }
+        let fork_context = args
+            .fork_context
+            .unwrap_or_else(|| default_fork_context_for_role(&turn.config, role_name));
+
         session
             .send_event(
                 &turn,
@@ -56,18 +62,24 @@ impl ToolHandler for Handler {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
-                    model: args
-                        .model_fallback_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .map(|candidate| candidate.model.clone())
-                        .unwrap_or_else(|| args.model.clone().unwrap_or_default()),
-                    reasoning_effort: args
-                        .model_fallback_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .and_then(|candidate| candidate.reasoning_effort)
-                        .unwrap_or_else(|| args.reasoning_effort.unwrap_or_default()),
+                    model: if fork_context {
+                        String::new()
+                    } else {
+                        args.model_fallback_list
+                            .as_ref()
+                            .and_then(|list| list.first())
+                            .map(|candidate| candidate.model.clone())
+                            .unwrap_or_else(|| args.model.clone().unwrap_or_default())
+                    },
+                    reasoning_effort: if fork_context {
+                        ReasoningEffort::default()
+                    } else {
+                        args.model_fallback_list
+                            .as_ref()
+                            .and_then(|list| list.first())
+                            .and_then(|candidate| candidate.reasoning_effort)
+                            .unwrap_or_else(|| args.reasoning_effort.unwrap_or_default())
+                    },
                 }
                 .into(),
             )
@@ -102,29 +114,39 @@ impl ToolHandler for Handler {
             }
             (_, initial_operation) => initial_operation,
         };
-        let mut candidates_to_try = collect_spawn_agent_model_candidates(
-            args.model_fallback_list.as_ref(),
-            args.model.as_deref(),
-            args.reasoning_effort,
-        );
-        if candidates_to_try.is_empty() {
-            candidates_to_try.push(SpawnAgentModelCandidate {
+        let mut candidates_to_try = if fork_context {
+            vec![SpawnAgentModelCandidate {
                 model: None,
                 reasoning_effort: None,
-            });
-        }
+            }]
+        } else {
+            let mut candidates = collect_spawn_agent_model_candidates(
+                args.model_fallback_list.as_ref(),
+                args.model.as_deref(),
+                args.reasoning_effort,
+            );
+            if candidates.is_empty() {
+                candidates.push(SpawnAgentModelCandidate {
+                    model: None,
+                    reasoning_effort: None,
+                });
+            }
+            candidates
+        };
 
         let mut spawn_result = None;
         for (idx, candidate) in candidates_to_try.iter().enumerate() {
             let mut candidate_config = config.clone();
-            apply_requested_spawn_agent_model_overrides(
-                &session,
-                turn.as_ref(),
-                &mut candidate_config,
-                candidate.model.as_deref(),
-                candidate.reasoning_effort,
-            )
-            .await?;
+            if !fork_context {
+                apply_requested_spawn_agent_model_overrides(
+                    &session,
+                    turn.as_ref(),
+                    &mut candidate_config,
+                    candidate.model.as_deref(),
+                    candidate.reasoning_effort,
+                )
+                .await?;
+            }
             apply_role_to_config(&mut candidate_config, role_name)
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
@@ -138,7 +160,8 @@ impl ToolHandler for Handler {
                     initial_agent_op.clone(),
                     Some(spawn_source.clone()),
                     SpawnAgentOptions {
-                        fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                        fork_parent_spawn_call_id: fork_context.then(|| call_id.clone()),
+                        ..Default::default()
                     },
                 )
                 .await;
@@ -210,6 +233,11 @@ impl ToolHandler for Handler {
                     prompt,
                     model: effective_model,
                     reasoning_effort: effective_reasoning_effort,
+                    spawn_mode: if fork_context {
+                        AgentSpawnMode::Fork
+                    } else {
+                        AgentSpawnMode::Spawn
+                    },
                     status,
                 }
                 .into(),
@@ -244,8 +272,7 @@ struct SpawnAgentArgs {
     model: Option<String>,
     model_fallback_list: Option<Vec<SpawnAgentModelFallbackCandidate>>,
     reasoning_effort: Option<ReasoningEffort>,
-    #[serde(default)]
-    fork_context: bool,
+    fork_context: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

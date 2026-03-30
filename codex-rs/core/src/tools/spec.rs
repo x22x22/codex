@@ -58,7 +58,7 @@ use codex_tools::create_code_mode_tool;
 use codex_tools::create_exec_command_tool;
 use codex_tools::create_js_repl_reset_tool;
 use codex_tools::create_js_repl_tool;
-use codex_tools::create_list_agents_tool;
+use codex_tools::create_list_agents_tool as create_list_agents_tool_v2;
 use codex_tools::create_list_dir_tool;
 use codex_tools::create_list_mcp_resource_templates_tool;
 use codex_tools::create_list_mcp_resources_tool;
@@ -188,6 +188,7 @@ pub(crate) struct ToolsConfig {
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
+    pub agent_watchdog: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -237,6 +238,8 @@ impl ToolsConfig {
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
+        let include_agent_watchdog =
+            include_collab_tools && features.enabled(Feature::AgentWatchdog);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
@@ -322,6 +325,7 @@ impl ToolsConfig {
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
+            agent_watchdog: include_agent_watchdog,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
@@ -637,6 +641,90 @@ fn create_agent_tools_namespace(tools: Vec<ToolSpec>) -> ToolSpec {
     })
 }
 
+fn create_compact_parent_context_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "reason".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional short reason describing why the parent appears stuck.".to_string(),
+                ),
+            },
+        ),
+        (
+            "evidence".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional concrete evidence of non-progress, such as repeated identical replies with no tool or file actions.".to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "compact_parent_context".to_string(),
+        description: "Watchdog-only: request compaction for the watchdog helper's parent thread when it is idle and appears stuck."
+            .to_string(),
+        strict: false,
+        defer_loading: Some(true),
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn create_list_agents_tool(agent_watchdog: bool) -> ToolSpec {
+    let description = if agent_watchdog {
+        "List agents spawned by an agent, optionally recursively. This is a status view; polling it will not make a watchdog fire."
+    } else {
+        "List agents spawned by an agent, optionally recursively."
+    };
+    let properties = BTreeMap::from([
+        (
+            "id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Identifier of the parent agent whose spawned agents to list. Defaults to the current agent."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "recursive".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true (default), include all descendants recursively. When false, include only direct children."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "all".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, include completed/failed/canceled agents in addition to live agents."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description: description.to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
 fn register_agent_tool_handler<H>(builder: &mut ToolRegistryBuilder, name: &str, handler: Arc<H>)
 where
     H: crate::tools::registry::ToolHandler + 'static,
@@ -689,6 +777,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
+    use crate::tools::handlers::multi_agents::CompactParentContextHandler;
+    use crate::tools::handlers::multi_agents::ListAgentsHandler;
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
@@ -1032,7 +1122,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     if config.collab_tools {
         if config.multi_agent_v2 {
-            let agent_tools = vec![
+            let mut agent_tools = vec![
                 create_spawn_agent_tool_v2(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description: crate::agent::role::spawn_tool_spec::build(
@@ -1047,8 +1137,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
                 }),
                 create_close_agent_tool_v2(),
-                create_list_agents_tool(),
+                create_list_agents_tool_v2(),
             ];
+            if config.agent_watchdog {
+                agent_tools.push(create_compact_parent_context_tool());
+            }
             push_tool_spec(
                 &mut builder,
                 create_agent_tools_namespace(agent_tools),
@@ -1066,7 +1159,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             register_agent_tool_handler(&mut builder, "close_agent", Arc::new(CloseAgentHandlerV2));
             register_agent_tool_handler(&mut builder, "list_agents", Arc::new(ListAgentsHandlerV2));
         } else {
-            let agent_tools = vec![
+            let mut agent_tools = vec![
                 create_spawn_agent_tool_v1(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description: crate::agent::role::spawn_tool_spec::build(
@@ -1082,6 +1175,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 }),
                 create_close_agent_tool_v1(),
             ];
+            if config.agent_watchdog {
+                agent_tools.push(create_list_agents_tool(config.agent_watchdog));
+                agent_tools.push(create_compact_parent_context_tool());
+            }
             push_tool_spec(
                 &mut builder,
                 create_agent_tools_namespace(agent_tools),
@@ -1093,6 +1190,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
             register_agent_tool_handler(&mut builder, "resume_agent", Arc::new(ResumeAgentHandler));
             register_agent_tool_handler(&mut builder, "wait_agent", Arc::new(WaitAgentHandler));
             register_agent_tool_handler(&mut builder, "close_agent", Arc::new(CloseAgentHandler));
+            register_agent_tool_handler(&mut builder, "list_agents", Arc::new(ListAgentsHandler));
+            register_agent_tool_handler(
+                &mut builder,
+                "compact_parent_context",
+                Arc::new(CompactParentContextHandler),
+            );
         }
     }
 

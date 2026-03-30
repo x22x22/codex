@@ -1,11 +1,19 @@
 use super::*;
+use crate::agent::RemovedWatchdog;
+use crate::agent::WatchdogRegistration;
+use crate::agent::control::LiveAgent;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::render_input_preview;
+use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
-
-use crate::agent::exceeds_thread_spawn_depth_limit;
-use crate::agent::next_thread_spawn_depth;
+use crate::agent::role::default_fork_context_for_role;
+use crate::agent::role::watchdog_interval_for_role;
+use crate::config::Config;
+use codex_features::Feature;
+use codex_protocol::protocol::AgentSpawnMode;
+use codex_protocol::protocol::SessionSource;
+use std::collections::HashSet;
 
 pub(crate) struct Handler;
 
@@ -41,11 +49,28 @@ impl ToolHandler for Handler {
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
         let max_depth = turn.config.agent_max_depth;
+        let watchdog_interval_s = watchdog_interval_for_role(&turn.config, role_name);
+        let is_watchdog = watchdog_interval_s.is_some();
+
+        if is_watchdog && !turn.config.features.enabled(Feature::AgentWatchdog) {
+            return Err(FunctionCallError::RespondToModel(
+                "watchdogs are disabled".to_string(),
+            ));
+        }
+        if is_watchdog && matches!(session_source, SessionSource::SubAgent(_)) {
+            return Err(FunctionCallError::RespondToModel(
+                "watchdogs can only be spawned by root agents".to_string(),
+            ));
+        }
         if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
             return Err(FunctionCallError::RespondToModel(
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
         }
+        let fork_context = args
+            .fork_context
+            .unwrap_or_else(|| default_fork_context_for_role(&turn.config, role_name));
+
         session
             .send_event(
                 &turn,
@@ -53,71 +78,111 @@ impl ToolHandler for Handler {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
-                    model: args
-                        .model_fallback_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .map(|candidate| candidate.model.clone())
-                        .unwrap_or_else(|| args.model.clone().unwrap_or_default()),
-                    reasoning_effort: args
-                        .model_fallback_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .and_then(|candidate| candidate.reasoning_effort)
-                        .unwrap_or_else(|| args.reasoning_effort.unwrap_or_default()),
+                    model: if fork_context {
+                        String::new()
+                    } else {
+                        args.model_fallback_list
+                            .as_ref()
+                            .and_then(|list| list.first())
+                            .map(|candidate| candidate.model.clone())
+                            .unwrap_or_else(|| args.model.clone().unwrap_or_default())
+                    },
+                    reasoning_effort: if fork_context {
+                        ReasoningEffort::default()
+                    } else {
+                        args.model_fallback_list
+                            .as_ref()
+                            .and_then(|list| list.first())
+                            .and_then(|candidate| candidate.reasoning_effort)
+                            .unwrap_or_else(|| args.reasoning_effort.unwrap_or_default())
+                    },
                 }
                 .into(),
             )
             .await;
         let config =
             build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-
-        let mut candidates_to_try = collect_spawn_agent_model_candidates(
-            args.model_fallback_list.as_ref(),
-            args.model.as_deref(),
-            args.reasoning_effort,
-        );
-        if candidates_to_try.is_empty() {
-            candidates_to_try.push(SpawnAgentModelCandidate {
+        let spawn_source = thread_spawn_source(
+            session.conversation_id,
+            &turn.session_source,
+            child_depth,
+            role_name,
+            /*task_name*/ None,
+        )?;
+        let mut candidates_to_try = if fork_context {
+            vec![SpawnAgentModelCandidate {
                 model: None,
                 reasoning_effort: None,
-            });
-        }
+            }]
+        } else {
+            let mut candidates = collect_spawn_agent_model_candidates(
+                args.model_fallback_list.as_ref(),
+                args.model.as_deref(),
+                args.reasoning_effort,
+            );
+            if candidates.is_empty() {
+                candidates.push(SpawnAgentModelCandidate {
+                    model: None,
+                    reasoning_effort: None,
+                });
+            }
+            candidates
+        };
 
         let mut spawn_result = None;
         for (idx, candidate) in candidates_to_try.iter().enumerate() {
             let mut candidate_config = config.clone();
-            apply_requested_spawn_agent_model_overrides(
-                &session,
-                turn.as_ref(),
-                &mut candidate_config,
-                candidate.model.as_deref(),
-                candidate.reasoning_effort,
-            )
-            .await?;
+            if !fork_context {
+                apply_requested_spawn_agent_model_overrides(
+                    &session,
+                    turn.as_ref(),
+                    &mut candidate_config,
+                    candidate.model.as_deref(),
+                    candidate.reasoning_effort,
+                )
+                .await?;
+            }
             apply_role_to_config(&mut candidate_config, role_name)
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
             apply_spawn_agent_runtime_overrides(&mut candidate_config, turn.as_ref())?;
             apply_spawn_agent_overrides(&mut candidate_config, child_depth);
-            let attempt_result = session
-                .services
-                .agent_control
-                .spawn_agent_with_metadata(
+            let attempt_result = if let Some(watchdog_interval_s) = watchdog_interval_s {
+                let thread_id = spawn_watchdog(
+                    &session.services.agent_control,
                     candidate_config,
-                    input_items.clone(),
-                    Some(thread_spawn_source(
-                        session.conversation_id,
-                        &turn.session_source,
-                        child_depth,
-                        role_name,
-                        /*task_name*/ None,
-                    )?),
-                    SpawnAgentOptions {
-                        fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
-                    },
+                    prompt.clone(),
+                    session.conversation_id,
+                    child_depth,
+                    watchdog_interval_s,
+                    spawn_source.clone(),
                 )
-                .await;
+                .await
+                .map_err(collab_spawn_error)?;
+                Ok(LiveAgent {
+                    thread_id,
+                    metadata: session
+                        .services
+                        .agent_control
+                        .get_agent_metadata(thread_id)
+                        .unwrap_or_default(),
+                    status: session.services.agent_control.get_status(thread_id).await,
+                })
+            } else {
+                session
+                    .services
+                    .agent_control
+                    .spawn_agent_with_metadata(
+                        candidate_config,
+                        input_items.clone(),
+                        Some(spawn_source.clone()),
+                        SpawnAgentOptions {
+                            fork_parent_spawn_call_id: fork_context.then(|| call_id.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+            };
             match attempt_result {
                 Ok(spawned_agent) => {
                     spawn_result = Some(spawned_agent);
@@ -186,6 +251,13 @@ impl ToolHandler for Handler {
                     prompt,
                     model: effective_model,
                     reasoning_effort: effective_reasoning_effort,
+                    spawn_mode: if is_watchdog {
+                        AgentSpawnMode::Watchdog
+                    } else if fork_context {
+                        AgentSpawnMode::Fork
+                    } else {
+                        AgentSpawnMode::Spawn
+                    },
                     status,
                 }
                 .into(),
@@ -200,7 +272,8 @@ impl ToolHandler for Handler {
         );
 
         Ok(SpawnAgentResult {
-            agent_id: new_thread_id.to_string(),
+            agent_id: Some(new_thread_id.to_string()),
+            task_name: None,
             nickname,
         })
     }
@@ -210,17 +283,18 @@ impl ToolHandler for Handler {
 struct SpawnAgentArgs {
     message: Option<String>,
     items: Option<Vec<UserInput>>,
+    task_name: Option<String>,
     agent_type: Option<String>,
     model: Option<String>,
     model_fallback_list: Option<Vec<SpawnAgentModelFallbackCandidate>>,
     reasoning_effort: Option<ReasoningEffort>,
-    #[serde(default)]
-    fork_context: bool,
+    fork_context: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SpawnAgentResult {
-    agent_id: String,
+    agent_id: Option<String>,
+    task_name: Option<String>,
     nickname: Option<String>,
 }
 
@@ -239,5 +313,58 @@ impl ToolOutput for SpawnAgentResult {
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         tool_output_code_mode_result(self, "spawn_agent")
+    }
+}
+
+async fn spawn_watchdog(
+    agent_control: &crate::agent::AgentControl,
+    config: Config,
+    prompt: String,
+    owner_thread_id: ThreadId,
+    child_depth: i32,
+    interval_s: i64,
+    spawn_source: SessionSource,
+) -> crate::error::Result<ThreadId> {
+    let target_thread_id = agent_control
+        .spawn_agent_handle(config.clone(), Some(spawn_source))
+        .await?;
+    let superseded_before_register = agent_control
+        .unregister_watchdogs_for_owner(owner_thread_id)
+        .await;
+    shutdown_removed_watchdogs(agent_control, superseded_before_register).await;
+    let registration = WatchdogRegistration {
+        owner_thread_id,
+        target_thread_id,
+        child_depth,
+        interval_s,
+        prompt,
+        config,
+    };
+    let superseded_after_register = match agent_control.register_watchdog(registration).await {
+        Ok(removed) => removed,
+        Err(err) => {
+            let _ = agent_control.close_agent(target_thread_id).await;
+            return Err(err);
+        }
+    };
+    shutdown_removed_watchdogs(agent_control, superseded_after_register).await;
+    Ok(target_thread_id)
+}
+
+async fn shutdown_removed_watchdogs(
+    agent_control: &crate::agent::AgentControl,
+    removed_watchdogs: Vec<RemovedWatchdog>,
+) {
+    let mut thread_ids = HashSet::new();
+    for removed in removed_watchdogs {
+        thread_ids.insert(removed.target_thread_id);
+        if let Some(helper_id) = removed.active_helper_id {
+            thread_ids.insert(helper_id);
+        }
+    }
+    let mut thread_ids = thread_ids.into_iter().collect::<Vec<_>>();
+    thread_ids.sort_by_key(ToString::to_string);
+    for thread_id in thread_ids {
+        let _ = agent_control.close_agent(thread_id).await;
     }
 }
