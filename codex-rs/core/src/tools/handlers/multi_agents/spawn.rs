@@ -283,7 +283,8 @@ impl ToolHandler for Handler {
 struct SpawnAgentArgs {
     message: Option<String>,
     items: Option<Vec<UserInput>>,
-    task_name: Option<String>,
+    #[serde(rename = "task_name")]
+    _task_name: Option<String>,
     agent_type: Option<String>,
     model: Option<String>,
     model_fallback_list: Option<Vec<SpawnAgentModelFallbackCandidate>>,

@@ -1203,13 +1203,6 @@ impl AgentControl {
         self.watchdogs.register(registration).await
     }
 
-    pub(crate) async fn unregister_watchdog(
-        &self,
-        target_thread_id: ThreadId,
-    ) -> Option<RemovedWatchdog> {
-        self.watchdogs.unregister(target_thread_id).await
-    }
-
     pub(crate) async fn unregister_watchdogs_for_owner(
         &self,
         owner_thread_id: ThreadId,
