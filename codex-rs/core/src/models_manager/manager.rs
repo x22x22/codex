@@ -1,5 +1,5 @@
 use super::cache::ModelsCacheManager;
-use crate::api_bridge::auth_provider_from_auth;
+use crate::api_bridge::auth_provider_from_resolved_provider_token;
 use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
 use crate::auth::AuthMode;
@@ -14,6 +14,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
+use crate::provider_auth::ProviderAuthResolver;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::telemetry_transport_error_message;
 use crate::util::FeedbackRequestTags;
@@ -22,6 +23,7 @@ use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::TransportError;
+use codex_api::error::ApiError;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
@@ -181,6 +183,7 @@ pub struct ModelsManager {
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
     provider: ModelProviderInfo,
+    provider_auth: ProviderAuthResolver,
 }
 
 impl ModelsManager {
@@ -232,6 +235,7 @@ impl ModelsManager {
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
+            provider_auth: ProviderAuthResolver::new(&provider),
             provider,
         }
     }
@@ -396,7 +400,9 @@ impl ModelsManager {
             return Ok(());
         }
 
-        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt) {
+        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt)
+            && !self.provider.has_command_auth()
+        {
             if matches!(
                 refresh_strategy,
                 RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
@@ -434,36 +440,58 @@ impl ModelsManager {
         let auth = self.auth_manager.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider.to_api_provider(auth_mode)?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let auth_env = collect_auth_env_telemetry(
             &self.provider,
             self.auth_manager.codex_api_key_env_enabled(),
         );
-        let transport = ReqwestTransport::new(build_reqwest_client());
-        let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
-            auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
-            auth_header_attached: api_auth.auth_header_attached(),
-            auth_header_name: api_auth.auth_header_name(),
-            auth_env,
-        });
-        let client = ModelsClient::new(transport, api_provider, api_auth)
-            .with_telemetry(Some(request_telemetry));
-
         let client_version = crate::models_manager::client_version_to_whole();
-        let (models, etag) = timeout(
-            MODELS_REFRESH_TIMEOUT,
-            client.list_models(&client_version, HeaderMap::new()),
-        )
-        .await
-        .map_err(|_| CodexErr::Timeout)?
-        .map_err(map_api_error)?;
+        let mut provider_auth_retry_available = self.provider_auth.is_configured();
 
-        self.apply_remote_models(models.clone()).await;
-        *self.etag.write().await = etag.clone();
-        self.cache_manager
-            .persist_cache(&models, etag, client_version)
-            .await;
-        Ok(())
+        loop {
+            let provider_token = self.provider_auth.resolve_token().await?;
+            let api_auth = auth_provider_from_resolved_provider_token(
+                auth.clone(),
+                &self.provider,
+                provider_token,
+            )?;
+            let transport = ReqwestTransport::new(build_reqwest_client());
+            let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
+                auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
+                auth_header_attached: api_auth.auth_header_attached(),
+                auth_header_name: api_auth.auth_header_name(),
+                auth_env: auth_env.clone(),
+            });
+            let client = ModelsClient::new(transport, api_provider.clone(), api_auth)
+                .with_telemetry(Some(request_telemetry));
+
+            match timeout(
+                MODELS_REFRESH_TIMEOUT,
+                client.list_models(&client_version, HeaderMap::new()),
+            )
+            .await
+            .map_err(|_| CodexErr::Timeout)?
+            {
+                Ok((models, etag)) => {
+                    self.apply_remote_models(models.clone()).await;
+                    *self.etag.write().await = etag.clone();
+                    self.cache_manager
+                        .persist_cache(&models, etag, client_version)
+                        .await;
+                    return Ok(());
+                }
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == http::StatusCode::UNAUTHORIZED
+                        && provider_auth_retry_available =>
+                {
+                    provider_auth_retry_available = false;
+                    self.provider_auth
+                        .refresh_after_unauthorized()
+                        .await
+                        .map(|_| ())?;
+                }
+                Err(err) => return Err(map_api_error(err)),
+            }
+        }
     }
 
     async fn get_etag(&self) -> Option<String> {
