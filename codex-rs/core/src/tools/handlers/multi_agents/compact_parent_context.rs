@@ -36,8 +36,10 @@ impl ToolHandler for Handler {
 
 #[derive(Debug, Deserialize)]
 struct CompactParentContextArgs {
-    reason: Option<String>,
-    evidence: Option<String>,
+    #[serde(rename = "reason")]
+    _reason: Option<String>,
+    #[serde(rename = "evidence")]
+    _evidence: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
