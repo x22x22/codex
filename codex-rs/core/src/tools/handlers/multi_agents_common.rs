@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn collect_spawn_agent_model_candidates_falls_back_to_legacy_args() {
         let candidates = collect_spawn_agent_model_candidates(
-            None,
+            /*model_fallback_list*/ None,
             Some("legacy-model"),
             Some(ReasoningEffort::Minimal),
         );
@@ -466,7 +466,10 @@ mod tests {
 
     #[test]
     fn collect_spawn_agent_model_candidates_empty_when_no_model_is_set() {
-        let candidates = collect_spawn_agent_model_candidates(None, None, None);
+        let candidates = collect_spawn_agent_model_candidates(
+            /*model_fallback_list*/ None, /*requested_model*/ None,
+            /*requested_reasoning_effort*/ None,
+        );
         assert_eq!(candidates, Vec::new());
     }
 
