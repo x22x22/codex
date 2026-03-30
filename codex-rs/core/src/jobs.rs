@@ -312,9 +312,9 @@ mod tests {
                 "job-1".to_string(),
                 AFTER_TURN_CRON_EXPRESSION.to_string(),
                 "run tests".to_string(),
-                true,
+                /*run_once*/ true,
                 now,
-                None,
+                /*timer_cancel*/ None,
             )
             .expect("job should be created");
         assert_eq!(jobs.list_jobs(), vec![job]);
