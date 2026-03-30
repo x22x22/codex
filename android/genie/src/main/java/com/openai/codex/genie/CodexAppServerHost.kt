@@ -101,12 +101,20 @@ class CodexAppServerHost(
     fun run() {
         bridgeClient.setAppServerProxyHandler(
             object : AgentBridgeClient.AppServerProxyHandler {
-                override fun onMessage(message: String) {
-                    handleRemoteProxyMessage(message)
+                override fun onMessage(
+                    connectionId: String,
+                    message: String,
+                ) {
+                    handleRemoteProxyMessage(connectionId, message)
                 }
 
-                override fun onClosed(reason: String?) {
-                    remoteProxyState = null
+                override fun onClosed(
+                    connectionId: String?,
+                    reason: String?,
+                ) {
+                    if (connectionId == null || remoteProxyState?.connectionId == connectionId) {
+                        remoteProxyState = null
+                    }
                     if (!reason.isNullOrBlank()) {
                         runCatching {
                             publishFrameworkTrace("Desktop attach closed: $reason")
@@ -1001,7 +1009,10 @@ class CodexAppServerHost(
         }
     }
 
-    private fun handleRemoteProxyMessage(message: String) {
+    private fun handleRemoteProxyMessage(
+        connectionId: String,
+        message: String,
+    ) {
         val json = runCatching { JSONObject(message) }
             .getOrElse { err ->
                 bridgeClient.sendRemoteAppServerMessage(
@@ -1012,15 +1023,18 @@ class CodexAppServerHost(
                     ),
                 )
                 return
-            }
+        }
         when {
-            json.has("method") && json.has("id") -> handleRemoteProxyRequest(json)
+            json.has("method") && json.has("id") -> handleRemoteProxyRequest(connectionId, json)
             json.has("method") -> handleRemoteProxyNotification(json)
             else -> Unit
         }
     }
 
-    private fun handleRemoteProxyRequest(message: JSONObject) {
+    private fun handleRemoteProxyRequest(
+        connectionId: String,
+        message: JSONObject,
+    ) {
         val method = message.optString("method")
         val remoteRequestId = message.opt("id")
         if (remoteRequestId == null) {
@@ -1034,20 +1048,6 @@ class CodexAppServerHost(
                     ?.optJSONArray("optOutNotificationMethods")
                     ?.toStringSet()
                     .orEmpty()
-                val connectionId = bridgeClient.currentRemoteConnectionId()
-                if (connectionId.isNullOrBlank()) {
-                    publishFrameworkTrace(
-                        "Ignoring remote initialize without an active desktop bridge connection.",
-                    )
-                    bridgeClient.sendRemoteAppServerMessage(
-                        errorResponse(
-                            requestId = remoteRequestId,
-                            code = -32000,
-                            message = "Remote desktop session is not attached",
-                        ),
-                    )
-                    return
-                }
                 remoteProxyState = RemoteProxyState(
                     connectionId = connectionId,
                     optOutNotificationMethods = optOut,
@@ -1075,13 +1075,6 @@ class CodexAppServerHost(
                 )
             }
             else -> {
-                val connectionId = bridgeClient.currentRemoteConnectionId()
-                if (connectionId.isNullOrBlank()) {
-                    bridgeClient.sendRemoteAppServerMessage(
-                        errorResponse(remoteRequestId, -32000, "Remote desktop session is not attached"),
-                    )
-                    return
-                }
                 val forwardedRequestId = "$REMOTE_REQUEST_ID_PREFIX$connectionId:${message.get("id")}"
                 remotePendingRequests[forwardedRequestId] = RemotePendingRequest(
                     connectionId = connectionId,

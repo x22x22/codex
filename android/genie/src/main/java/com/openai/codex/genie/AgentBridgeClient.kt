@@ -51,10 +51,23 @@ class AgentBridgeClient(
     }
 
     interface AppServerProxyHandler {
-        fun onMessage(message: String)
+        fun onMessage(
+            connectionId: String,
+            message: String,
+        )
 
-        fun onClosed(reason: String?)
+        fun onClosed(
+            connectionId: String?,
+            reason: String?,
+        )
     }
+
+    private data class ProxyDispatchEvent(
+        val connectionId: String?,
+        val message: String? = null,
+        val reason: String? = null,
+        val closed: Boolean = false,
+    )
 
     private val frameworkCallback = callback
     private val bridgeFd: ParcelFileDescriptor = callback.openSessionBridge(sessionId)
@@ -62,8 +75,10 @@ class AgentBridgeClient(
     private val output = DataOutputStream(BufferedOutputStream(FileOutputStream(bridgeFd.fileDescriptor)))
     private val ioLock = Any()
     private val pendingResponses = ConcurrentHashMap<String, LinkedBlockingQueue<JSONObject>>()
+    private val pendingProxyEvents = LinkedBlockingQueue<ProxyDispatchEvent>()
     private val closed = AtomicBoolean(false)
     private val readThread = Thread(::readLoop, "AgentBridgeClient-$sessionId")
+    private val proxyDispatchThread = Thread(::dispatchProxyEvents, "AgentBridgeProxy-$sessionId")
     private var frameworkResponsesPath: String = DEFAULT_RESPONSES_PATH
     @Volatile
     private var currentRemoteConnectionId: String? = null
@@ -74,6 +89,7 @@ class AgentBridgeClient(
         Log.i(TAG, "Using framework session bridge transport for $sessionId")
         Log.i(TAG, "Using framework-owned HTTP bridge for $sessionId")
         readThread.start()
+        proxyDispatchThread.start()
     }
 
     fun getRuntimeStatus(): CodexAgentBridge.RuntimeStatus {
@@ -155,7 +171,13 @@ class AgentBridgeClient(
                 .put("connectionId", connectionId)
                 .put("reason", reason),
         )
-        appServerProxyHandler?.onClosed(reason)
+        pendingProxyEvents.offer(
+            ProxyDispatchEvent(
+                connectionId = connectionId,
+                reason = reason,
+                closed = true,
+            ),
+        )
     }
 
     fun sendResponsesRequest(body: String): AgentResponsesHttpResponse {
@@ -188,6 +210,7 @@ class AgentBridgeClient(
         runCatching { output.close() }
         runCatching { bridgeFd.close() }
         readThread.interrupt()
+        proxyDispatchThread.interrupt()
     }
 
     private fun request(request: JSONObject): JSONObject {
@@ -218,7 +241,13 @@ class AgentBridgeClient(
             } catch (err: IOException) {
                 if (!closed.get()) {
                     Log.w(TAG, "Agent bridge read failed for $sessionId", err)
-                    appServerProxyHandler?.onClosed(err.message ?: err::class.java.simpleName)
+                    pendingProxyEvents.offer(
+                        ProxyDispatchEvent(
+                            connectionId = currentRemoteConnectionId,
+                            reason = err.message ?: err::class.java.simpleName,
+                            closed = true,
+                        ),
+                    )
                 }
                 return
             }
@@ -229,12 +258,47 @@ class AgentBridgeClient(
                 KIND_REMOTE_CLIENT_MESSAGE -> {
                     val connectionId = message.optString("connectionId")
                     currentRemoteConnectionId = connectionId
-                    appServerProxyHandler?.onMessage(message.optString("message"))
+                    pendingProxyEvents.offer(
+                        ProxyDispatchEvent(
+                            connectionId = connectionId,
+                            message = message.optString("message"),
+                        ),
+                    )
                 }
                 KIND_REMOTE_CLOSED -> {
+                    val connectionId = message.optString("connectionId").ifBlank { null }
                     currentRemoteConnectionId = null
-                    appServerProxyHandler?.onClosed(message.optString("reason").ifBlank { null })
+                    pendingProxyEvents.offer(
+                        ProxyDispatchEvent(
+                            connectionId = connectionId,
+                            reason = message.optString("reason").ifBlank { null },
+                            closed = true,
+                        ),
+                    )
                 }
+            }
+        }
+    }
+
+    private fun dispatchProxyEvents() {
+        while (!closed.get()) {
+            val pending = try {
+                pendingProxyEvents.take()
+            } catch (_: InterruptedException) {
+                return
+            }
+            val handler = appServerProxyHandler ?: continue
+            runCatching {
+                if (pending.closed) {
+                    handler.onClosed(pending.connectionId, pending.reason)
+                } else {
+                    handler.onMessage(
+                        pending.connectionId ?: return@runCatching,
+                        pending.message.orEmpty(),
+                    )
+                }
+            }.onFailure { err ->
+                Log.w(TAG, "Agent bridge proxy dispatch failed for $sessionId", err)
             }
         }
     }
