@@ -32,6 +32,7 @@ pub use agent_tool::create_spawn_agent_tool_v1;
 pub use agent_tool::create_spawn_agent_tool_v2;
 pub use agent_tool::create_wait_agent_tool_v1;
 pub use agent_tool::create_wait_agent_tool_v2;
+pub use agent_tool::create_watchdog_self_close_tool;
 pub use code_mode::augment_tool_spec_for_code_mode;
 pub use code_mode::create_code_mode_tool;
 pub use code_mode::create_wait_tool;

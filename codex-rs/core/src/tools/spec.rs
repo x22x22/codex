@@ -77,6 +77,7 @@ use codex_tools::create_view_image_tool;
 use codex_tools::create_wait_agent_tool_v1;
 use codex_tools::create_wait_agent_tool_v2;
 use codex_tools::create_wait_tool;
+use codex_tools::create_watchdog_self_close_tool;
 use codex_tools::create_write_stdin_tool;
 use codex_tools::dynamic_tool_to_responses_api_tool;
 use codex_tools::mcp_tool_to_responses_api_tool;
@@ -781,12 +782,14 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
+    use crate::tools::handlers::multi_agents::WatchdogSelfCloseHandler;
     use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
     use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::WatchdogSelfCloseHandlerV2;
     let mut builder = ToolRegistryBuilder::new();
 
     let shell_handler = Arc::new(ShellHandler);
@@ -1139,6 +1142,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             ];
             if config.agent_watchdog {
                 agent_tools.push(create_compact_parent_context_tool());
+                agent_tools.push(create_watchdog_self_close_tool());
             }
             push_tool_spec(
                 &mut builder,
@@ -1156,6 +1160,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
             register_agent_tool_handler(&mut builder, "wait_agent", Arc::new(WaitAgentHandlerV2));
             register_agent_tool_handler(&mut builder, "close_agent", Arc::new(CloseAgentHandlerV2));
             register_agent_tool_handler(&mut builder, "list_agents", Arc::new(ListAgentsHandlerV2));
+            if config.agent_watchdog {
+                register_agent_tool_handler(
+                    &mut builder,
+                    "watchdog_self_close",
+                    Arc::new(WatchdogSelfCloseHandlerV2),
+                );
+            }
         } else {
             let mut agent_tools = vec![
                 create_spawn_agent_tool_v1(SpawnAgentToolOptions {
@@ -1176,6 +1187,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             if config.agent_watchdog {
                 agent_tools.push(create_list_agents_tool(config.agent_watchdog));
                 agent_tools.push(create_compact_parent_context_tool());
+                agent_tools.push(create_watchdog_self_close_tool());
             }
             push_tool_spec(
                 &mut builder,
@@ -1189,11 +1201,18 @@ pub(crate) fn build_specs_with_discoverable_tools(
             register_agent_tool_handler(&mut builder, "wait_agent", Arc::new(WaitAgentHandler));
             register_agent_tool_handler(&mut builder, "close_agent", Arc::new(CloseAgentHandler));
             register_agent_tool_handler(&mut builder, "list_agents", Arc::new(ListAgentsHandler));
-            register_agent_tool_handler(
-                &mut builder,
-                "compact_parent_context",
-                Arc::new(CompactParentContextHandler),
-            );
+            if config.agent_watchdog {
+                register_agent_tool_handler(
+                    &mut builder,
+                    "compact_parent_context",
+                    Arc::new(CompactParentContextHandler),
+                );
+                register_agent_tool_handler(
+                    &mut builder,
+                    "watchdog_self_close",
+                    Arc::new(WatchdogSelfCloseHandler),
+                );
+            }
         }
     }
 
