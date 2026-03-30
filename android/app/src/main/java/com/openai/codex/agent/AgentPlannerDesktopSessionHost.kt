@@ -57,10 +57,16 @@ internal class AgentPlannerDesktopSessionHost(
         val remoteRequestId: Any,
     )
 
+    private data class PendingDesktopMessage(
+        val connectionId: String,
+        val message: String,
+    )
+
     private val requestIdSequence = AtomicInteger(1)
     private val pendingResponses = ConcurrentHashMap<String, LinkedBlockingQueue<JSONObject>>()
     private val remotePendingRequests = ConcurrentHashMap<String, RemotePendingRequest>()
     private val inboundMessages = LinkedBlockingQueue<JSONObject>()
+    private val pendingDesktopMessages = LinkedBlockingQueue<PendingDesktopMessage>()
     private val writerLock = Any()
     private val proxyLock = Any()
     private val streamedAgentMessages = mutableMapOf<String, StringBuilder>()
@@ -73,6 +79,7 @@ internal class AgentPlannerDesktopSessionHost(
     private var stdoutThread: Thread? = null
     private var stderrThread: Thread? = null
     private var eventLoopThread: Thread? = null
+    private var desktopDispatchThread: Thread? = null
     private var localProxy: AgentLocalCodexProxy? = null
     private var runtimeStatus: AgentCodexAppServerClient.RuntimeStatus? = null
     private var finalAgentMessage: String? = null
@@ -95,6 +102,12 @@ internal class AgentPlannerDesktopSessionHost(
         startProcess()
         initialize()
         currentThreadId = startThread()
+        desktopDispatchThread = thread(
+            start = true,
+            name = "AgentPlannerDesktopDispatch-$sessionId",
+        ) {
+            dispatchDesktopMessages()
+        }
         eventLoopThread = thread(
             start = true,
             name = "AgentPlannerDesktopEventLoop-$sessionId",
@@ -119,6 +132,7 @@ internal class AgentPlannerDesktopSessionHost(
         stdoutThread?.interrupt()
         stderrThread?.interrupt()
         eventLoopThread?.interrupt()
+        desktopDispatchThread?.interrupt()
         synchronized(writerLock) {
             runCatching { writer.close() }
         }
@@ -170,6 +184,7 @@ internal class AgentPlannerDesktopSessionHost(
     fun closeDesktopProxy(
         connectionId: String,
         reason: String? = null,
+        detachPlanner: Boolean = false,
     ) {
         val proxy = synchronized(proxyLock) {
             currentDesktopProxy?.takeIf { it.connectionId == connectionId }?.also {
@@ -180,7 +195,9 @@ internal class AgentPlannerDesktopSessionHost(
             remoteProxyState = null
             lastReportedFrameworkEventCount = 0
         }
-        DesktopInspectionRegistry.markPlannerDetached(sessionId)
+        if (detachPlanner) {
+            DesktopInspectionRegistry.markPlannerDetached(sessionId)
+        }
         runCatching {
             proxy.onClosed(reason)
         }
@@ -790,12 +807,12 @@ internal class AgentPlannerDesktopSessionHost(
         if (proxy == null || connectionId == null || proxy.connectionId != connectionId) {
             return
         }
-        runCatching {
-            proxy.onMessage(message)
-        }.onFailure { err ->
-            Log.w(TAG, "Failed to deliver planner desktop message for $sessionId", err)
-            closeDesktopProxy(connectionId, err.message ?: err::class.java.simpleName)
-        }
+        pendingDesktopMessages.offer(
+            PendingDesktopMessage(
+                connectionId = connectionId,
+                message = message,
+            ),
+        )
     }
 
     private fun errorResponse(
@@ -818,6 +835,30 @@ internal class AgentPlannerDesktopSessionHost(
         return buildSet {
             for (index in 0 until length()) {
                 optString(index).takeIf(String::isNotBlank)?.let(::add)
+            }
+        }
+    }
+
+    private fun dispatchDesktopMessages() {
+        while (!closing.get()) {
+            val pending = try {
+                pendingDesktopMessages.take()
+            } catch (_: InterruptedException) {
+                return
+            }
+            val proxy = currentDesktopProxy
+            if (proxy == null || proxy.connectionId != pending.connectionId) {
+                continue
+            }
+            runCatching {
+                proxy.onMessage(pending.message)
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to deliver planner desktop message for $sessionId", err)
+                closeDesktopProxy(
+                    connectionId = pending.connectionId,
+                    reason = err.message ?: err::class.java.simpleName,
+                    detachPlanner = false,
+                )
             }
         }
     }

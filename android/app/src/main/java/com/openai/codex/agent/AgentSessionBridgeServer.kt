@@ -17,6 +17,7 @@ import java.io.IOException
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -92,6 +93,11 @@ object AgentSessionBridgeServer {
             val onClosed: (String?) -> Unit,
         )
 
+        private data class PendingDesktopMessage(
+            val connectionId: String,
+            val message: String,
+        )
+
         private val closed = AtomicBoolean(false)
         private var bridgeFd: ParcelFileDescriptor? = null
         private var input: DataInputStream? = null
@@ -99,6 +105,7 @@ object AgentSessionBridgeServer {
         private val executionSettingsStore = SessionExecutionSettingsStore(context)
         private val writerLock = Any()
         private val proxyLock = Any()
+        private val pendingDesktopMessages = LinkedBlockingQueue<PendingDesktopMessage>()
         @Volatile
         private var currentDesktopProxy: DesktopProxy? = null
         @Volatile
@@ -109,9 +116,16 @@ object AgentSessionBridgeServer {
         ) {
             serveLoop()
         }
+        private val desktopDispatchThread = thread(
+            start = false,
+            name = "AgentSessionBridgeDesktop-$sessionId",
+        ) {
+            dispatchDesktopMessages()
+        }
 
         fun start() {
             serveThread.start()
+            desktopDispatchThread.start()
         }
 
         override fun close() {
@@ -130,6 +144,7 @@ object AgentSessionBridgeServer {
             runCatching { output?.close() }
             runCatching { bridgeFd?.close() }
             serveThread.interrupt()
+            desktopDispatchThread.interrupt()
         }
 
         fun activeThreadId(): String? = currentThreadId
@@ -308,12 +323,12 @@ object AgentSessionBridgeServer {
             if (proxy == null || proxy.connectionId != connectionId) {
                 return
             }
-            runCatching {
-                proxy.onMessage(message.optString("message"))
-            }.onFailure { err ->
-                Log.w(TAG, "Desktop proxy delivery failed for $sessionId", err)
-                closeDesktopProxy(connectionId, err.message ?: err::class.java.simpleName)
-            }
+            pendingDesktopMessages.offer(
+                PendingDesktopMessage(
+                    connectionId = connectionId,
+                    message = message.optString("message"),
+                ),
+            )
         }
 
         private fun handleRemoteClosed(message: JSONObject) {
@@ -358,6 +373,26 @@ object AgentSessionBridgeServer {
         private fun sendBridgeMessage(message: JSONObject) {
             synchronized(writerLock) {
                 writeMessage(output ?: throw IOException("Session bridge output unavailable"), message)
+            }
+        }
+
+        private fun dispatchDesktopMessages() {
+            while (!closed.get()) {
+                val pending = try {
+                    pendingDesktopMessages.take()
+                } catch (_: InterruptedException) {
+                    return
+                }
+                val proxy = currentDesktopProxy
+                if (proxy == null || proxy.connectionId != pending.connectionId) {
+                    continue
+                }
+                runCatching {
+                    proxy.onMessage(pending.message)
+                }.onFailure { err ->
+                    Log.w(TAG, "Desktop proxy delivery failed for $sessionId", err)
+                    closeDesktopProxy(pending.connectionId, err.message ?: err::class.java.simpleName)
+                }
             }
         }
     }

@@ -274,6 +274,7 @@ class AgentSessionController(context: Context) {
                 requireActiveDirectParentSession(manager, parentSessionId)
                 val childSession = manager.createChildSession(parentSessionId, target.packageName)
                 childSessionIds += childSession.sessionId
+                AgentSessionBridgeServer.ensureStarted(appContext, manager, childSession.sessionId)
                 presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
                 executionSettingsStore.saveSettings(childSession.sessionId, executionSettings)
                 provisionSessionNetworkConfig(childSession.sessionId)

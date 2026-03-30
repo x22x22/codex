@@ -158,6 +158,7 @@ object DesktopBridgeServer {
                     sessionId = attachment.sessionId,
                     connectionId = attachment.connectionId,
                     reason = reason.ifBlank { null },
+                    detachPlanner = shouldDetachPlannerOnWebSocketClose(code, remote),
                 )
             }
         }
@@ -332,7 +333,7 @@ object DesktopBridgeServer {
         private fun attachSession(params: JSONObject?): JSONObject {
             val sessionId = params.requireString("sessionId")
             val session = requireSession(sessionId)
-            ensureDraftSessionAttachable(session)
+            ensureSessionAttachable(session)
             val threadId = activeThreadId(session)
                 ?: throw IllegalStateException("Session $sessionId is not attachable")
             pruneExpiredAttachTokens()
@@ -396,8 +397,18 @@ object DesktopBridgeServer {
                 ?: throw IllegalArgumentException("Unknown session: $sessionId")
         }
 
-        private fun ensureDraftSessionAttachable(session: AgentSessionDetails) {
+        private fun ensureSessionAttachable(session: AgentSessionDetails) {
             if (!activeThreadId(session).isNullOrBlank()) {
+                return
+            }
+            if (
+                !session.targetPackage.isNullOrBlank() &&
+                session.parentSessionId != null &&
+                session.state != AgentSessionInfo.STATE_COMPLETED &&
+                session.state != AgentSessionInfo.STATE_CANCELLED &&
+                session.state != AgentSessionInfo.STATE_FAILED
+            ) {
+                waitForAttachableThread(session)
                 return
             }
             if (session.state != AgentSessionInfo.STATE_CREATED) {
@@ -511,9 +522,25 @@ object DesktopBridgeServer {
             sessionId: String,
             connectionId: String,
             reason: String? = null,
+            detachPlanner: Boolean = false,
         ) {
             AgentSessionBridgeServer.closeDesktopProxy(sessionId, connectionId, reason)
-            AgentPlannerRuntimeManager.closeDesktopProxy(sessionId, connectionId, reason)
+            AgentPlannerRuntimeManager.closeDesktopProxy(
+                sessionId = sessionId,
+                connectionId = connectionId,
+                reason = reason,
+                detachPlanner = detachPlanner,
+            )
+        }
+
+        private fun shouldDetachPlannerOnWebSocketClose(
+            code: Int,
+            remote: Boolean,
+        ): Boolean {
+            return when (code) {
+                1000, 1001 -> true
+                else -> !remote && code == 1005
+            }
         }
 
         private fun sendResult(

@@ -97,8 +97,9 @@ object AgentPlannerRuntimeManager {
         sessionId: String,
         connectionId: String,
         reason: String? = null,
+        detachPlanner: Boolean = false,
     ) {
-        desktopPlannerSessions[sessionId]?.closeDesktopProxy(connectionId, reason)
+        desktopPlannerSessions[sessionId]?.closeDesktopProxy(connectionId, reason, detachPlanner)
     }
 
     fun closeSession(sessionId: String) {
