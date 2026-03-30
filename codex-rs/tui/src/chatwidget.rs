@@ -6438,7 +6438,9 @@ impl ChatWidget {
             ServerNotification::ThreadJobUpdated(notification) => {
                 self.on_thread_jobs_updated(notification.jobs);
             }
-            ServerNotification::ThreadJobFired(_) => {}
+            ServerNotification::ThreadJobFired(notification) => {
+                self.on_thread_job_fired(notification.job);
+            }
             ServerNotification::TurnStarted(_) => {
                 self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
@@ -9987,6 +9989,15 @@ impl ChatWidget {
         self.thread_jobs = jobs;
     }
 
+    pub(crate) fn on_thread_job_fired(&mut self, job: ThreadJob) {
+        let schedule = if job.run_once {
+            format!("Running thread job • {} • one-shot", job.cron_expression)
+        } else {
+            format!("Running thread job • {}", job.cron_expression)
+        };
+        self.add_info_message(job.prompt, Some(schedule));
+    }
+
     pub(crate) fn open_thread_jobs_popup(&mut self, thread_id: ThreadId, jobs: Vec<ThreadJob>) {
         self.thread_jobs = jobs.clone();
         if jobs.is_empty() {
@@ -10012,10 +10023,12 @@ impl ChatWidget {
                 } else {
                     job.cron_expression.clone()
                 };
+                let selected_description =
+                    format!("{}\n\nPress Enter to delete this job.", job.prompt);
                 SelectionItem {
                     name,
                     description: Some(job.prompt),
-                    selected_description: Some("Delete this job.".to_string()),
+                    selected_description: Some(selected_description),
                     is_current: false,
                     actions,
                     dismiss_on_select: true,
@@ -10025,7 +10038,7 @@ impl ChatWidget {
             .collect();
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Thread jobs".to_string()),
-            subtitle: Some("Select a job to delete it.".to_string()),
+            subtitle: Some("Review a job, then press Enter to delete it.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()

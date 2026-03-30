@@ -2706,7 +2706,7 @@ impl Session {
         if deleted_run_once_job {
             self.emit_job_updated_notification().await;
         }
-        self.queue_response_items_for_next_turn(vec![job_prompt_input_item(&context.prompt)])
+        self.queue_response_items_for_next_turn(vec![job_prompt_input_item(&context)])
             .await;
         let turn_context = self
             .new_job_turn_with_sub_id(uuid::Uuid::new_v4().to_string(), context)

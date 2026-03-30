@@ -34,7 +34,9 @@ pub struct ThreadJob {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct JobTurnContext {
     pub(crate) current_job_id: String,
+    pub(crate) cron_expression: String,
     pub(crate) prompt: String,
+    pub(crate) run_once: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,7 +216,9 @@ impl JobsState {
             job: job.clone(),
             context: JobTurnContext {
                 current_job_id: job.id,
+                cron_expression: job.cron_expression,
                 prompt: job.prompt,
+                run_once: job.run_once,
             },
             deleted_run_once_job,
         })
@@ -222,18 +226,31 @@ impl JobsState {
 }
 
 pub(crate) fn job_turn_developer_instructions(job: &JobTurnContext) -> String {
-    format!(
-        "This turn was triggered by a thread job.\ncurrentJobId: {}\n\nThe job prompt has already been injected as hidden context for this turn.\nIf you determine the job should stop, call JobDelete with currentJobId. Do not expose scheduler internals unless they matter to the user.",
-        job.current_job_id
-    )
+    if job.run_once {
+        format!(
+            "This turn was triggered by a one-shot thread job.\ncurrentJobId: {}\nSchedule: {}\n\nThe job prompt has already been injected as hidden context for this turn.\nThis one-shot job has already been removed from the schedule, so you do not need to call JobDelete.\nDo not expose scheduler internals unless they matter to the user.",
+            job.current_job_id, job.cron_expression
+        )
+    } else {
+        format!(
+            "This turn was triggered by a recurring thread job.\ncurrentJobId: {}\nSchedule: {}\n\nThe job prompt has already been injected as hidden context for this turn.\nDo not delete this recurring job just because you completed one run.\nOnly call JobDelete with the exact arguments {{\"id\":\"{}\"}} if the user explicitly asked for a stopping condition and that condition is now satisfied, or if the user explicitly asked to stop the recurring job.\nDo not expose scheduler internals unless they matter to the user.",
+            job.current_job_id, job.cron_expression, job.current_job_id
+        )
+    }
 }
 
-pub(crate) fn job_prompt_input_item(prompt: &str) -> ResponseInputItem {
+pub(crate) fn job_prompt_input_item(job: &JobTurnContext) -> ResponseInputItem {
+    let text = if job.run_once {
+        format!("One-shot scheduled job prompt:\n{}", job.prompt)
+    } else {
+        format!(
+            "Recurring scheduled job prompt:\n{}\n\nThis job should keep running on its schedule unless the user asked for a stopping condition and that condition is now satisfied.\nIf that stopping condition is satisfied, stop the job by calling JobDelete with {{\"id\":\"{}\"}}.",
+            job.prompt, job.current_job_id
+        )
+    };
     ResponseInputItem::Message {
         role: "developer".to_string(),
-        content: vec![ContentItem::InputText {
-            text: prompt.to_string(),
-        }],
+        content: vec![ContentItem::InputText { text }],
     }
 }
 
@@ -261,6 +278,7 @@ fn parse_duration_literal(raw: &str) -> Option<u64> {
 mod tests {
     use super::AFTER_TURN_CRON_EXPRESSION;
     use super::JobSchedule;
+    use super::JobTurnContext;
     use super::JobsState;
     use super::job_prompt_input_item;
     use chrono::TimeZone;
@@ -309,13 +327,37 @@ mod tests {
 
     #[test]
     fn job_prompt_input_is_hidden_developer_input() {
-        let item = job_prompt_input_item("run tests");
+        let item = job_prompt_input_item(&JobTurnContext {
+            current_job_id: "job-1".to_string(),
+            cron_expression: "@every 10s".to_string(),
+            prompt: "run tests".to_string(),
+            run_once: false,
+        });
         assert_eq!(
             item,
             ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: "run tests".to_string(),
+                    text: "Recurring scheduled job prompt:\nrun tests\n\nThis job should keep running on its schedule unless the user asked for a stopping condition and that condition is now satisfied.\nIf that stopping condition is satisfied, stop the job by calling JobDelete with {\"id\":\"job-1\"}.".to_string(),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn one_shot_job_prompt_input_omits_delete_instruction() {
+        let item = job_prompt_input_item(&JobTurnContext {
+            current_job_id: "job-1".to_string(),
+            cron_expression: "@after-turn".to_string(),
+            prompt: "run tests once".to_string(),
+            run_once: true,
+        });
+        assert_eq!(
+            item,
+            ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "One-shot scheduled job prompt:\nrun tests once".to_string(),
                 }],
             }
         );
