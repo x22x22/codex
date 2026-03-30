@@ -44,6 +44,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnOutcome;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
@@ -920,9 +921,19 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_turn_complete(&mut self, payload: &TurnCompleteEvent) {
-        let mark_completed = |status: &mut TurnStatus| {
-            if matches!(*status, TurnStatus::Completed | TurnStatus::InProgress) {
-                *status = TurnStatus::Completed;
+        let mark_finished = |turn: &mut PendingTurn| match &payload.outcome {
+            TurnOutcome::Succeeded { .. } => {
+                if matches!(turn.status, TurnStatus::Completed | TurnStatus::InProgress) {
+                    turn.status = TurnStatus::Completed;
+                }
+            }
+            TurnOutcome::Failed { error } => {
+                turn.status = TurnStatus::Failed;
+                turn.error = Some(V2TurnError {
+                    message: error.message.clone(),
+                    codex_error_info: error.codex_error_info.clone().map(Into::into),
+                    additional_details: None,
+                });
             }
         };
 
@@ -932,7 +943,7 @@ impl ThreadHistoryBuilder {
             .as_mut()
             .filter(|turn| turn.id == payload.turn_id)
         {
-            mark_completed(&mut current_turn.status);
+            mark_finished(current_turn);
             self.finish_current_turn();
             return;
         }
@@ -942,13 +953,27 @@ impl ThreadHistoryBuilder {
             .iter_mut()
             .find(|turn| turn.id == payload.turn_id)
         {
-            mark_completed(&mut turn.status);
+            match &payload.outcome {
+                TurnOutcome::Succeeded { .. } => {
+                    if matches!(turn.status, TurnStatus::Completed | TurnStatus::InProgress) {
+                        turn.status = TurnStatus::Completed;
+                    }
+                }
+                TurnOutcome::Failed { error } => {
+                    turn.status = TurnStatus::Failed;
+                    turn.error = Some(V2TurnError {
+                        message: error.message.clone(),
+                        codex_error_info: error.codex_error_info.clone().map(Into::into),
+                        additional_details: None,
+                    });
+                }
+            }
             return;
         }
 
         // If the completion event cannot be matched, apply it to the active turn.
         if let Some(current_turn) = self.current_turn.as_mut() {
-            mark_completed(&mut current_turn.status);
+            mark_finished(current_turn);
             self.finish_current_turn();
         }
     }

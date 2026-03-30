@@ -731,17 +731,17 @@ fn turn_snapshot_events(
 ///
 /// - `Completed` → `TurnComplete`
 /// - `Interrupted` → `TurnAborted { reason: Interrupted }`
-/// - `Failed` → `Error` (if present) then `TurnComplete`
+/// - `Failed` → `TurnComplete` with failed outcome
 /// - `InProgress` → no events (the turn is still running)
 #[cfg(test)]
 fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_failed_error: bool) {
     match turn.status {
         TurnStatus::Completed => events.push(Event {
             id: String::new(),
-            msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: turn.id.clone(),
-                last_agent_message: None,
-            }),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent::succeeded(
+                turn.id.clone(),
+                /*last_agent_message*/ None,
+            )),
         }),
         TurnStatus::Interrupted => events.push(Event {
             id: String::new(),
@@ -751,24 +751,25 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
             }),
         }),
         TurnStatus::Failed => {
-            if include_failed_error && let Some(error) = &turn.error {
-                events.push(Event {
-                    id: String::new(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: error.message.clone(),
-                        codex_error_info: error
-                            .codex_error_info
-                            .clone()
-                            .and_then(app_server_codex_error_info_to_core),
-                    }),
-                });
-            }
+            let _ = include_failed_error;
             events.push(Event {
                 id: String::new(),
-                msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                    turn_id: turn.id.clone(),
-                    last_agent_message: None,
-                }),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent::failed(
+                    turn.id.clone(),
+                    ErrorEvent {
+                        message: turn
+                            .error
+                            .as_ref()
+                            .map(|error| error.message.clone())
+                            .unwrap_or_default(),
+                        codex_error_info: turn.error.as_ref().and_then(|error| {
+                            error
+                                .codex_error_info
+                                .clone()
+                                .and_then(app_server_codex_error_info_to_core)
+                        }),
+                    },
+                )),
             });
         }
         TurnStatus::InProgress => {

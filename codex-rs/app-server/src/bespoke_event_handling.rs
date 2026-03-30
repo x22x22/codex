@@ -128,6 +128,7 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
@@ -297,11 +298,22 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnComplete(_ev) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
-            let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
+            let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some()
+                || matches!(
+                    _ev.error(),
+                    Some(error) if error.affects_turn_status()
+                );
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
                 .await;
-            handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
+            handle_turn_complete(
+                conversation_id,
+                event_turn_id,
+                &_ev,
+                &outgoing,
+                &thread_state,
+            )
+            .await;
         }
         EventMsg::SkillsUpdateAvailable => {
             if let ApiVersion::V2 = api_version {
@@ -2100,6 +2112,7 @@ async fn find_and_remove_turn_summary(
 async fn handle_turn_complete(
     conversation_id: ThreadId,
     event_turn_id: String,
+    event: &TurnCompleteEvent,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
@@ -2107,7 +2120,17 @@ async fn handle_turn_complete(
 
     let (status, error) = match turn_summary.last_error {
         Some(error) => (TurnStatus::Failed, Some(error)),
-        None => (TurnStatus::Completed, None),
+        None => match event.error() {
+            Some(error) if error.affects_turn_status() => (
+                TurnStatus::Failed,
+                Some(TurnError {
+                    message: error.message.clone(),
+                    codex_error_info: error.codex_error_info.clone().map(Into::into),
+                    additional_details: None,
+                }),
+            ),
+            _ => (TurnStatus::Completed, None),
+        },
     };
 
     emit_turn_completed_with_status(conversation_id, event_turn_id, status, error, outgoing).await;

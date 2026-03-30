@@ -22,6 +22,7 @@ use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnOutcome;
 use codex_protocol::user_input::UserInput;
 use rmcp::model::CallToolResult;
 use rmcp::model::Content;
@@ -291,16 +292,15 @@ async fn run_codex_tool_session_inner(
                         .await;
                         continue;
                     }
-                    EventMsg::TurnComplete(TurnCompleteEvent {
-                        last_agent_message, ..
-                    }) => {
-                        let text = match last_agent_message {
-                            Some(msg) => msg,
-                            None => "".to_string(),
+                    EventMsg::TurnComplete(TurnCompleteEvent { outcome, .. }) => {
+                        let (text, is_error) = match outcome {
+                            TurnOutcome::Succeeded { last_agent_message } => {
+                                (last_agent_message.unwrap_or_default(), None)
+                            }
+                            TurnOutcome::Failed { error } => (error.message, Some(true)),
                         };
-                        let result = create_call_tool_result_with_thread_id(
-                            thread_id, text, /*is_error*/ None,
-                        );
+                        let result =
+                            create_call_tool_result_with_thread_id(thread_id, text, is_error);
                         outgoing.send_response(request_id.clone(), result).await;
                         // unregister the id so we don't keep it in the map
                         running_requests_id_to_codex_uuid

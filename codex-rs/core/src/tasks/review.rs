@@ -15,6 +15,7 @@ use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnOutcome;
 use codex_utils_template::Template;
 use tokio_util::sync::CancellationToken;
 
@@ -167,12 +168,18 @@ async fn process_review_events(
             | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
             | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
             EventMsg::TurnComplete(task_complete) => {
-                // Parse review output from the last agent message (if present).
-                let out = task_complete
-                    .last_agent_message
-                    .as_deref()
-                    .map(parse_review_output_event);
-                return out;
+                return match task_complete.outcome {
+                    TurnOutcome::Succeeded { last_agent_message } => {
+                        last_agent_message.as_deref().map(parse_review_output_event)
+                    }
+                    TurnOutcome::Failed { error } => {
+                        session
+                            .clone_session()
+                            .send_event(ctx.as_ref(), EventMsg::Error(error))
+                            .await;
+                        None
+                    }
+                };
             }
             EventMsg::TurnAborted(_) => {
                 // Cancellation or abort: consumer will finalize with None.

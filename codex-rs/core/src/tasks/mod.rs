@@ -438,13 +438,13 @@ impl Session {
             );
         }
         let event = match completion {
-            TaskCompletion::Completed(last_agent_message) => {
-                EventMsg::TurnComplete(TurnCompleteEvent {
-                    turn_id: turn_context.sub_id.clone(),
-                    last_agent_message,
-                })
-            }
-            TaskCompletion::Failed(error) => EventMsg::Error(error),
+            TaskCompletion::Completed(last_agent_message) => EventMsg::TurnComplete(
+                TurnCompleteEvent::succeeded(turn_context.sub_id.clone(), last_agent_message),
+            ),
+            TaskCompletion::Failed(error) => EventMsg::TurnComplete(TurnCompleteEvent::failed(
+                turn_context.sub_id.clone(),
+                error,
+            )),
         };
         self.send_event(turn_context.as_ref(), event).await;
     }

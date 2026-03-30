@@ -1859,9 +1859,47 @@ pub struct ModelRerouteEvent {
 pub struct ContextCompactedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum TurnOutcome {
+    Succeeded { last_agent_message: Option<String> },
+    Failed { error: ErrorEvent },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
     pub turn_id: String,
-    pub last_agent_message: Option<String>,
+    #[serde(flatten)]
+    pub outcome: TurnOutcome,
+}
+
+impl TurnCompleteEvent {
+    pub fn succeeded(turn_id: String, last_agent_message: Option<String>) -> Self {
+        Self {
+            turn_id,
+            outcome: TurnOutcome::Succeeded { last_agent_message },
+        }
+    }
+
+    pub fn failed(turn_id: String, error: ErrorEvent) -> Self {
+        Self {
+            turn_id,
+            outcome: TurnOutcome::Failed { error },
+        }
+    }
+
+    pub fn last_agent_message(&self) -> Option<&str> {
+        match &self.outcome {
+            TurnOutcome::Succeeded { last_agent_message } => last_agent_message.as_deref(),
+            TurnOutcome::Failed { .. } => None,
+        }
+    }
+
+    pub fn error(&self) -> Option<&ErrorEvent> {
+        match &self.outcome {
+            TurnOutcome::Succeeded { .. } => None,
+            TurnOutcome::Failed { error } => Some(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
