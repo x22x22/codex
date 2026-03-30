@@ -1811,6 +1811,99 @@ mod tests {
         client.shutdown().await.expect("shutdown should complete");
     }
 
+    #[tokio::test]
+    async fn remote_client_flushes_pongs_while_must_deliver_event_is_backed_up() {
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let (pong_tx, pong_rx) = tokio::sync::oneshot::channel();
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            for notification in [
+                agent_message_delta_notification("first"),
+                agent_message_delta_notification("second"),
+            ] {
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Notification(
+                        serde_json::from_value(
+                            serde_json::to_value(notification)
+                                .expect("notification should serialize"),
+                        )
+                        .expect("notification should convert to JSON-RPC"),
+                    ),
+                )
+                .await;
+            }
+            websocket
+                .send(Message::Ping(b"keepalive".to_vec().into()))
+                .await
+                .expect("ping should send");
+
+            let pong_payload = timeout(Duration::from_secs(2), async {
+                loop {
+                    let frame = websocket
+                        .next()
+                        .await
+                        .expect("frame should be available")
+                        .expect("frame should decode");
+                    match frame {
+                        Message::Pong(payload) => break payload,
+                        Message::Binary(_) | Message::Ping(_) | Message::Frame(_) => continue,
+                        Message::Text(_) => panic!("unexpected text frame"),
+                        Message::Close(_) => panic!("unexpected close frame"),
+                    }
+                }
+            })
+            .await
+            .expect("client should flush a pong while the must-deliver queue is backed up");
+            assert_eq!(pong_payload.as_ref(), b"keepalive");
+            pong_tx.send(()).expect("pong notification should send");
+            let _ = done_rx.await;
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            websocket_url,
+            auth_token: None,
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 1,
+        })
+        .await
+        .expect("remote client should connect");
+
+        timeout(Duration::from_secs(2), pong_rx)
+            .await
+            .expect("server should observe pong before timeout")
+            .expect("pong notification should arrive");
+
+        let first_event = client
+            .next_event()
+            .await
+            .expect("first event should arrive");
+        let second_event = client
+            .next_event()
+            .await
+            .expect("second event should arrive");
+        assert!(matches!(
+            first_event,
+            AppServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(
+                notification,
+            )) if notification.delta == "first"
+        ));
+        assert!(matches!(
+            second_event,
+            AppServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(
+                notification,
+            )) if notification.delta == "second"
+        ));
+
+        done_tx
+            .send(())
+            .expect("server completion signal should send");
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
     #[test]
     fn typed_request_error_exposes_sources() {
         let transport = TypedRequestError::Transport {

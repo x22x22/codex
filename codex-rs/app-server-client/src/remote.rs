@@ -124,6 +124,10 @@ enum RemoteClientCommand {
     },
 }
 
+enum RemoteWorkerAction {
+    RejectDroppedServerRequest { request_id: RequestId },
+}
+
 pub struct RemoteAppServerClient {
     command_tx: mpsc::Sender<RemoteClientCommand>,
     event_rx: mpsc::Receiver<AppServerEvent>,
@@ -195,10 +199,15 @@ impl RemoteAppServerClient {
 
         let (command_tx, mut command_rx) = mpsc::channel::<RemoteClientCommand>(channel_capacity);
         let (event_tx, event_rx) = mpsc::channel::<AppServerEvent>(channel_capacity);
+        let (dispatch_tx, dispatch_rx) = mpsc::unbounded_channel::<AppServerEvent>();
+        let (worker_action_tx, mut worker_action_rx) =
+            mpsc::unbounded_channel::<RemoteWorkerAction>();
         let worker_handle = tokio::spawn(async move {
+            let dispatch_handle = tokio::spawn(async move {
+                forward_remote_events(dispatch_rx, &event_tx, worker_action_tx).await
+            });
             let mut pending_requests =
                 HashMap::<RequestId, oneshot::Sender<IoResult<RequestResult>>>::new();
-            let mut skipped_events = 0usize;
             loop {
                 tokio::select! {
                     command = command_rx.recv() => {
@@ -228,17 +237,14 @@ impl RemoteAppServerClient {
                                     if let Some(response_tx) = pending_requests.remove(&request_id) {
                                         let _ = response_tx.send(Err(err));
                                     }
-                                    let _ = deliver_event(
-                                        &event_tx,
-                                        &mut skipped_events,
+                                    let _ = queue_event(
+                                        &dispatch_tx,
                                         AppServerEvent::Disconnected {
                                             message: format!(
                                                 "remote app server at `{websocket_url}` write failed: {err_message}"
                                             ),
                                         },
-                                        &mut stream,
-                                    )
-                                    .await;
+                                    );
                                     break;
                                 }
                             }
@@ -296,6 +302,29 @@ impl RemoteAppServerClient {
                             }
                         }
                     }
+                    Some(action) = worker_action_rx.recv() => {
+                        match action {
+                            RemoteWorkerAction::RejectDroppedServerRequest { request_id } => {
+                                if let Err(err) = write_jsonrpc_message(
+                                    &mut stream,
+                                    JSONRPCMessage::Error(JSONRPCError {
+                                        error: JSONRPCErrorError {
+                                            code: -32001,
+                                            message: "remote app-server event queue is full".to_string(),
+                                            data: None,
+                                        },
+                                        id: request_id,
+                                    }),
+                                    "<remote-app-server>",
+                                )
+                                .await
+                                {
+                                    warn!(%err, "failed to reject dropped remote app-server server request");
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     message = stream.next() => {
                         match message {
                             Some(Ok(Message::Text(text))) => {
@@ -313,13 +342,7 @@ impl RemoteAppServerClient {
                                     Ok(JSONRPCMessage::Notification(notification)) => {
                                         if let Some(event) =
                                             app_server_event_from_notification(notification)
-                                            && let Err(err) = deliver_event(
-                                                &event_tx,
-                                                &mut skipped_events,
-                                                event,
-                                                &mut stream,
-                                            )
-                                            .await
+                                            && let Err(err) = queue_event(&dispatch_tx, event)
                                             {
                                                 warn!(%err, "failed to deliver remote app-server event");
                                                 break;
@@ -330,13 +353,10 @@ impl RemoteAppServerClient {
                                         let method = request.method.clone();
                                         match ServerRequest::try_from(request) {
                                             Ok(request) => {
-                                                if let Err(err) = deliver_event(
-                                                    &event_tx,
-                                                    &mut skipped_events,
+                                                if let Err(err) = queue_event(
+                                                    &dispatch_tx,
                                                     AppServerEvent::ServerRequest(request),
-                                                    &mut stream,
                                                 )
-                                                .await
                                                 {
                                                     warn!(%err, "failed to deliver remote app-server server request");
                                                     break;
@@ -361,34 +381,28 @@ impl RemoteAppServerClient {
                                                 .await
                                                 {
                                                     let err_message = reject_err.to_string();
-                                                    let _ = deliver_event(
-                                                        &event_tx,
-                                                        &mut skipped_events,
+                                                    let _ = queue_event(
+                                                        &dispatch_tx,
                                                         AppServerEvent::Disconnected {
                                                             message: format!(
                                                                 "remote app server at `{websocket_url}` write failed: {err_message}"
                                                             ),
                                                         },
-                                                        &mut stream,
-                                                    )
-                                                    .await;
+                                                    );
                                                     break;
                                                 }
                                             }
                                         }
                                     }
                                     Err(err) => {
-                                        let _ = deliver_event(
-                                            &event_tx,
-                                            &mut skipped_events,
+                                        let _ = queue_event(
+                                            &dispatch_tx,
                                             AppServerEvent::Disconnected {
                                                 message: format!(
                                                     "remote app server at `{websocket_url}` sent invalid JSON-RPC: {err}"
                                                 ),
                                             },
-                                            &mut stream,
-                                        )
-                                        .await;
+                                        );
                                         break;
                                     }
                                 }
@@ -399,17 +413,14 @@ impl RemoteAppServerClient {
                                     .map(|frame| frame.reason.to_string())
                                     .filter(|reason| !reason.is_empty())
                                     .unwrap_or_else(|| "connection closed".to_string());
-                                let _ = deliver_event(
-                                    &event_tx,
-                                    &mut skipped_events,
+                                let _ = queue_event(
+                                    &dispatch_tx,
                                     AppServerEvent::Disconnected {
                                         message: format!(
                                             "remote app server at `{websocket_url}` disconnected: {reason}"
                                         ),
                                     },
-                                    &mut stream,
-                                )
-                                .await;
+                                );
                                 break;
                             }
                             Some(Ok(Message::Binary(_))) | Some(Ok(Message::Pong(_))) | Some(Ok(Message::Frame(_))) => {}
@@ -418,50 +429,51 @@ impl RemoteAppServerClient {
                                     flush_pending_control_frames(&mut stream, &websocket_url).await
                                 {
                                     let err_message = err.to_string();
-                                    let _ = deliver_event(
-                                        &event_tx,
-                                        &mut skipped_events,
+                                    let _ = queue_event(
+                                        &dispatch_tx,
                                         AppServerEvent::Disconnected {
                                             message: format!(
                                                 "remote app server at `{websocket_url}` transport failed: {err_message}"
                                             ),
                                         },
-                                        &mut stream,
-                                    )
-                                    .await;
+                                    );
                                     break;
                                 }
                             }
                             Some(Err(err)) => {
-                                let _ = deliver_event(
-                                    &event_tx,
-                                    &mut skipped_events,
+                                let _ = queue_event(
+                                    &dispatch_tx,
                                     AppServerEvent::Disconnected {
                                         message: format!(
                                             "remote app server at `{websocket_url}` transport failed: {err}"
                                         ),
                                     },
-                                    &mut stream,
-                                )
-                                .await;
+                                );
                                 break;
                             }
                             None => {
-                                let _ = deliver_event(
-                                    &event_tx,
-                                    &mut skipped_events,
+                                let _ = queue_event(
+                                    &dispatch_tx,
                                     AppServerEvent::Disconnected {
                                         message: format!(
                                             "remote app server at `{websocket_url}` closed the connection"
                                         ),
                                     },
-                                    &mut stream,
-                                )
-                                .await;
+                                );
                                 break;
                             }
                         }
                     }
+                }
+            }
+            drop(dispatch_tx);
+            match dispatch_handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!(%err, "remote app-server event dispatcher exited with an error");
+                }
+                Err(err) => {
+                    warn!(%err, "remote app-server event dispatcher task failed");
                 }
             }
 
@@ -629,12 +641,10 @@ impl RemoteAppServerClient {
             .is_ok()
             && let Ok(command_result) = timeout(SHUTDOWN_TIMEOUT, response_rx).await
         {
-            command_result.map_err(|_| {
-                IoError::new(
-                    ErrorKind::BrokenPipe,
-                    "remote app-server shutdown channel is closed",
-                )
-            })??;
+            match command_result {
+                Ok(result) => result?,
+                Err(_closed) => {}
+            }
         }
 
         if let Err(_elapsed) = timeout(SHUTDOWN_TIMEOUT, &mut worker_handle).await {
@@ -823,9 +833,9 @@ fn app_server_event_from_notification(notification: JSONRPCNotification) -> Opti
 
 async fn deliver_event(
     event_tx: &mpsc::Sender<AppServerEvent>,
+    worker_action_tx: &mpsc::UnboundedSender<RemoteWorkerAction>,
     skipped_events: &mut usize,
     event: AppServerEvent,
-    stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
 ) -> IoResult<()> {
     if *skipped_events > 0 {
         if event_requires_delivery(&event) {
@@ -849,7 +859,7 @@ async fn deliver_event(
                 Ok(()) => *skipped_events = 0,
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     *skipped_events = (*skipped_events).saturating_add(1);
-                    reject_if_server_request_dropped(stream, &event).await?;
+                    reject_if_server_request_dropped(worker_action_tx, &event);
                     return Ok(());
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -876,7 +886,8 @@ async fn deliver_event(
         Ok(()) => Ok(()),
         Err(mpsc::error::TrySendError::Full(event)) => {
             *skipped_events = (*skipped_events).saturating_add(1);
-            reject_if_server_request_dropped(stream, &event).await
+            reject_if_server_request_dropped(worker_action_tx, &event);
+            Ok(())
         }
         Err(mpsc::error::TrySendError::Closed(_)) => Err(IoError::new(
             ErrorKind::BrokenPipe,
@@ -885,26 +896,40 @@ async fn deliver_event(
     }
 }
 
-async fn reject_if_server_request_dropped(
-    stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-    event: &AppServerEvent,
+async fn forward_remote_events(
+    mut dispatch_rx: mpsc::UnboundedReceiver<AppServerEvent>,
+    event_tx: &mpsc::Sender<AppServerEvent>,
+    worker_action_tx: mpsc::UnboundedSender<RemoteWorkerAction>,
 ) -> IoResult<()> {
+    let mut skipped_events = 0usize;
+    while let Some(event) = dispatch_rx.recv().await {
+        deliver_event(event_tx, &worker_action_tx, &mut skipped_events, event).await?;
+    }
+    Ok(())
+}
+
+fn queue_event(
+    dispatch_tx: &mpsc::UnboundedSender<AppServerEvent>,
+    event: AppServerEvent,
+) -> IoResult<()> {
+    dispatch_tx.send(event).map_err(|_| {
+        IoError::new(
+            ErrorKind::BrokenPipe,
+            "remote app-server event consumer channel is closed",
+        )
+    })
+}
+
+fn reject_if_server_request_dropped(
+    worker_action_tx: &mpsc::UnboundedSender<RemoteWorkerAction>,
+    event: &AppServerEvent,
+) {
     let AppServerEvent::ServerRequest(request) = event else {
-        return Ok(());
+        return;
     };
-    write_jsonrpc_message(
-        stream,
-        JSONRPCMessage::Error(JSONRPCError {
-            error: JSONRPCErrorError {
-                code: -32001,
-                message: "remote app-server event queue is full".to_string(),
-                data: None,
-            },
-            id: request.id().clone(),
-        }),
-        "<remote-app-server>",
-    )
-    .await
+    let _ = worker_action_tx.send(RemoteWorkerAction::RejectDroppedServerRequest {
+        request_id: request.id().clone(),
+    });
 }
 
 fn event_requires_delivery(event: &AppServerEvent) -> bool {
