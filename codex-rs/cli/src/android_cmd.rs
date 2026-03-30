@@ -30,6 +30,10 @@ const AGENT_BRIDGE_BOOTSTRAP_COMPONENT: &str =
 const AGENT_BRIDGE_BOOTSTRAP_ACTION: &str =
     "com.openai.codex.agent.action.BOOTSTRAP_DESKTOP_BRIDGE";
 const AGENT_BRIDGE_AUTH_EXTRA: &str = "com.openai.codex.agent.extra.DESKTOP_BRIDGE_AUTH_TOKEN";
+const AGENT_DESKTOP_ATTACH_KEEPALIVE_COMPONENT: &str =
+    "com.openai.codex.agent/.DesktopAttachKeepAliveService";
+const AGENT_DESKTOP_ATTACH_KEEPALIVE_START_ACTION: &str =
+    "com.openai.codex.agent.action.START_DESKTOP_ATTACH_KEEPALIVE";
 const CONTROL_PATH: &str = "/control";
 const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(125);
 const CONNECT_RETRY_COUNT: usize = 40;
@@ -252,7 +256,8 @@ pub async fn run(
                 Ok(None)
             }
             AndroidSessionsSubcommand::Attach(args) => {
-                let bridge = AndroidBridgeClient::connect(args.device.serial).await?;
+                let device_serial = args.device.serial.clone();
+                let bridge = AndroidBridgeClient::connect(device_serial.clone()).await?;
                 let attach = bridge
                     .rpc(
                         "androidSession/attach",
@@ -263,6 +268,7 @@ pub async fn run(
                 let websocket_path = required_string(&attach, "websocketPath")?;
                 let remote = format!("ws://127.0.0.1:{}{websocket_path}", bridge.local_port());
                 let remote_auth_token = bridge.auth_token().to_string();
+                start_desktop_attach_keepalive(device_serial.as_deref()).await?;
 
                 let mut interactive = root_interactive;
                 interactive.resume_picker = false;
@@ -483,6 +489,23 @@ async fn bootstrap_bridge(serial: Option<&str>, auth_token: &str) -> anyhow::Res
             "--es".to_string(),
             AGENT_BRIDGE_AUTH_EXTRA.to_string(),
             auth_token.to_string(),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+async fn start_desktop_attach_keepalive(serial: Option<&str>) -> anyhow::Result<()> {
+    let _ = adb_output(
+        serial,
+        &[
+            "shell".to_string(),
+            "am".to_string(),
+            "start-foreground-service".to_string(),
+            "-n".to_string(),
+            AGENT_DESKTOP_ATTACH_KEEPALIVE_COMPONENT.to_string(),
+            "-a".to_string(),
+            AGENT_DESKTOP_ATTACH_KEEPALIVE_START_ACTION.to_string(),
         ],
     )
     .await?;

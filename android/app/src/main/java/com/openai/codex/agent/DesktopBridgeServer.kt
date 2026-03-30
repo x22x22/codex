@@ -39,6 +39,7 @@ object DesktopBridgeServer {
     private data class AttachedSessionTarget(
         val sessionId: String,
         val expiresAtElapsedRealtimeMs: Long,
+        val keepAliveId: String,
     )
 
     fun ensureStarted(
@@ -123,6 +124,7 @@ object DesktopBridgeServer {
                 }
                 if (target.expiresAtElapsedRealtimeMs <= SystemClock.elapsedRealtime()) {
                     attachTokens.remove(attachToken, target)
+                    DesktopAttachKeepAliveManager.release(context, target.keepAliveId)
                     conn.close(1008, "Expired attach token")
                     return
                 }
@@ -140,7 +142,14 @@ object DesktopBridgeServer {
                     conn.close(1011, "Session is not attachable")
                     return
                 }
-                conn.setAttachment(SessionProxyConnection(target.sessionId, connectionId))
+                DesktopAttachKeepAliveManager.acquire(connectionId)
+                conn.setAttachment(
+                    SessionProxyConnection(
+                        sessionId = target.sessionId,
+                        connectionId = connectionId,
+                        keepAliveId = connectionId,
+                    ),
+                )
                 return
             }
             conn.close(1008, "Unsupported path")
@@ -154,6 +163,7 @@ object DesktopBridgeServer {
         ) {
             val attachment = conn.getAttachment<SessionProxyConnection>()
             if (attachment != null) {
+                DesktopAttachKeepAliveManager.release(context, attachment.keepAliveId)
                 closeSessionProxy(
                     sessionId = attachment.sessionId,
                     connectionId = attachment.connectionId,
@@ -338,10 +348,19 @@ object DesktopBridgeServer {
                 ?: throw IllegalStateException("Session $sessionId is not attachable")
             pruneExpiredAttachTokens()
             val attachToken = UUID.randomUUID().toString().replace("-", "")
-            attachTokens[attachToken] = AttachedSessionTarget(
+            val target = AttachedSessionTarget(
                 sessionId = sessionId,
                 expiresAtElapsedRealtimeMs = SystemClock.elapsedRealtime() + ATTACH_TOKEN_TTL_MS,
+                keepAliveId = attachToken,
             )
+            DesktopAttachKeepAliveManager.acquire(attachToken)
+            attachTokens[attachToken] = target
+            thread(name = "DesktopAttachTokenExpiry") {
+                SystemClock.sleep(ATTACH_TOKEN_TTL_MS)
+                if (attachTokens.remove(attachToken, target)) {
+                    DesktopAttachKeepAliveManager.release(context, target.keepAliveId)
+                }
+            }
             return JSONObject()
                 .put("sessionId", sessionId)
                 .put("threadId", threadId)
@@ -351,7 +370,11 @@ object DesktopBridgeServer {
         private fun pruneExpiredAttachTokens() {
             val now = SystemClock.elapsedRealtime()
             attachTokens.entries.removeIf { (_, target) ->
-                target.expiresAtElapsedRealtimeMs <= now
+                if (target.expiresAtElapsedRealtimeMs > now) {
+                    return@removeIf false
+                }
+                DesktopAttachKeepAliveManager.release(context, target.keepAliveId)
+                true
             }
         }
 
@@ -602,6 +625,7 @@ object DesktopBridgeServer {
     private data class SessionProxyConnection(
         val sessionId: String,
         val connectionId: String,
+        val keepAliveId: String,
     )
 
     private fun parseBearerToken(header: String?): String? {
