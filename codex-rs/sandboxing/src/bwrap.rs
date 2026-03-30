@@ -59,7 +59,7 @@ fn is_user_namespace_failure(output: &Output) -> bool {
 pub fn find_system_bwrap_in_path() -> Option<PathBuf> {
     let search_path = std::env::var_os("PATH")?;
     let cwd = std::env::current_dir().ok()?;
-    find_system_bwrap_in_search_paths(std::iter::once(PathBuf::from(search_path)), &cwd)
+    find_system_bwrap_in_search_paths(std::env::split_paths(&search_path), &cwd)
 }
 
 fn find_system_bwrap_in_search_paths(
