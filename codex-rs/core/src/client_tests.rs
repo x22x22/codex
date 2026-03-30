@@ -110,6 +110,7 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
         PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
             mode: "managed",
             phase: "refresh_token",
+            auth_state_changed: None,
         }),
     );
 
