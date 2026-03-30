@@ -1,5 +1,5 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/jobs.rs
 expression: popup
 ---
   Thread jobs
