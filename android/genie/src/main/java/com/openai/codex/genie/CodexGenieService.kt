@@ -43,6 +43,7 @@ class CodexGenieService : GenieService() {
         control: GenieSessionControl,
     ) {
         val sessionId = request.sessionId
+        val startupContextNotes = mutableListOf<String>()
         try {
             callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
             if (DesktopSessionBootstrap.isIdleAttachPrompt(request.prompt)) {
@@ -63,9 +64,22 @@ class CodexGenieService : GenieService() {
 
             if (request.isDetachedModeAllowed) {
                 val detachedLaunch = DetachedTargetCompat.ensureDetachedTargetHidden(callback, sessionId)
-                callback.publishTrace(sessionId, detachedLaunch.summary("ensure hidden"))
-                check(detachedLaunch.isOk()) {
-                    "Failed to prepare detached target for ${request.targetPackage}: ${detachedLaunch.summary("ensure hidden")}"
+                val detachedLaunchSummary = detachedLaunch.summary("ensure hidden")
+                callback.publishTrace(sessionId, detachedLaunchSummary)
+                if (!detachedLaunch.isOk()) {
+                    callback.publishTrace(
+                        sessionId,
+                        "Recoverable startup error: detached target preparation failed for ${request.targetPackage}: $detachedLaunchSummary",
+                    )
+                    callback.publishTrace(
+                        sessionId,
+                        "Detached target preparation failed before the first turn. Codex should inspect framework traces and use android_target_ensure_hidden or other detached-target controls to recover instead of assuming the target is already present.",
+                    )
+                    startupContextNotes += """
+                        Detached target preparation failed before the first turn: $detachedLaunchSummary
+                        Treat the detached target as potentially absent, stale, or only partially prepared.
+                        Verify target state first, and prefer android_target_ensure_hidden plus detached-target inspection before retrying UI-driving steps.
+                    """.trimIndent()
                 }
                 callback.publishTrace(
                     sessionId,
@@ -99,6 +113,7 @@ class CodexGenieService : GenieService() {
                     control = control,
                     bridgeClient = bridgeClient,
                     runtimeStatus = runtimeStatus,
+                    startupContextNotes = startupContextNotes,
                 ).use { host ->
                     host.run()
                 }
@@ -109,6 +124,12 @@ class CodexGenieService : GenieService() {
             safeCallback("publish interrupted error") {
                 callback.publishError(sessionId, "Interrupted: ${err.message}")
             }
+            safeCallback("publish interrupted trace") {
+                callback.publishTrace(
+                    sessionId,
+                    "Genie session terminated after an unrecoverable host interruption: ${err.message ?: err::class.java.simpleName}",
+                )
+            }
             safeCallback("publish interrupted state") {
                 callback.updateState(sessionId, AgentSessionInfo.STATE_FAILED)
             }
@@ -118,12 +139,21 @@ class CodexGenieService : GenieService() {
                 safeCallback("publish cancelled error") {
                     callback.publishError(sessionId, "Cancelled")
                 }
+                safeCallback("publish cancelled trace") {
+                    callback.publishTrace(sessionId, "Genie session cancelled.")
+                }
                 safeCallback("publish cancelled state") {
                     callback.updateState(sessionId, AgentSessionInfo.STATE_CANCELLED)
                 }
             } else {
                 safeCallback("publish I/O error") {
                     callback.publishError(sessionId, err.message ?: err::class.java.simpleName)
+                }
+                safeCallback("publish fatal I/O trace") {
+                    callback.publishTrace(
+                        sessionId,
+                        "Genie session terminated after an unrecoverable hosted I/O failure: ${err.message ?: err::class.java.simpleName}",
+                    )
                 }
                 safeCallback("publish failed state") {
                     callback.updateState(sessionId, AgentSessionInfo.STATE_FAILED)
@@ -133,6 +163,12 @@ class CodexGenieService : GenieService() {
             Log.w(TAG, "Runtime failure in Genie session $sessionId", err)
             safeCallback("publish runtime error") {
                 callback.publishError(sessionId, "${err::class.java.simpleName}: ${err.message}")
+            }
+            safeCallback("publish runtime trace") {
+                callback.publishTrace(
+                    sessionId,
+                    "Genie session terminated after an unrecoverable runtime failure: ${err::class.java.simpleName}: ${err.message}",
+                )
             }
             safeCallback("publish runtime failed state") {
                 callback.updateState(sessionId, AgentSessionInfo.STATE_FAILED)

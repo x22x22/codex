@@ -28,6 +28,7 @@ class CodexAppServerHost(
     private val control: GenieSessionControl,
     private val bridgeClient: AgentBridgeClient,
     private val runtimeStatus: CodexAgentBridge.RuntimeStatus,
+    private val startupContextNotes: List<String> = emptyList(),
 ) : Closeable {
     companion object {
         private const val TAG = "CodexAppServerHost"
@@ -37,6 +38,13 @@ class CodexAppServerHost(
         private const val DEFAULT_HOSTED_MODEL = "gpt-5.3-codex"
         private const val REMOTE_REQUEST_ID_PREFIX = "remote:"
         private const val REMOTE_SERVER_VERSION = "0.1.0"
+        private const val MAX_IO_RECOVERY_ATTEMPTS = 3
+    }
+
+    private enum class RecoveryStartMode {
+        NORMAL,
+        IDLE_ATTACH,
+        AUTO_CONTINUE,
     }
 
     private data class RemoteProxyState(
@@ -82,13 +90,15 @@ class CodexAppServerHost(
     @Volatile
     private var remoteProxyState: RemoteProxyState? = null
     private var announcedStagedPromptAwaitingDesktopInput = false
+    private var announcedRecoveryContextAwaitingDesktopInput = false
     private val idleDesktopAttachSession = DesktopSessionBootstrap.isIdleAttachPrompt(request.prompt)
     private val stagedDelegatedPrompt = DesktopSessionBootstrap.stagedInitialPrompt(request.prompt)
     private var initialTurnStarted = false
+    private var pendingRecoveryContext: String? = null
+    private var recoveryStartMode = RecoveryStartMode.NORMAL
+    private var exhaustedRecoveryPauseAttempted = false
 
     fun run() {
-        startProcess()
-        initialize()
         bridgeClient.setAppServerProxyHandler(
             object : AgentBridgeClient.AppServerProxyHandler {
                 override fun onMessage(message: String) {
@@ -109,43 +119,86 @@ class CodexAppServerHost(
         )
         executionSettings = bridgeClient.readSessionExecutionSettings()
         val model = resolveModel()
-        val threadId = startThread(model)
-        activeThreadId = threadId
-        bridgeClient.registerAppServerThread(threadId)
-        if (!idleDesktopAttachSession) {
-            startTurn(threadId, model, buildDelegatedPrompt())
-            initialTurnStarted = true
+        var recoveryAttempts = 0
+        while (!control.cancelled) {
+            val startMode = recoveryStartMode
+            val recoveryAttempt = recoveryAttempts
+            val startupPrompt = when (startMode) {
+                RecoveryStartMode.NORMAL -> {
+                    if (idleDesktopAttachSession) {
+                        null
+                    } else {
+                        buildDelegatedPrompt()
+                    }
+                }
+                RecoveryStartMode.IDLE_ATTACH -> null
+                RecoveryStartMode.AUTO_CONTINUE ->
+                    pendingRecoveryContext
+                        ?: buildRecoveryPrompt(recoveryAttempts)
+            }
+            try {
+                startHostedRuntime(
+                    model = model,
+                    startupPrompt = startupPrompt,
+                    recoveryAttempt = recoveryAttempt,
+                    startMode = startMode,
+                )
+                recoveryAttempts = 0
+                exhaustedRecoveryPauseAttempted = false
+                eventLoop(model)
+                return
+            } catch (err: InterruptedException) {
+                if (control.cancelled) {
+                    throw IOException("Cancelled", err)
+                }
+                recoveryAttempts += 1
+                if (recoveryAttempts > MAX_IO_RECOVERY_ATTEMPTS) {
+                    if (
+                        pauseAfterRecoveryExhaustion(
+                            recoveryAttempt = recoveryAttempts,
+                            err = IOException(
+                                "Hosted session interrupted unexpectedly: ${err.message ?: err::class.java.simpleName}",
+                                err,
+                            ),
+                        )
+                    ) {
+                        continue
+                    }
+                    throw IOException(
+                        "Exceeded $MAX_IO_RECOVERY_ATTEMPTS recoverable app-server restarts after interruption: ${err.message}",
+                        err,
+                    )
+                }
+                recoverFromIoFailure(
+                    IOException(
+                        "Hosted session interrupted unexpectedly: ${err.message ?: err::class.java.simpleName}",
+                        err,
+                    ),
+                    recoveryAttempts,
+                )
+            } catch (err: IOException) {
+                if (control.cancelled) {
+                    throw err
+                }
+                recoveryAttempts += 1
+                if (recoveryAttempts > MAX_IO_RECOVERY_ATTEMPTS) {
+                    if (pauseAfterRecoveryExhaustion(recoveryAttempts, err)) {
+                        continue
+                    }
+                    throw IOException(
+                        "Exceeded $MAX_IO_RECOVERY_ATTEMPTS recoverable app-server I/O restarts: ${err.message}",
+                        err,
+                    )
+                }
+                recoverFromIoFailure(err, recoveryAttempts)
+            }
         }
-        publishFrameworkTrace(
-            if (idleDesktopAttachSession) {
-                "Hosted idle codex app-server thread $threadId for ${request.targetPackage}."
-            } else {
-                "Hosted codex app-server thread $threadId for ${request.targetPackage}."
-            },
-        )
-        if (stagedDelegatedPrompt != null) {
-            publishFrameworkTrace(
-                "A delegated objective is staged for this Genie, but the first turn is paused while desktop attach inspection remains active.",
-            )
-        }
-        eventLoop(model)
+        throw IOException("Cancelled")
     }
 
     override fun close() {
-        bridgeClient.closeRemoteAppServer("Genie session ended")
+        shutdownHostedRuntime("Genie session ended")
         bridgeClient.setAppServerProxyHandler(null)
-        stdoutThread?.interrupt()
-        stderrThread?.interrupt()
-        synchronized(writerLock) {
-            runCatching { writer.close() }
-        }
-        if (::codexHome.isInitialized) {
-            runCatching { codexHome.deleteRecursively() }
-        }
-        if (::process.isInitialized) {
-            process.destroy()
-        }
-        control.process = null
     }
 
     private fun startProcess() {
@@ -168,6 +221,13 @@ class CodexAppServerHost(
         env["CODEX_HOME"] = codexHome.absolutePath
         env[APP_SERVER_BRIDGE_ENV_VAR] = "1"
         env["RUST_LOG"] = "warn"
+        if (request.isDetachedModeAllowed) {
+            DetachedSessionCommandShims.installAndConfigureEnvironment(
+                codexHome = codexHome,
+                environment = env,
+                targetPackage = request.targetPackage,
+            )
+        }
         process = processBuilder.start()
         control.process = process
         writer = process.outputStream.bufferedWriter()
@@ -202,6 +262,161 @@ class CodexAppServerHost(
             it.name = "CodexAppServerStdout-${request.sessionId}"
             it.start()
         }
+    }
+
+    private fun startHostedRuntime(
+        model: String,
+        startupPrompt: String?,
+        recoveryAttempt: Int,
+        startMode: RecoveryStartMode,
+    ) {
+        finalAgentMessage = null
+        pendingTerminalTransition = null
+        streamedAgentMessages.clear()
+        announcedStagedPromptAwaitingDesktopInput = false
+        announcedRecoveryContextAwaitingDesktopInput = false
+        initialTurnStarted = false
+        startProcess()
+        initialize()
+        val threadId = startThread(model)
+        activeThreadId = threadId
+        bridgeClient.registerAppServerThread(threadId)
+        if (startupPrompt != null) {
+            startTurn(threadId, model, startupPrompt)
+            initialTurnStarted = true
+        }
+        when {
+            recoveryAttempt > 0 && startMode == RecoveryStartMode.IDLE_ATTACH -> {
+                updateFrameworkState(AgentSessionInfo.STATE_WAITING_FOR_USER)
+            }
+            recoveryAttempt > 0 && startMode == RecoveryStartMode.AUTO_CONTINUE -> {
+                updateFrameworkState(AgentSessionInfo.STATE_RUNNING)
+            }
+        }
+        val hostedThreadMessage = when {
+            recoveryAttempt == 0 && idleDesktopAttachSession ->
+                "Hosted idle codex app-server thread $threadId for ${request.targetPackage}."
+            recoveryAttempt == 0 ->
+                "Hosted codex app-server thread $threadId for ${request.targetPackage}."
+            startMode == RecoveryStartMode.IDLE_ATTACH ->
+                "Recovered hosted idle codex app-server thread $threadId after a recoverable I/O error. Reattach and send the next prompt to continue."
+            startupPrompt == null ->
+                "Recovered hosted idle codex app-server thread $threadId after a recoverable I/O error."
+            else ->
+                "Recovered hosted codex app-server thread $threadId after a recoverable I/O error."
+        }
+        publishFrameworkTrace(hostedThreadMessage)
+        if (recoveryAttempt == 0 && stagedDelegatedPrompt != null) {
+            publishFrameworkTrace(
+                "A delegated objective is staged for this Genie, but the first turn is paused while desktop attach inspection remains active.",
+            )
+        }
+        if (recoveryAttempt > 0 && startMode == RecoveryStartMode.IDLE_ATTACH) {
+            publishFrameworkTrace(
+                "Recovery context is staged for the next attached turn. Review the latest framework error/trace history after reattaching, then send a recovery prompt.",
+            )
+        }
+        if (startMode != RecoveryStartMode.IDLE_ATTACH) {
+            pendingRecoveryContext = null
+        }
+        recoveryStartMode = RecoveryStartMode.NORMAL
+    }
+
+    private fun recoverFromIoFailure(
+        err: IOException,
+        recoveryAttempt: Int,
+    ) {
+        val errorMessage = err.message ?: err::class.java.simpleName
+        val recoveryContext = buildRecoveryPrompt(recoveryAttempt)
+        Log.i(
+            TAG,
+            "Recoverable hosted I/O failure for ${request.sessionId}: attempt=$recoveryAttempt attached=${hasActiveRemoteDesktopAttach()} error=$errorMessage",
+        )
+        publishRecoverableFrameworkError("Recoverable hosted I/O error: $errorMessage")
+        if (hasActiveRemoteDesktopAttach()) {
+            pendingRecoveryContext = recoveryContext
+            recoveryStartMode = RecoveryStartMode.IDLE_ATTACH
+            publishFrameworkTrace(
+                "Recoverable hosted I/O error during attached session. The current desktop attach will close, but this Genie will restart into an attachable idle thread with staged recovery context. Reattach and continue from there.",
+            )
+            shutdownHostedRuntime("Recoverable hosted I/O error: $errorMessage")
+        } else {
+            pendingRecoveryContext = recoveryContext
+            recoveryStartMode = RecoveryStartMode.AUTO_CONTINUE
+            publishFrameworkTrace(
+                "Recoverable hosted I/O error while running unattached. Restarting the hosted app-server and continuing automatically (attempt $recoveryAttempt/$MAX_IO_RECOVERY_ATTEMPTS).",
+            )
+            shutdownHostedRuntime(null)
+        }
+    }
+
+    private fun pauseAfterRecoveryExhaustion(
+        recoveryAttempt: Int,
+        err: IOException,
+    ): Boolean {
+        if (exhaustedRecoveryPauseAttempted) {
+            return false
+        }
+        exhaustedRecoveryPauseAttempted = true
+        val errorMessage = err.message ?: err::class.java.simpleName
+        pendingRecoveryContext = buildRecoveryPrompt(recoveryAttempt)
+        recoveryStartMode = RecoveryStartMode.IDLE_ATTACH
+        publishRecoverableFrameworkError(
+            "Hosted I/O recovery attempts exhausted: $errorMessage",
+        )
+        publishFrameworkTrace(
+            "Automatic hosted recovery attempts were exhausted. This Genie will stay alive and restart into an attachable idle recovery thread so the next turn can inspect the failure and continue manually.",
+        )
+        shutdownHostedRuntime("Hosted I/O recovery attempts exhausted: $errorMessage")
+        return true
+    }
+
+    private fun buildRecoveryPrompt(recoveryAttempt: Int): String {
+        val priorObjective = stagedDelegatedPrompt ?: request.prompt
+        return """
+            The previous hosted app-server encountered a recoverable I/O error and was restarted.
+            Recovery attempt: $recoveryAttempt of $MAX_IO_RECOVERY_ATTEMPTS.
+            Prior objective context:
+            $priorObjective
+
+            Continue the session from the current framework state.
+            Review the latest framework traces and current target state before taking more actions.
+            If the interrupted step may have partially completed, verify state first instead of repeating it blindly.
+            Do not assume that the previous command or tool call completed successfully.
+        """.trimIndent()
+    }
+
+    private fun shutdownHostedRuntime(reason: String?) {
+        if (reason != null) {
+            bridgeClient.closeRemoteAppServer(reason)
+        }
+        stdoutThread?.interrupt()
+        stdoutThread = null
+        stderrThread?.interrupt()
+        stderrThread = null
+        synchronized(writerLock) {
+            if (::writer.isInitialized) {
+                runCatching { writer.close() }
+            }
+        }
+        if (::process.isInitialized) {
+            runCatching { process.destroy() }
+        }
+        if (::codexHome.isInitialized) {
+            runCatching { codexHome.deleteRecursively() }
+        }
+        control.process = null
+        activeThreadId = null
+        remoteProxyState = null
+        pendingResponses.clear()
+        remotePendingRequests.clear()
+        inboundMessages.clear()
+        streamedAgentMessages.clear()
+        pendingTerminalTransition = null
+        finalAgentMessage = null
+        initialTurnStarted = false
+        announcedStagedPromptAwaitingDesktopInput = false
+        announcedRecoveryContextAwaitingDesktopInput = false
     }
 
     private fun startStderrPump() {
@@ -440,10 +655,12 @@ class CodexAppServerHost(
         val params = message.optJSONObject("params") ?: JSONObject()
         return when (method) {
             "turn/started" -> {
+                resultPublished = false
                 finalAgentMessage = null
                 pendingTerminalTransition = null
                 streamedAgentMessages.clear()
                 initialTurnStarted = true
+                pendingRecoveryContext = null
                 publishFrameworkTrace("codex turn started for ${request.targetPackage}.")
                 false
             }
@@ -456,11 +673,19 @@ class CodexAppServerHost(
                 false
             }
             "item/started" -> {
-                publishItemStartedTrace(params.optJSONObject("item"))
+                runCatching {
+                    publishItemStartedTrace(params.optJSONObject("item"))
+                }.onFailure { err ->
+                    recordNonFatalObserverFailure("item/started", err)
+                }
                 false
             }
             "item/completed" -> {
-                captureCompletedItem(params.optJSONObject("item"))
+                runCatching {
+                    captureCompletedItem(params.optJSONObject("item"))
+                }.onFailure { err ->
+                    recordNonFatalObserverFailure("item/completed", err)
+                }
                 false
             }
             "turn/completed" -> {
@@ -485,10 +710,14 @@ class CodexAppServerHost(
                 publishFrameworkTrace("Codex requested dynamic tool $tool.")
             }
             "commandExecution" -> {
-                if (request.isDetachedModeAllowed && command != null) {
-                    check(!DetachedSessionGuard.isForbiddenTargetLaunchCommand(command, request.targetPackage)) {
-                        DetachedSessionGuard.violationMessage(request.targetPackage, command)
-                    }
+                if (
+                    request.isDetachedModeAllowed &&
+                    command != null &&
+                    DetachedSessionGuard.isForbiddenTargetLaunchCommand(command, request.targetPackage)
+                ) {
+                    publishFrameworkTrace(
+                        "Detached-session guard blocked a shell relaunch attempt for ${request.targetPackage}. The command will fail with a policy error that Codex should use to recover instead of retrying the relaunch.",
+                    )
                 }
                 publishFrameworkTrace(
                     "Codex started command execution: ${command ?: "command"}",
@@ -689,6 +918,16 @@ class CodexAppServerHost(
         publishFrameworkResult(text)
     }
 
+    private fun recordNonFatalObserverFailure(
+        phase: String,
+        err: Throwable,
+    ) {
+        Log.w(TAG, "Non-fatal observer failure during $phase for ${request.sessionId}", err)
+        publishFrameworkTrace(
+            "Non-fatal host observer warning during $phase: ${err.message ?: err::class.java.simpleName}",
+        )
+    }
+
     private fun request(
         method: String,
         params: JSONObject,
@@ -795,8 +1034,19 @@ class CodexAppServerHost(
                     ?.optJSONArray("optOutNotificationMethods")
                     ?.toStringSet()
                     .orEmpty()
-                val connectionId = checkNotNull(bridgeClient.currentRemoteConnectionId()) {
-                    "Remote connection id unavailable during initialize"
+                val connectionId = bridgeClient.currentRemoteConnectionId()
+                if (connectionId.isNullOrBlank()) {
+                    publishFrameworkTrace(
+                        "Ignoring remote initialize without an active desktop bridge connection.",
+                    )
+                    bridgeClient.sendRemoteAppServerMessage(
+                        errorResponse(
+                            requestId = remoteRequestId,
+                            code = -32000,
+                            message = "Remote desktop session is not attached",
+                        ),
+                    )
+                    return
                 }
                 remoteProxyState = RemoteProxyState(
                     connectionId = connectionId,
@@ -861,6 +1111,7 @@ class CodexAppServerHost(
             "initialized" -> {
                 replayFrameworkEventsToRemote()
                 maybeAnnounceStagedPromptAwaitingDesktopInput()
+                maybeAnnounceRecoveryContextAwaitingDesktopInput()
             }
             else -> sendMessage(JSONObject(message.toString()))
         }
@@ -879,6 +1130,19 @@ class CodexAppServerHost(
         )
     }
 
+    private fun maybeAnnounceRecoveryContextAwaitingDesktopInput() {
+        if (initialTurnStarted || pendingRecoveryContext == null) {
+            return
+        }
+        if (!hasActiveRemoteDesktopAttach() || announcedRecoveryContextAwaitingDesktopInput) {
+            return
+        }
+        announcedRecoveryContextAwaitingDesktopInput = true
+        publishFrameworkTrace(
+            "Desktop attach is active for a recovered Genie. The recoverable error context is loaded for the next turn and will stay paused until you send the next prompt.",
+        )
+    }
+
     private fun publishFrameworkTrace(message: String) {
         callback.publishTrace(request.sessionId, message)
         recordFrameworkEvent(eventType = "trace", message = message)
@@ -892,6 +1156,11 @@ class CodexAppServerHost(
     private fun publishFrameworkResult(message: String) {
         callback.publishResult(request.sessionId, message)
         recordFrameworkEvent(eventType = "result", message = message)
+    }
+
+    private fun publishRecoverableFrameworkError(message: String) {
+        recordFrameworkEvent(eventType = "error", message = message)
+        publishFrameworkTrace("Recoverable error: $message")
     }
 
     private fun publishFrameworkError(message: String) {
@@ -1003,11 +1272,30 @@ class CodexAppServerHost(
     }
 
     private fun buildBaseInstructions(): String {
+        val startupContextInstructions = startupContextNotes
+            .takeIf(List<String>::isNotEmpty)
+            ?.joinToString(separator = "\n\n")
+            ?.let { notes ->
+                """
+
+                Startup context from the framework:
+                $notes
+                """.trimIndent()
+            }
+            .orEmpty()
         val detachedSessionInstructions = if (request.isDetachedModeAllowed) {
             DetachedSessionGuard.instructions(request.targetPackage)
         } else {
             ""
         }
+        val stagedRecoveryContextInstructions = pendingRecoveryContext?.let { recoveryContext ->
+            """
+
+            Recovery context:
+            $recoveryContext
+            Treat that recovery context as part of the current session state. Verify the current framework/target state before retrying any interrupted action, and prefer continuing from verified state over blindly replaying the last step.
+            """.trimIndent()
+        }.orEmpty()
         val stagedDelegatedObjectiveInstructions = stagedDelegatedPrompt?.let { delegatedPrompt ->
             """
 
@@ -1033,11 +1321,13 @@ class CodexAppServerHost(
             Use detached-target tools to show or inspect the target, then continue with supported shell input and inspection surfaces rather than relaunching the target package.
             If detached recovery is needed because the target disappeared, use android_target_ensure_hidden before retrying UI inspection.
             Use Android dynamic tools only for framework-only detached target operations that do not have a working shell equivalent in the paired app sandbox.
+            $startupContextInstructions
             $detachedSessionInstructions
             The delegated objective may include a required final target presentation such as ATTACHED, DETACHED_HIDDEN, or DETACHED_SHOWN. Treat that as a hard completion requirement and do not report success until the framework session actually matches it.
             If you need clarification or a decision from the supervising Agent, call request_user_input with concise free-form question text.
             Do not use hidden control protocols.
             Finish with a normal assistant message describing what you accomplished or what blocked you.
+            $stagedRecoveryContextInstructions
             $stagedDelegatedObjectiveInstructions
             Detached target mode allowed: ${request.isDetachedModeAllowed}.
             Agent-owned runtime provider: ${runtimeStatus.modelProviderId}.

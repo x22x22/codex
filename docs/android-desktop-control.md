@@ -66,6 +66,13 @@ Attach lifecycle semantics:
 - Cancelling a direct AGENT parent session is tree-scoped: it cancels the
   parent and all child Genie sessions from both the desktop bridge and the
   on-device UI.
+- Recoverable hosted I/O failures are intentionally non-terminal:
+  - if a Genie is currently attached, the current desktop attach closes, the
+    session records a recoverable framework error, and the Genie restarts into a
+    fresh attachable idle thread with staged recovery context
+  - if a Genie is running unattached, it first retries automatically with staged
+    recovery context; if automatic retries are exhausted, it also pauses into an
+    attachable idle recovery thread instead of failing immediately
 
 ## CLI shape
 

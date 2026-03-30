@@ -88,10 +88,22 @@ The current repo now contains these implementation slices:
   launched the target hidden, Codex must not relaunch that same target package
   with plain shell launchers. That bypasses detached hosting and can be blocked
   by Android background-activity-launch policy.
+- Detached-session relaunch policy violations are now surfaced back into the
+  hosted Genie runtime as normal command failures plus framework traces, instead
+  of throwing host-side exceptions that automatically fail the session.
 - Detached-session state now distinguishes presentation from runtime existence.
   The app consumes `targetRuntime`, typed detached control results, and typed
   capture results so a missing detached target can be restored through
   framework-owned recovery instead of guessed ordinary app launch.
+- Recoverable hosted-runtime failures are now intentionally non-terminal when a
+  fresh `codex app-server` thread can still be bootstrapped:
+  - attached Genie sessions close only the current desktop attach, then restart
+    into a fresh attachable idle thread with staged recovery context
+  - unattached Genie sessions retry automatically with staged recovery context
+    and only pause into an attachable idle recovery thread if automatic recovery
+    is exhausted
+  - only failures that prevent bootstrapping any new hosted runtime at all
+    should still terminate the Genie session
 
 The Android app now owns auth origination, runtime status, and per-session
 transport configuration handoff. Active Genie and top-level Agent planner model
@@ -161,6 +173,10 @@ the Android Agent/Genie flow.
 - Agent-side planning no longer uses one shared hosted runtime; each concurrent
   planning session owns its own short-lived hosted `codex app-server`
   subprocess.
+- The Genie host now treats detached-target preparation failures, detached
+  target relaunch policy violations, and recoverable hosted I/O failures as
+  recoverable runtime context whenever possible instead of auto-failing the
+  framework session.
 - Kotlin is now only the host/bridge layer for:
   - framework lifecycle and result publication
   - Android dynamic tool execution
@@ -237,6 +253,9 @@ the Android Agent/Genie flow.
   - stdio JSON-RPC host for `codex app-server`, framework-only dynamic tools,
     `request_user_input` bridging, and `/v1/responses` forwarding onto the
     framework-owned HTTP bridge
+- `android/genie/src/main/java/com/openai/codex/genie/DetachedSessionCommandShims.kt`
+  - detached-session shell shims that turn forbidden target relaunch commands
+    into in-band command failures the hosted Genie runtime can recover from
 - `android/app/src/main/java/com/openai/codex/agent/AgentSessionBridgeServer.kt`
   - Agent-side server for the framework-managed per-session bridge
 - `android/app/src/main/java/com/openai/codex/agent/AgentResponsesProxy.kt`

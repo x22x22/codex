@@ -92,6 +92,16 @@ stub SDK docs and the local refactor doc:
     until the planner attach detaches.
   - once the planner detaches, those held child sessions are allowed to settle
     to their terminal framework state and the parent roll-up can complete.
+- Recoverable hosted-runtime failures are also intentionally non-terminal when a
+  fresh app-server thread can still be bootstrapped:
+  - recoverable app-server / bridge I/O failures during an attached Genie turn
+    close only the current desktop attach, then restart the Genie into a fresh
+    attachable idle thread with staged recovery context
+  - recoverable I/O failures during an unattached Genie run first retry
+    automatically with staged recovery context, then pause into an attachable
+    idle recovery thread if automatic retries are exhausted
+  - only failures that prevent bootstrapping any new hosted runtime at all
+    should still terminate the Genie session
 - Parent-session cancellation is tree-scoped for direct AGENT sessions:
   cancelling the parent from the desktop bridge, framework tool bridge, or the
   detail UI must cancel the parent and all child Genie sessions through the
