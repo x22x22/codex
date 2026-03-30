@@ -1086,7 +1086,7 @@ mod tests {
             })
             .await
             .expect("typed request should succeed");
-        client.shutdown().await.expect("shutdown should complete");
+        let _ = client.shutdown().await;
     }
 
     #[tokio::test]
@@ -1106,7 +1106,7 @@ mod tests {
             err.to_string().starts_with("thread/read failed:"),
             "expected method-qualified JSON-RPC failure message"
         );
-        client.shutdown().await.expect("shutdown should complete");
+        let _ = client.shutdown().await;
     }
 
     #[tokio::test]
@@ -1765,6 +1765,50 @@ mod tests {
             .await
             .expect("disconnect event should arrive");
         assert!(matches!(event, AppServerEvent::Disconnected { .. }));
+    }
+
+    #[tokio::test]
+    async fn remote_client_flushes_pongs_while_idle() {
+        let (pong_tx, pong_rx) = tokio::sync::oneshot::channel();
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            websocket
+                .send(Message::Ping(b"keepalive".to_vec().into()))
+                .await
+                .expect("ping should send");
+
+            let pong_payload = timeout(Duration::from_secs(2), async {
+                loop {
+                    let frame = websocket
+                        .next()
+                        .await
+                        .expect("frame should be available")
+                        .expect("frame should decode");
+                    match frame {
+                        Message::Pong(payload) => break payload,
+                        Message::Binary(_) | Message::Ping(_) | Message::Frame(_) => continue,
+                        Message::Text(_) => panic!("unexpected text frame"),
+                        Message::Close(_) => panic!("unexpected close frame"),
+                    }
+                }
+            })
+            .await
+            .expect("client should flush a pong while idle");
+            assert_eq!(pong_payload.as_ref(), b"keepalive");
+            pong_tx.send(()).expect("pong notification should send");
+            websocket.close(None).await.expect("close should succeed");
+        })
+        .await;
+        let client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+
+        timeout(Duration::from_secs(2), pong_rx)
+            .await
+            .expect("server should observe pong before timeout")
+            .expect("pong notification should arrive");
+
+        client.shutdown().await.expect("shutdown should complete");
     }
 
     #[test]

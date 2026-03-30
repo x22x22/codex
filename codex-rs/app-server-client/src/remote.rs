@@ -412,10 +412,26 @@ impl RemoteAppServerClient {
                                 .await;
                                 break;
                             }
-                            Some(Ok(Message::Binary(_)))
-                            | Some(Ok(Message::Ping(_)))
-                            | Some(Ok(Message::Pong(_)))
-                            | Some(Ok(Message::Frame(_))) => {}
+                            Some(Ok(Message::Binary(_))) | Some(Ok(Message::Pong(_))) | Some(Ok(Message::Frame(_))) => {}
+                            Some(Ok(Message::Ping(_))) => {
+                                if let Err(err) =
+                                    flush_pending_control_frames(&mut stream, &websocket_url).await
+                                {
+                                    let err_message = err.to_string();
+                                    let _ = deliver_event(
+                                        &event_tx,
+                                        &mut skipped_events,
+                                        AppServerEvent::Disconnected {
+                                            message: format!(
+                                                "remote app server at `{websocket_url}` transport failed: {err_message}"
+                                            ),
+                                        },
+                                        &mut stream,
+                                    )
+                                    .await;
+                                    break;
+                                }
+                            }
                             Some(Err(err)) => {
                                 let _ = deliver_event(
                                     &event_tx,
@@ -747,10 +763,10 @@ async fn initialize_remote_connection(
                         JSONRPCMessage::Response(_) | JSONRPCMessage::Error(_) => {}
                     }
                 }
-                Some(Ok(Message::Binary(_)))
-                | Some(Ok(Message::Ping(_)))
-                | Some(Ok(Message::Pong(_)))
-                | Some(Ok(Message::Frame(_))) => {}
+                Some(Ok(Message::Binary(_))) | Some(Ok(Message::Pong(_))) | Some(Ok(Message::Frame(_))) => {}
+                Some(Ok(Message::Ping(_))) => {
+                    flush_pending_control_frames(stream, websocket_url).await?;
+                }
                 Some(Ok(Message::Close(frame))) => {
                     let reason = frame
                         .as_ref()
@@ -943,6 +959,17 @@ async fn write_jsonrpc_message(
                 "failed to write websocket message to `{websocket_url}`: {err}"
             ))
         })
+}
+
+async fn flush_pending_control_frames(
+    stream: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    websocket_url: &str,
+) -> IoResult<()> {
+    stream.flush().await.map_err(|err| {
+        IoError::other(format!(
+            "failed to flush websocket control frames to `{websocket_url}`: {err}"
+        ))
+    })
 }
 
 #[cfg(test)]
