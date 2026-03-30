@@ -70,6 +70,7 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -3866,6 +3867,53 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
             .iter()
             .any(|text| text.contains("Reason: inactive")),
         "expected a realtime end update, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_settings_update_items_reload_custom_personality_catalog_for_running_session() {
+    let (session, previous_context) = make_session_and_context().await;
+    let personality_name = "captain-late";
+    let personality_body = "Ahoy. Keep the answer seaworthy.";
+    let personalities_dir = previous_context.config.codex_home.join("personalities");
+    std::fs::create_dir_all(&personalities_dir).expect("create personalities dir");
+    std::fs::write(
+        personalities_dir.join(format!("{personality_name}.md")),
+        format!(
+            "---\nname: {personality_name}\ndescription: test personality\n---\n\n{personality_body}\n"
+        ),
+    )
+    .expect("write custom personality");
+
+    assert_eq!(
+        session
+            .services
+            .personality_catalog
+            .get(&Personality::from(personality_name)),
+        None
+    );
+
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    current_context.personality = Some(Personality::from(personality_name));
+
+    let update_items = session
+        .build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            &current_context,
+        )
+        .await;
+
+    let developer_texts = developer_input_texts(&update_items);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains(personality_body)),
+        "expected custom personality update, got {developer_texts:?}"
     );
 }
 

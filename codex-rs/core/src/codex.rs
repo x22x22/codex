@@ -33,6 +33,7 @@ use crate::models_manager::manager::RefreshStrategy;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
+use crate::personalities::PersonalityCatalog;
 use crate::personalities::catalog_for_config;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
@@ -2624,15 +2625,31 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
+        let personality_catalog = self.personality_catalog_for_turn_context(current_context);
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
             previous_turn_settings.as_ref(),
             current_context,
             shell.as_ref(),
             exec_policy.as_ref(),
-            self.services.personality_catalog.as_ref(),
+            &personality_catalog,
             self.features.enabled(Feature::Personality),
         )
+    }
+
+    fn personality_catalog_for_turn_context(
+        &self,
+        turn_context: &TurnContext,
+    ) -> PersonalityCatalog {
+        if turn_context
+            .personality
+            .as_ref()
+            .is_some_and(|personality| !personality.is_builtin())
+        {
+            catalog_for_config(turn_context.config.as_ref())
+        } else {
+            self.services.personality_catalog.as_ref().clone()
+        }
     }
 
     /// Persist the event to rollout and send it to clients.
@@ -3619,6 +3636,7 @@ impl Session {
             && let Some(personality) = turn_context.personality.clone()
         {
             let model_info = turn_context.model_info.clone();
+            let personality_catalog = self.personality_catalog_for_turn_context(turn_context);
             let has_baked_personality = personality.is_builtin()
                 && model_info.supports_personality()
                 && base_instructions
@@ -3627,7 +3645,7 @@ impl Session {
                 && let Some(personality_message) =
                     crate::context_manager::updates::personality_message_for(
                         &model_info,
-                        &self.services.personality_catalog,
+                        &personality_catalog,
                         &personality,
                     )
             {
