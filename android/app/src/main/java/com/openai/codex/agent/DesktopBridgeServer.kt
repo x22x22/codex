@@ -29,6 +29,7 @@ object DesktopBridgeServer {
     private const val ATTACH_THREAD_WAIT_MS = 5_000L
     private const val ATTACH_THREAD_POLL_MS = 100L
     private const val BRIDGE_STARTUP_WAIT_MS = 5_000L
+    private const val BRIDGE_STARTUP_RETRY_DELAY_MS = 100L
 
     private val authorizedTokens = ConcurrentHashMap.newKeySet<String>()
     private val attachTokens = ConcurrentHashMap<String, AttachedSessionTarget>()
@@ -61,7 +62,10 @@ object DesktopBridgeServer {
                 runCatching { running.stop(100) }
                 server = null
             }
-            AgentDesktopBridgeSocketServer(context.applicationContext).also { candidate ->
+            val startupDeadline = SystemClock.elapsedRealtime() + BRIDGE_STARTUP_WAIT_MS
+            while (SystemClock.elapsedRealtime() < startupDeadline) {
+                val candidate = AgentDesktopBridgeSocketServer(context.applicationContext)
+                candidate.setReuseAddr(true)
                 server = candidate
                 candidate.start()
                 if (candidate.awaitStartup(BRIDGE_STARTUP_WAIT_MS)) {
@@ -69,16 +73,25 @@ object DesktopBridgeServer {
                     return
                 }
                 val startupFailure = candidate.startupFailureMessage()
+                runCatching { candidate.stop(100) }
+                if (server === candidate) {
+                    server = null
+                }
+                if (
+                    startupFailure?.contains("Address already in use", ignoreCase = true) == true &&
+                    SystemClock.elapsedRealtime() + BRIDGE_STARTUP_RETRY_DELAY_MS < startupDeadline
+                ) {
+                    SystemClock.sleep(BRIDGE_STARTUP_RETRY_DELAY_MS)
+                    continue
+                }
                 if (startupFailure != null) {
                     Log.w(TAG, "Desktop bridge failed to start after bootstrap: $startupFailure")
                 } else {
                     Log.w(TAG, "Desktop bridge failed to start within ${BRIDGE_STARTUP_WAIT_MS}ms; clearing state")
                 }
-                runCatching { candidate.stop(100) }
-                if (server === candidate) {
-                    server = null
-                }
+                return
             }
+            Log.w(TAG, "Desktop bridge startup retries exhausted within ${BRIDGE_STARTUP_WAIT_MS}ms")
         }
     }
 
