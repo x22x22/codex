@@ -235,8 +235,13 @@ fn discover_personalities_under_root(
         }
     };
 
-    for entry in entries.flatten() {
-        let path = entry.path();
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    for path in paths {
         if !path.is_file()
             || !path
                 .extension()
@@ -483,5 +488,41 @@ mod tests {
             names,
             vec!["friendly", "none", "pragmatic", "alpha", "zebra"]
         );
+    }
+
+    #[tokio::test]
+    async fn duplicate_personality_names_in_one_directory_are_resolved_by_path_order() {
+        let temp = TempDir::new().unwrap();
+        let codex_home = temp.path().join(".codex-home");
+        let repo_root = temp.path().join("repo");
+        let repo_personalities = repo_root.join(".codex/personalities");
+        fs::create_dir_all(&repo_personalities).unwrap();
+        fs::create_dir_all(&codex_home).unwrap();
+
+        fs::write(
+            repo_personalities.join("a-first.md"),
+            "---\nname: duped\ndescription: first\n---\n\nfirst body\n",
+        )
+        .unwrap();
+        fs::write(
+            repo_personalities.join("z-second.md"),
+            "---\nname: duped\ndescription: second\n---\n\nsecond body\n",
+        )
+        .unwrap();
+
+        let stack = load_config_layers_state(
+            &codex_home,
+            Some(repo_root.clone().try_into().unwrap()),
+            &[],
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+        )
+        .await
+        .unwrap();
+
+        let catalog = catalog_from_layer_stack(&stack);
+        let personality = catalog.get(&Personality::from("duped")).unwrap();
+        assert_eq!(personality.description, "first");
+        assert_eq!(personality.instructions.as_deref(), Some("first body"));
     }
 }

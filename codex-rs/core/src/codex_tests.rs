@@ -3918,6 +3918,55 @@ async fn build_settings_update_items_reload_custom_personality_catalog_for_runni
 }
 
 #[tokio::test]
+async fn build_settings_update_items_reload_custom_personality_catalog_for_cwd_override() {
+    let (session, previous_context) = make_session_and_context().await;
+    let repo = tempfile::tempdir().expect("create repo");
+    let personalities_dir = repo.path().join(".codex/personalities");
+    let personality_name = "repo-captain";
+    let personality_body = "Ahoy from the overridden repo.";
+    std::fs::create_dir_all(&personalities_dir).expect("create repo personalities dir");
+    std::fs::write(
+        personalities_dir.join("repo-captain.md"),
+        format!(
+            "---\nname: {personality_name}\ndescription: repo personality\n---\n\n{personality_body}\n"
+        ),
+    )
+    .expect("write repo personality");
+
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    let overridden_cwd: codex_utils_absolute_path::AbsolutePathBuf = repo
+        .path()
+        .to_path_buf()
+        .try_into()
+        .expect("override cwd should be absolute");
+    let mut overridden_config = (*current_context.config).clone();
+    overridden_config.cwd = overridden_cwd.clone();
+    current_context.cwd = overridden_cwd;
+    current_context.config = Arc::new(overridden_config);
+    current_context.personality = Some(Personality::from(personality_name));
+
+    let update_items = session
+        .build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            &current_context,
+        )
+        .await;
+
+    let developer_texts = developer_input_texts(&update_items);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains(personality_body)),
+        "expected repo personality after cwd override, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
 async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_end() {
     let (session, previous_context) = make_session_and_context().await;
     let mut previous_context_item = previous_context.to_turn_context_item();

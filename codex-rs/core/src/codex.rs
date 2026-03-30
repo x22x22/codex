@@ -24,6 +24,9 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
+use crate::config_loader::CloudRequirementsLoader;
+use crate::config_loader::LoaderOverrides;
+use crate::config_loader::load_config_layers_state;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 #[cfg(test)]
@@ -35,6 +38,7 @@ use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::personalities::PersonalityCatalog;
 use crate::personalities::catalog_for_config;
+use crate::personalities::catalog_from_layer_stack;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
@@ -2625,7 +2629,9 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        let personality_catalog = self.personality_catalog_for_turn_context(current_context);
+        let personality_catalog = self
+            .personality_catalog_for_turn_context(current_context)
+            .await;
         crate::context_manager::updates::build_settings_update_items(
             reference_context_item,
             previous_turn_settings.as_ref(),
@@ -2637,7 +2643,7 @@ impl Session {
         )
     }
 
-    fn personality_catalog_for_turn_context(
+    async fn personality_catalog_for_turn_context(
         &self,
         turn_context: &TurnContext,
     ) -> PersonalityCatalog {
@@ -2646,7 +2652,25 @@ impl Session {
             .as_ref()
             .is_some_and(|personality| !personality.is_builtin())
         {
-            catalog_for_config(turn_context.config.as_ref())
+            match load_config_layers_state(
+                &turn_context.config.codex_home,
+                Some(turn_context.cwd.clone()),
+                &[],
+                LoaderOverrides::default(),
+                CloudRequirementsLoader::default(),
+            )
+            .await
+            {
+                Ok(config_layer_stack) => catalog_from_layer_stack(&config_layer_stack),
+                Err(err) => {
+                    warn!(
+                        ?turn_context.cwd,
+                        error = %err,
+                        "failed to reload personality config layers; falling back to current config"
+                    );
+                    catalog_for_config(turn_context.config.as_ref())
+                }
+            }
         } else {
             self.services.personality_catalog.as_ref().clone()
         }
@@ -3636,7 +3660,9 @@ impl Session {
             && let Some(personality) = turn_context.personality.clone()
         {
             let model_info = turn_context.model_info.clone();
-            let personality_catalog = self.personality_catalog_for_turn_context(turn_context);
+            let personality_catalog = self
+                .personality_catalog_for_turn_context(turn_context)
+                .await;
             let has_baked_personality = personality.is_builtin()
                 && model_info.supports_personality()
                 && base_instructions
