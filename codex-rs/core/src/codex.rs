@@ -315,6 +315,7 @@ use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::TurnOutcome;
 use crate::protocol::WarningEvent;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::rollout::RolloutRecorder;
@@ -335,7 +336,6 @@ use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
-use crate::tasks::TaskCompletion;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::JsReplHandle;
@@ -5597,9 +5597,11 @@ pub(crate) async fn run_turn(
     input: Vec<UserInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
-) -> TaskCompletion {
+) -> TurnOutcome {
     if input.is_empty() && !sess.has_pending_input().await {
-        return TaskCompletion::Completed(None);
+        return TurnOutcome::Succeeded {
+            last_agent_message: None,
+        };
     }
 
     let model_info = turn_context.model_info.clone();
@@ -5613,7 +5615,9 @@ pub(crate) async fn run_turn(
         .is_err()
     {
         error!("Failed to run pre-sampling compact");
-        return TaskCompletion::Completed(None);
+        return TurnOutcome::Succeeded {
+            last_agent_message: None,
+        };
     }
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
@@ -5643,7 +5647,11 @@ pub(crate) async fn run_turn(
             .await
         {
             Ok(mcp_tools) => mcp_tools,
-            Err(_) if turn_context.apps_enabled() => return TaskCompletion::Completed(None),
+            Err(_) if turn_context.apps_enabled() => {
+                return TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                };
+            }
             Err(_) => HashMap::new(),
         }
     } else {
@@ -5741,7 +5749,9 @@ pub(crate) async fn run_turn(
         .collect::<Vec<_>>();
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return TaskCompletion::Completed(None);
+        return TurnOutcome::Succeeded {
+            last_agent_message: None,
+        };
     }
     let additional_contexts = if input.is_empty() {
         Vec::new()
@@ -5761,7 +5771,9 @@ pub(crate) async fn run_turn(
                 user_prompt_submit_outcome.additional_contexts,
             )
             .await;
-            return TaskCompletion::Completed(None);
+            return TurnOutcome::Succeeded {
+                last_agent_message: None,
+            };
         }
         sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
             .await;
@@ -5924,7 +5936,9 @@ pub(crate) async fn run_turn(
                     .await
                     .is_err()
                     {
-                        return TaskCompletion::Completed(None);
+                        return TurnOutcome::Succeeded {
+                            last_agent_message: None,
+                        };
                     }
                     continue;
                 }
@@ -6036,10 +6050,12 @@ pub(crate) async fn run_turn(
                         }
                     }
                     if let Some(message) = abort_message {
-                        return TaskCompletion::Failed(ErrorEvent {
-                            message,
-                            codex_error_info: None,
-                        });
+                        return TurnOutcome::Failed {
+                            error: ErrorEvent {
+                                message,
+                                codex_error_info: None,
+                            },
+                        };
                     }
                     break;
                 }
@@ -6062,16 +6078,18 @@ pub(crate) async fn run_turn(
                         .to_string(),
                     codex_error_info: Some(CodexErrorInfo::BadRequest),
                 };
-                return TaskCompletion::Failed(error);
+                return TurnOutcome::Failed { error };
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                return TaskCompletion::Failed(e.to_error_event(/*message_prefix*/ None));
+                return TurnOutcome::Failed {
+                    error: e.to_error_event(/*message_prefix*/ None),
+                };
             }
         }
     }
 
-    TaskCompletion::Completed(last_agent_message)
+    TurnOutcome::Succeeded { last_agent_message }
 }
 
 async fn run_pre_sampling_compact(

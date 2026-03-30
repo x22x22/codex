@@ -7,6 +7,7 @@ use crate::codex::TurnContext;
 use crate::codex::run_turn;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnStartedEvent;
+use crate::protocol::TurnOutcome;
 use crate::session_startup_prewarm::SessionStartupPrewarmResolution;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
@@ -15,7 +16,6 @@ use tracing::trace_span;
 
 use super::SessionTask;
 use super::SessionTaskContext;
-use super::TaskCompletion;
 
 #[derive(Default)]
 pub(crate) struct RegularTask;
@@ -42,7 +42,7 @@ impl SessionTask for RegularTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> TaskCompletion {
+    ) -> TurnOutcome {
         let sess = session.clone_session();
         let run_turn_span = trace_span!("run_turn");
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
@@ -59,7 +59,9 @@ impl SessionTask for RegularTask {
             .await
         {
             SessionStartupPrewarmResolution::Cancelled => {
-                return TaskCompletion::Completed(None);
+                return TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                };
             }
             SessionStartupPrewarmResolution::Unavailable { .. } => None,
             SessionStartupPrewarmResolution::Ready(prewarmed_client_session) => {

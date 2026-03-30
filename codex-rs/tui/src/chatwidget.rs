@@ -193,10 +193,8 @@ use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::TurnCompleteEvent;
 #[cfg(test)]
 use codex_protocol::protocol::TurnDiffEvent;
-use codex_protocol::protocol::TurnOutcome;
 #[cfg(test)]
 use codex_protocol::protocol::UndoCompletedEvent;
 #[cfg(test)]
@@ -6927,14 +6925,16 @@ impl ChatWidget {
                     self.on_task_started();
                 }
             }
-            EventMsg::TurnComplete(TurnCompleteEvent { outcome, .. }) => match outcome {
-                TurnOutcome::Succeeded { last_agent_message } => {
+            EventMsg::TurnComplete(codex_protocol::protocol::TurnCompleteEvent { outcome, .. }) => {
+                match outcome {
+                    codex_protocol::protocol::TurnOutcome::Succeeded { last_agent_message } => {
                     self.on_task_complete(last_agent_message, from_replay);
                 }
-                TurnOutcome::Failed { error } => {
-                    self.on_error(error.message);
+                    codex_protocol::protocol::TurnOutcome::Failed { error } => {
+                        self.on_error(error.message);
+                    }
                 }
-            },
+            }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);

@@ -1,10 +1,10 @@
 use crate::codex::TurnContext;
 use crate::protocol::EventMsg;
+use crate::protocol::TurnOutcome;
 use crate::protocol::WarningEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
-use crate::tasks::TaskCompletion;
 use async_trait::async_trait;
 use codex_git_utils::CreateGhostCommitOptions;
 use codex_git_utils::GhostSnapshotReport;
@@ -43,7 +43,7 @@ impl SessionTask for GhostSnapshotTask {
         ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> TaskCompletion {
+    ) -> TurnOutcome {
         tokio::task::spawn(async move {
             let token = self.token;
             let warnings_enabled = !ctx.ghost_snapshot.disable_warnings;
@@ -157,7 +157,9 @@ impl SessionTask for GhostSnapshotTask {
                 Err(err) => warn!("failed to mark ghost snapshot ready: {err}"),
             }
         });
-        TaskCompletion::Completed(None)
+        TurnOutcome::Succeeded {
+            last_agent_message: None,
+        }
     }
 }
 

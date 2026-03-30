@@ -134,7 +134,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
             assert_eq!(assistant_message.message, "Completed first turn");
             assert_eq!(completed.turn_id, started.turn_id);
             assert_eq!(
-                completed.last_agent_message.as_deref(),
+                completed.last_agent_message().as_deref(),
                 Some("Completed first turn")
             );
         }
@@ -224,7 +224,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
             assert_eq!(assistant_message.message, "Completed reasoning turn");
             assert_eq!(completed.turn_id, started.turn_id);
             assert_eq!(
-                completed.last_agent_message.as_deref(),
+                completed.last_agent_message().as_deref(),
                 Some("Completed reasoning turn")
             );
         }

@@ -208,7 +208,9 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: first_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -232,7 +234,9 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: rolled_back_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -298,7 +302,9 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: first_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -383,7 +389,9 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: first_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -406,7 +414,9 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: second_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -420,7 +430,9 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: standalone_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -489,7 +501,9 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: first_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -505,7 +519,9 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: assistant_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -569,7 +585,9 @@ async fn reconstruct_history_rollback_clears_history_and_metadata_when_exceeding
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: only_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -615,7 +633,9 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: user_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         // Standalone task turn (no UserMessage) should not consume rollback skips.
@@ -629,7 +649,9 @@ async fn record_initial_history_resumed_rollback_skips_only_user_turns() {
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: standalone_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
@@ -679,7 +701,9 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: previous_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -831,7 +855,9 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: current_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
     ];
@@ -897,7 +923,9 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: previous_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
     ];
@@ -995,7 +1023,9 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: previous_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -1096,7 +1126,9 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: previous_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -1124,7 +1156,9 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: current_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
     ];
@@ -1203,7 +1237,9 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: previous_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
@@ -1348,7 +1384,9 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id: previous_turn_id,
-                last_agent_message: None,
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
             },
         )),
         RolloutItem::EventMsg(EventMsg::TurnStarted(

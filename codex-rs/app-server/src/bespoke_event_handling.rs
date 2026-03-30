@@ -300,8 +300,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.abort_pending_server_requests().await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some()
                 || matches!(
-                    _ev.error(),
-                    Some(error) if error.affects_turn_status()
+                    &_ev.outcome,
+                    codex_protocol::protocol::TurnOutcome::Failed { error }
+                        if error.affects_turn_status()
                 );
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
@@ -2120,15 +2121,19 @@ async fn handle_turn_complete(
 
     let (status, error) = match turn_summary.last_error {
         Some(error) => (TurnStatus::Failed, Some(error)),
-        None => match event.error() {
-            Some(error) if error.affects_turn_status() => (
-                TurnStatus::Failed,
-                Some(TurnError {
-                    message: error.message.clone(),
-                    codex_error_info: error.codex_error_info.clone().map(Into::into),
-                    additional_details: None,
-                }),
-            ),
+        None => match &event.outcome {
+            codex_protocol::protocol::TurnOutcome::Failed { error }
+                if error.affects_turn_status() =>
+            {
+                (
+                    TurnStatus::Failed,
+                    Some(TurnError {
+                        message: error.message.clone(),
+                        codex_error_info: error.codex_error_info.clone().map(Into::into),
+                        additional_details: None,
+                    }),
+                )
+            }
             _ => (TurnStatus::Completed, None),
         },
     };

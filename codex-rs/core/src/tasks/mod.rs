@@ -29,11 +29,11 @@ use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
-use crate::protocol::ErrorEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
+use crate::protocol::TurnOutcome;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
@@ -100,11 +100,6 @@ pub(crate) struct SessionTaskContext {
     session: Arc<Session>,
 }
 
-pub(crate) enum TaskCompletion {
-    Completed(Option<String>),
-    Failed(ErrorEvent),
-}
-
 impl SessionTaskContext {
     pub(crate) fn new(session: Arc<Session>) -> Self {
         Self { session }
@@ -146,7 +141,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// `ctx`, returning an optional final agent message when finished. The
     /// provided `cancellation_token` is cancelled when the session requests an
     /// abort; implementers should watch for it and terminate quickly once it
-    /// fires. The returned [`TaskCompletion`] determines the single terminal
+    /// fires. The returned [`TurnOutcome`] determines the single terminal
     /// event emitted by [`Session::on_task_finished`].
     async fn run(
         self: Arc<Self>,
@@ -154,7 +149,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> TaskCompletion;
+    ) -> TurnOutcome;
 
     /// Gives the task a chance to perform cleanup after an abort.
     ///
@@ -320,7 +315,7 @@ impl Session {
     pub async fn on_task_finished(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
-        completion: TaskCompletion,
+        outcome: TurnOutcome,
     ) {
         turn_context
             .turn_metadata_state
@@ -437,15 +432,10 @@ impl Session {
                 &[("token_type", "reasoning_output"), tmp_mem],
             );
         }
-        let event = match completion {
-            TaskCompletion::Completed(last_agent_message) => EventMsg::TurnComplete(
-                TurnCompleteEvent::succeeded(turn_context.sub_id.clone(), last_agent_message),
-            ),
-            TaskCompletion::Failed(error) => EventMsg::TurnComplete(TurnCompleteEvent::failed(
-                turn_context.sub_id.clone(),
-                error,
-            )),
-        };
+        let event = EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: turn_context.sub_id.clone(),
+            outcome,
+        });
         self.send_event(turn_context.as_ref(), event).await;
     }
 

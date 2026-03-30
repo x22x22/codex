@@ -103,6 +103,8 @@ use codex_protocol::protocol::TurnAbortedEvent;
 #[cfg(test)]
 use codex_protocol::protocol::TurnCompleteEvent;
 #[cfg(test)]
+use codex_protocol::protocol::TurnOutcome;
+#[cfg(test)]
 use codex_protocol::protocol::TurnStartedEvent;
 #[cfg(test)]
 use std::time::Duration;
@@ -738,10 +740,12 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
     match turn.status {
         TurnStatus::Completed => events.push(Event {
             id: String::new(),
-            msg: EventMsg::TurnComplete(TurnCompleteEvent::succeeded(
-                turn.id.clone(),
-                /*last_agent_message*/ None,
-            )),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn.id.clone(),
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: None,
+                },
+            }),
         }),
         TurnStatus::Interrupted => events.push(Event {
             id: String::new(),
@@ -754,9 +758,10 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
             let _ = include_failed_error;
             events.push(Event {
                 id: String::new(),
-                msg: EventMsg::TurnComplete(TurnCompleteEvent::failed(
-                    turn.id.clone(),
-                    ErrorEvent {
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: turn.id.clone(),
+                    outcome: TurnOutcome::Failed {
+                        error: ErrorEvent {
                         message: turn
                             .error
                             .as_ref()
@@ -769,7 +774,8 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
                                 .and_then(app_server_codex_error_info_to_core)
                         }),
                     },
-                )),
+                    },
+                }),
             });
         }
         TurnStatus::InProgress => {
@@ -1121,7 +1127,7 @@ mod tests {
             panic!("expected turn complete event");
         };
         assert_eq!(completed.turn_id, turn_id);
-        assert_eq!(completed.last_agent_message, None);
+        assert_eq!(completed.last_agent_message(), None);
     }
 
     #[test]
@@ -1367,7 +1373,7 @@ mod tests {
             panic!("expected turn complete event");
         };
         assert_eq!(completed.turn_id, turn_id);
-        assert_eq!(completed.last_agent_message, None);
+        assert_eq!(completed.last_agent_message(), None);
     }
 
     #[test]

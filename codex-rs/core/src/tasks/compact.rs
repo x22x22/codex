@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use super::SessionTask;
 use super::SessionTaskContext;
-use super::TaskCompletion;
 use crate::codex::TurnContext;
+use crate::protocol::TurnOutcome;
 use crate::state::TaskKind;
 use async_trait::async_trait;
 use codex_protocol::user_input::UserInput;
@@ -28,7 +28,7 @@ impl SessionTask for CompactTask {
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
         _cancellation_token: CancellationToken,
-    ) -> TaskCompletion {
+    ) -> TurnOutcome {
         let session = session.clone_session();
         let _ = if crate::compact::should_use_remote_compact_task(&ctx.provider) {
             let _ = session.services.session_telemetry.counter(
@@ -45,6 +45,8 @@ impl SessionTask for CompactTask {
             );
             crate::compact::run_compact_task(session.clone(), ctx, input).await
         };
-        TaskCompletion::Completed(None)
+        TurnOutcome::Succeeded {
+            last_agent_message: None,
+        }
     }
 }

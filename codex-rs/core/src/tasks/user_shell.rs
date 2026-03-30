@@ -24,6 +24,7 @@ use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecCommandStatus;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnStartedEvent;
+use crate::protocol::TurnOutcome;
 use crate::sandboxing::ExecRequest;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
@@ -33,7 +34,6 @@ use codex_sandboxing::SandboxType;
 
 use super::SessionTask;
 use super::SessionTaskContext;
-use super::TaskCompletion;
 use crate::codex::Session;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -79,7 +79,7 @@ impl SessionTask for UserShellCommandTask {
         turn_context: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> TaskCompletion {
+    ) -> TurnOutcome {
         execute_user_shell_command(
             session.clone_session(),
             turn_context,
@@ -88,7 +88,9 @@ impl SessionTask for UserShellCommandTask {
             UserShellCommandMode::StandaloneTurn,
         )
         .await;
-        TaskCompletion::Completed(None)
+        TurnOutcome::Succeeded {
+            last_agent_message: None,
+        }
     }
 }
 

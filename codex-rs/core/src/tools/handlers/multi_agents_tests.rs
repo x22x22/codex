@@ -18,10 +18,10 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionSource;
 use crate::protocol::SubAgentSource;
 use crate::protocol::TurnCompleteEvent;
+use crate::protocol::TurnOutcome;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
-use crate::tasks::TaskCompletion;
 use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
@@ -133,9 +133,11 @@ impl SessionTask for NeverEndingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> TaskCompletion {
+    ) -> TurnOutcome {
         cancellation_token.cancelled().await;
-        TaskCompletion::Completed(None)
+        TurnOutcome::Succeeded {
+            last_agent_message: None,
+        }
     }
 }
 
@@ -155,11 +157,13 @@ impl SessionTask for FailingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         _cancellation_token: CancellationToken,
-    ) -> TaskCompletion {
-        TaskCompletion::Failed(ErrorEvent {
-            message: "boom".to_string(),
-            codex_error_info: None,
-        })
+    ) -> TurnOutcome {
+        TurnOutcome::Failed {
+            error: ErrorEvent {
+                message: "boom".to_string(),
+                codex_error_info: None,
+            },
+        }
     }
 }
 
@@ -630,7 +634,9 @@ async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_messa
             child_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: child_turn.sub_id.clone(),
-                last_agent_message: Some("done".to_string()),
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: Some("done".to_string()),
+                },
             }),
         )
         .await;
@@ -1196,7 +1202,9 @@ async fn multi_agent_v2_assign_task_completion_notifies_parent_after_reuse() {
             first_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: first_turn.sub_id.clone(),
-                last_agent_message: Some("done once".to_string()),
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: Some("done once".to_string()),
+                },
             }),
         )
         .await;
@@ -1222,7 +1230,9 @@ async fn multi_agent_v2_assign_task_completion_notifies_parent_after_reuse() {
             second_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: second_turn.sub_id.clone(),
-                last_agent_message: Some("done twice".to_string()),
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: Some("done twice".to_string()),
+                },
             }),
         )
         .await;
@@ -1319,7 +1329,9 @@ async fn multi_agent_v2_failed_turn_forwards_only_error_status_after_reuse() {
             first_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: first_turn.sub_id.clone(),
-                last_agent_message: Some("done once".to_string()),
+                outcome: TurnOutcome::Succeeded {
+                    last_agent_message: Some("done once".to_string()),
+                },
             }),
         )
         .await;

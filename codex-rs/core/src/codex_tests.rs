@@ -46,6 +46,7 @@ use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnCompleteEvent;
+use crate::protocol::TurnOutcome;
 use crate::protocol::TurnStartedEvent;
 use crate::protocol::UserMessageEvent;
 use crate::rollout::policy::EventPersistenceMode;
@@ -54,7 +55,6 @@ use crate::rollout::recorder::RolloutRecorderParams;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
-use crate::tasks::TaskCompletion;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -1486,7 +1486,9 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         RolloutItem::ResponseItem(turn_one_assistant.clone()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: first_turn_id,
-            last_agent_message: None,
+            outcome: TurnOutcome::Succeeded {
+                last_agent_message: None,
+            },
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -1508,7 +1510,9 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         RolloutItem::ResponseItem(turn_two_assistant),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: rolled_back_turn_id,
-            last_agent_message: None,
+            outcome: TurnOutcome::Succeeded {
+                last_agent_message: None,
+            },
         })),
     ])
     .await;
@@ -1582,7 +1586,9 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::ResponseItem(assistant_message("turn 1 assistant")),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: first_turn_id,
-            last_agent_message: None,
+            outcome: TurnOutcome::Succeeded {
+                last_agent_message: None,
+            },
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -1597,7 +1603,9 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         }),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: compact_turn_id,
-            last_agent_message: None,
+            outcome: TurnOutcome::Succeeded {
+                last_agent_message: None,
+            },
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -1621,7 +1629,9 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         RolloutItem::ResponseItem(assistant_message("turn 2 assistant")),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: rolled_back_turn_id,
-            last_agent_message: None,
+            outcome: TurnOutcome::Succeeded {
+                last_agent_message: None,
+            },
         })),
     ])
     .await;
@@ -1664,7 +1674,9 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
         RolloutItem::ResponseItem(assistant_message("turn 1 assistant")),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-1".to_string(),
-            last_agent_message: None,
+            outcome: TurnOutcome::Succeeded {
+                last_agent_message: None,
+            },
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -1684,7 +1696,9 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
         RolloutItem::ResponseItem(assistant_message("turn 2 assistant")),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-2".to_string(),
-            last_agent_message: None,
+            outcome: TurnOutcome::Succeeded {
+                last_agent_message: None,
+            },
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
@@ -1704,7 +1718,9 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
         RolloutItem::ResponseItem(assistant_message("turn 3 assistant")),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-3".to_string(),
-            last_agent_message: None,
+            outcome: TurnOutcome::Succeeded {
+                last_agent_message: None,
+            },
         })),
     ])
     .await;
@@ -3140,13 +3156,15 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
             _ctx: Arc<TurnContext>,
             _input: Vec<UserInput>,
             _cancellation_token: CancellationToken,
-        ) -> TaskCompletion {
+        ) -> TurnOutcome {
             let mut trace = self
                 .captured_trace
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *trace = current_span_w3c_trace_context();
-            TaskCompletion::Completed(None)
+            TurnOutcome::Succeeded {
+                last_agent_message: None,
+            }
         }
     }
 
@@ -4401,10 +4419,12 @@ impl SessionTask for NeverEndingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
-    ) -> TaskCompletion {
+    ) -> TurnOutcome {
         if self.listen_to_cancellation_token {
             cancellation_token.cancelled().await;
-            return TaskCompletion::Completed(None);
+            return TurnOutcome::Succeeded {
+                last_agent_message: None,
+            };
         }
         loop {
             sleep(Duration::from_secs(60)).await;
@@ -4428,11 +4448,13 @@ impl SessionTask for FailingTask {
         _ctx: Arc<TurnContext>,
         _input: Vec<UserInput>,
         _cancellation_token: CancellationToken,
-    ) -> TaskCompletion {
-        TaskCompletion::Failed(ErrorEvent {
-            message: "boom".to_string(),
-            codex_error_info: None,
-        })
+    ) -> TurnOutcome {
+        TurnOutcome::Failed {
+            error: ErrorEvent {
+                message: "boom".to_string(),
+                codex_error_info: None,
+            },
+        }
     }
 }
 
@@ -4557,7 +4579,9 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
 
     sess.on_task_finished(
         Arc::clone(&tc),
-        TaskCompletion::Completed(/*last_agent_message*/ None),
+        TurnOutcome::Succeeded {
+            last_agent_message: None,
+        },
     )
     .await;
 
