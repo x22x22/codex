@@ -183,8 +183,8 @@ impl ToolHandler for Handler {
                     initial_agent_op.clone(),
                     Some(spawn_source.clone()),
                     SpawnAgentOptions {
-                        fork_parent_spawn_call_id: fork_context.then(|| call_id.clone()),
-                        ..Default::default()
+                        fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                        fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
                     },
                 )
                 .await;

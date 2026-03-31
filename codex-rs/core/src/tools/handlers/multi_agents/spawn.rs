@@ -165,11 +165,18 @@ impl ToolHandler for Handler {
                 let thread_id = spawn_watchdog(
                     &session.services.agent_control,
                     candidate_config,
-                    prompt.clone(),
-                    session.conversation_id,
-                    child_depth,
-                    watchdog_interval_s,
-                    spawn_source.clone(),
+                    input_items.clone(),
+                    Some(thread_spawn_source(
+                        session.conversation_id,
+                        &turn.session_source,
+                        child_depth,
+                        role_name,
+                        /*task_name*/ None,
+                    )?),
+                    SpawnAgentOptions {
+                        fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                        fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
+                    },
                 )
                 .await
                 .map_err(collab_spawn_error)?;
