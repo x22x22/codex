@@ -1,4 +1,5 @@
 use crate::agent::AgentStatus;
+use crate::agent::status::is_final;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
@@ -25,6 +26,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
@@ -115,6 +118,51 @@ pub(crate) fn spawn_should_retry_on_quota_exhaustion(error: &CodexErr) -> bool {
         error,
         CodexErr::QuotaExceeded | CodexErr::UsageLimitReached(_)
     )
+}
+
+pub(crate) async fn spawn_should_retry_on_async_quota_exhaustion(
+    thread_status: AgentStatus,
+    thread_id: ThreadId,
+    agent_control: &crate::agent::control::AgentControl,
+) -> bool {
+    if is_final(&thread_status) && spawn_should_retry_on_quota_exhaustion_status(&thread_status) {
+        return true;
+    }
+
+    let Ok(mut status_rx) = agent_control.subscribe_status(thread_id).await else {
+        return false;
+    };
+    let mut status = status_rx.borrow_and_update().clone();
+    if is_final(&status) && spawn_should_retry_on_quota_exhaustion_status(&status) {
+        return true;
+    }
+
+    loop {
+        if timeout(Duration::from_millis(250), status_rx.changed())
+            .await
+            .is_err()
+        {
+            break;
+        }
+        status = status_rx.borrow().clone();
+        if is_final(&status) {
+            return spawn_should_retry_on_quota_exhaustion_status(&status);
+        }
+    }
+    false
+}
+
+fn spawn_should_retry_on_quota_exhaustion_status(status: &AgentStatus) -> bool {
+    match status {
+        AgentStatus::Errored(message) => {
+            let message = message.to_lowercase();
+            message.contains("insufficient_quota")
+                || message.contains("usage limit")
+                || message.contains("quota")
+        }
+        AgentStatus::NotFound => false,
+        _ => false,
+    }
 }
 
 pub(crate) fn build_wait_agent_statuses(

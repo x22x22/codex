@@ -144,6 +144,16 @@ impl ToolHandler for Handler {
                 .await;
             match attempt_result {
                 Ok(spawned_agent) => {
+                    if spawn_should_retry_on_async_quota_exhaustion(
+                        spawned_agent.status.clone(),
+                        spawned_agent.thread_id,
+                        &session.services.agent_control,
+                    )
+                    .await
+                        && idx + 1 < candidates_to_try.len()
+                    {
+                        continue;
+                    }
                     spawn_result = Some(spawned_agent);
                     break;
                 }
