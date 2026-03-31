@@ -358,6 +358,7 @@ fn extract_frontmatter_and_body(contents: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use super::PERSONALITIES_DIR_NAME;
     use super::catalog_from_layer_stack;
     use crate::config_loader::CloudRequirementsLoader;
     use crate::config_loader::LoaderOverrides;
@@ -538,13 +539,13 @@ mod tests {
         let repo_dir = tempfile::tempdir().unwrap();
 
         write_personality(
-            user_dir.path(),
+            &user_dir.path().join(PERSONALITIES_DIR_NAME),
             "night-owl",
             "User personality",
             "user body",
         );
         write_personality(
-            repo_dir.path(),
+            &repo_dir.path().join(PERSONALITIES_DIR_NAME),
             "night-owl",
             "Repo personality",
             "repo body",
