@@ -328,8 +328,9 @@ impl InProcessClientStartArgs {
 
 /// Internal command sent from public facade methods to the worker task.
 ///
-/// Each variant carries a oneshot sender so the caller can `await` the
-/// result without holding a mutable reference to the client.
+/// Request/notify commands carry oneshot senders so the caller can `await`
+/// completion without holding a mutable reference to the client. Server
+/// request resolution is fire-and-forget once it has been queued.
 enum ClientCommand {
     Request {
         request: Box<ClientRequest>,
@@ -342,12 +343,10 @@ enum ClientCommand {
     ResolveServerRequest {
         request_id: RequestId,
         result: JsonRpcResult,
-        response_tx: oneshot::Sender<IoResult<()>>,
     },
     RejectServerRequest {
         request_id: RequestId,
         error: JSONRPCErrorError,
-        response_tx: oneshot::Sender<IoResult<()>>,
     },
     Shutdown {
         response_tx: oneshot::Sender<IoResult<()>>,
@@ -428,19 +427,22 @@ impl InProcessAppServerClient {
                             Some(ClientCommand::ResolveServerRequest {
                                 request_id,
                                 result,
-                                response_tx,
                             }) => {
-                                let send_result =
-                                    request_sender.respond_to_server_request(request_id, result);
-                                let _ = response_tx.send(send_result);
+                                if let Err(err) =
+                                    request_sender.respond_to_server_request(request_id, result)
+                                {
+                                    warn!("failed to resolve in-process server request: {err}");
+                                }
                             }
                             Some(ClientCommand::RejectServerRequest {
                                 request_id,
                                 error,
-                                response_tx,
                             }) => {
-                                let send_result = request_sender.fail_server_request(request_id, error);
-                                let _ = response_tx.send(send_result);
+                                if let Err(err) =
+                                    request_sender.fail_server_request(request_id, error)
+                                {
+                                    warn!("failed to reject in-process server request: {err}");
+                                }
                             }
                             Some(ClientCommand::Shutdown { response_tx }) => {
                                 let shutdown_result = handle.shutdown().await;
@@ -595,61 +597,44 @@ impl InProcessAppServerClient {
 
     /// Resolves a pending server request.
     ///
-    /// This should only be called with request IDs obtained from the current
-    /// client's event stream.
+    /// This returns after enqueueing the resolution so the caller can keep
+    /// draining `next_event()` even if the worker is currently blocked on a
+    /// must-deliver notification.
     pub async fn resolve_server_request(
         &self,
         request_id: RequestId,
         result: JsonRpcResult,
     ) -> IoResult<()> {
-        let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
-            .send(ClientCommand::ResolveServerRequest {
-                request_id,
-                result,
-                response_tx,
-            })
+            .send(ClientCommand::ResolveServerRequest { request_id, result })
             .await
             .map_err(|_| {
                 IoError::new(
                     ErrorKind::BrokenPipe,
                     "in-process app-server worker channel is closed",
                 )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "in-process app-server resolve channel is closed",
-            )
-        })?
+            })
     }
 
     /// Rejects a pending server request with JSON-RPC error payload.
+    ///
+    /// This returns after enqueueing the rejection so the caller can keep
+    /// draining `next_event()` even if the worker is currently blocked on a
+    /// must-deliver notification.
     pub async fn reject_server_request(
         &self,
         request_id: RequestId,
         error: JSONRPCErrorError,
     ) -> IoResult<()> {
-        let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
-            .send(ClientCommand::RejectServerRequest {
-                request_id,
-                error,
-                response_tx,
-            })
+            .send(ClientCommand::RejectServerRequest { request_id, error })
             .await
             .map_err(|_| {
                 IoError::new(
                     ErrorKind::BrokenPipe,
                     "in-process app-server worker channel is closed",
                 )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "in-process app-server reject channel is closed",
-            )
-        })?
+            })
     }
 
     /// Returns the next in-process event, or `None` when worker exits.
@@ -1582,6 +1567,67 @@ mod tests {
             .send(())
             .expect("server completion signal should send");
         client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn resolve_server_request_returns_after_enqueueing_command() {
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::channel(1);
+        let client = InProcessAppServerClient {
+            command_tx,
+            event_rx,
+            worker_handle: tokio::spawn(async {}),
+        };
+
+        timeout(
+            Duration::from_secs(1),
+            client.resolve_server_request(RequestId::Integer(7), serde_json::json!({ "ok": true })),
+        )
+        .await
+        .expect("resolve should return before timeout")
+        .expect("resolve should enqueue successfully");
+
+        let Some(ClientCommand::ResolveServerRequest { request_id, result }) =
+            command_rx.recv().await
+        else {
+            panic!("expected resolve command");
+        };
+        assert_eq!(request_id, RequestId::Integer(7));
+        assert_eq!(result, serde_json::json!({ "ok": true }));
+    }
+
+    #[tokio::test]
+    async fn reject_server_request_returns_after_enqueueing_command() {
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::channel(1);
+        let client = InProcessAppServerClient {
+            command_tx,
+            event_rx,
+            worker_handle: tokio::spawn(async {}),
+        };
+
+        let error = JSONRPCErrorError {
+            code: -32000,
+            message: "declined".to_string(),
+            data: None,
+        };
+        timeout(
+            Duration::from_secs(1),
+            client.reject_server_request(RequestId::Integer(9), error.clone()),
+        )
+        .await
+        .expect("reject should return before timeout")
+        .expect("reject should enqueue successfully");
+
+        let Some(ClientCommand::RejectServerRequest {
+            request_id,
+            error: queued_error,
+        }) = command_rx.recv().await
+        else {
+            panic!("expected reject command");
+        };
+        assert_eq!(request_id, RequestId::Integer(9));
+        assert_eq!(queued_error, error);
     }
 
     #[tokio::test]
