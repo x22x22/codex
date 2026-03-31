@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::config::RolloutConfig;
-use crate::file_io::append_text;
+use crate::file_io::RolloutAppendWriter;
 use crate::file_io::read_rollout_text;
 use chrono::TimeZone;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -518,8 +518,10 @@ async fn load_rollout_items_preserves_parsed_items_when_zstd_tail_is_truncated()
         },
     });
 
-    append_text(&rollout_path, &format!("{session_meta}\n"))?;
-    append_text(&rollout_path, &format!("{user_event}\n"))?;
+    let mut writer = RolloutAppendWriter::open(&rollout_path)?;
+    writer.append_text(&format!("{session_meta}\n"))?;
+    writer.append_text(&format!("{user_event}\n"))?;
+    drop(writer);
 
     let file = File::options().write(true).open(&rollout_path)?;
     let truncated_len = file.metadata()?.len().saturating_sub(1);
@@ -544,7 +546,7 @@ async fn load_rollout_items_preserves_parsed_items_when_zstd_tail_is_truncated()
         Some("test-provider")
     );
     assert!(session_meta_line.git.is_none());
-    assert_eq!(parse_errors, 1);
+    assert_eq!(parse_errors, 0);
 
     Ok(())
 }

@@ -37,6 +37,7 @@ use codex_core::config_loader::format_config_error_with_source;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
+use codex_core::read_latest_turn_context;
 use codex_core::read_session_meta_line;
 use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -45,9 +46,7 @@ use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::TurnContextItem;
 use codex_state::log_db;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::terminal_info;
@@ -1373,6 +1372,12 @@ pub(crate) async fn read_session_cwd(
     thread_id: ThreadId,
     path: Option<&Path>,
 ) -> Option<PathBuf> {
+    if let Some(path) = path
+        && let Ok(Some(turn_context)) = read_latest_turn_context(path).await
+    {
+        return Some(turn_context.cwd);
+    }
+
     if let Some(state_db_ctx) = get_state_db(config).await
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
@@ -1380,14 +1385,12 @@ pub(crate) async fn read_session_cwd(
     }
 
     // Prefer the latest TurnContext cwd so resume/fork reflects the most recent
-    // session directory (for the changed-cwd prompt) when DB data is unavailable.
+    // session directory (for the changed-cwd prompt). When the rollout cannot be
+    // read, fall back to persisted thread metadata and then session metadata.
     // The alternative would be mutating the SessionMeta line when the session cwd
     // changes, but the rollout is an append-only JSONL log and rewriting the head
     // would be error-prone.
     let path = path?;
-    if let Some(cwd) = read_latest_turn_context(path).await.map(|item| item.cwd) {
-        return Some(cwd);
-    }
     match read_session_meta_line(path).await {
         Ok(meta_line) => Some(meta_line.meta.cwd),
         Err(err) => {
@@ -1407,6 +1410,12 @@ pub(crate) async fn read_session_model(
     thread_id: ThreadId,
     path: Option<&Path>,
 ) -> Option<String> {
+    if let Some(path) = path
+        && let Ok(Some(turn_context)) = read_latest_turn_context(path).await
+    {
+        return Some(turn_context.model);
+    }
+
     if let Some(state_db_ctx) = get_state_db(config).await
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
         && let Some(model) = metadata.model
@@ -1414,27 +1423,8 @@ pub(crate) async fn read_session_model(
         return Some(model);
     }
 
-    let path = path?;
-    read_latest_turn_context(path).await.map(|item| item.model)
-}
-
-async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
-    let text = tokio::fs::read_to_string(path).await.ok()?;
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
-            continue;
-        };
-        if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item);
-        }
-    }
     None
 }
-
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
     match (
         path_utils::normalize_for_path_comparison(current_cwd),
@@ -2036,6 +2026,45 @@ mod tests {
             text.push('\n');
         }
         std::fs::write(&rollout_path, text)?;
+
+        let cwd = read_session_cwd(&config, ThreadId::new(), Some(&rollout_path))
+            .await
+            .expect("expected cwd");
+        assert_eq!(cwd, second);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_session_cwd_prefers_latest_turn_context_from_compressed_rollout()
+    -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let first = temp_dir.path().join("first");
+        let second = temp_dir.path().join("second");
+        std::fs::create_dir_all(&first)?;
+        std::fs::create_dir_all(&second)?;
+
+        let rollout_path = temp_dir.path().join("rollout.jsonl.zst");
+        let mut encoder =
+            zstd::stream::write::Encoder::new(std::fs::File::create(&rollout_path)?, 0)?;
+        for line in [
+            RolloutLine {
+                timestamp: "t0".to_string(),
+                item: RolloutItem::TurnContext(build_turn_context(&config, first)),
+            },
+            RolloutLine {
+                timestamp: "t1".to_string(),
+                item: RolloutItem::TurnContext(build_turn_context(&config, second.clone())),
+            },
+        ] {
+            use std::io::Write;
+            writeln!(
+                encoder,
+                "{}",
+                serde_json::to_string(&line).expect("serialize rollout")
+            )?;
+        }
+        let _ = encoder.finish()?;
 
         let cwd = read_session_cwd(&config, ThreadId::new(), Some(&rollout_path))
             .await

@@ -25,8 +25,8 @@ use tracing::warn;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use super::file_io::RolloutAppendWriter;
 use super::file_io::RolloutLineReader;
-use super::file_io::append_text as append_rollout_text;
 use super::file_io::preferred_rollout_file_suffix;
 use super::list::Cursor;
 use super::list::ThreadItem;
@@ -38,6 +38,7 @@ use super::list::get_threads;
 use super::list::get_threads_in_root;
 use super::list::parse_cursor;
 use super::list::parse_timestamp_uuid_from_filename;
+use super::list::read_latest_turn_context;
 use super::metadata;
 use super::policy::EventPersistenceMode;
 use super::policy::is_persisted_response_item;
@@ -434,7 +435,7 @@ impl RolloutRecorder {
                 } => {
                     tokio::fs::metadata(&path).await?;
                     (
-                        Some(RolloutFileWriter::new(path.clone())),
+                        Some(RolloutFileWriter::open(path.clone()).await?),
                         None,
                         path,
                         None,
@@ -782,7 +783,7 @@ async fn rollout_writer(
                                 "deferred rollout recorder missing log file metadata",
                             ));
                         };
-                        writer = Some(RolloutFileWriter::new(log_file_info.path));
+                        writer = Some(RolloutFileWriter::open(log_file_info.path).await?);
 
                         if let Some(session_meta) = meta.take() {
                             write_session_meta(
@@ -826,9 +827,20 @@ async fn rollout_writer(
                 let _ = ack.send(());
             }
             RolloutCmd::Shutdown { ack } => {
+                if let Some(writer) = writer.as_mut()
+                    && let Err(err) = writer.finish().await
+                {
+                    let _ = ack.send(());
+                    return Err(err);
+                }
                 let _ = ack.send(());
+                return Ok(());
             }
         }
+    }
+
+    if let Some(writer) = writer.as_mut() {
+        writer.finish().await?;
     }
 
     Ok(())
@@ -947,7 +959,11 @@ async fn sync_thread_state_after_write(
 }
 
 struct RolloutFileWriter {
-    path: PathBuf,
+    inner: Option<BlockingRolloutFileWriter>,
+}
+
+struct BlockingRolloutFileWriter {
+    writer: RolloutAppendWriter,
 }
 
 #[derive(serde::Serialize)]
@@ -958,8 +974,15 @@ struct RolloutLineRef<'a> {
 }
 
 impl RolloutFileWriter {
-    fn new(path: PathBuf) -> Self {
-        Self { path }
+    async fn open(path: PathBuf) -> std::io::Result<Self> {
+        tokio::task::spawn_blocking(move || {
+            let writer = RolloutAppendWriter::open(path.as_path())?;
+            Ok(Self {
+                inner: Some(BlockingRolloutFileWriter { writer }),
+            })
+        })
+        .await
+        .map_err(|err| IoError::other(format!("failed to open rollout writer: {err}")))?
     }
 
     async fn write_rollout_item(&mut self, rollout_item: &RolloutItem) -> std::io::Result<()> {
@@ -975,7 +998,7 @@ impl RolloutFileWriter {
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
-        let mut batch = String::new();
+        let mut lines = Vec::with_capacity(rollout_items.len());
         for rollout_item in rollout_items {
             let timestamp = OffsetDateTime::now_utc()
                 .format(timestamp_format)
@@ -986,25 +1009,31 @@ impl RolloutFileWriter {
             };
             let mut json = serde_json::to_string(&line)?;
             json.push('\n');
-            batch.push_str(json.as_str());
+            lines.push(json);
         }
-        self.write_text(batch).await
-    }
-
-    async fn write_text(&mut self, text: String) -> std::io::Result<()> {
-        let path = self.path.clone();
-        tokio::task::spawn_blocking(move || {
-            let Some(parent) = path.parent() else {
-                return Err(IoError::other(format!(
-                    "rollout path has no parent: {}",
-                    path.display()
-                )));
-            };
-            std::fs::create_dir_all(parent)?;
-            append_rollout_text(path.as_path(), text.as_str())
+        let Some(writer) = self.inner.take() else {
+            return Err(IoError::other("rollout writer missing inner state"));
+        };
+        let writer = tokio::task::spawn_blocking(move || {
+            let mut writer = writer;
+            for line in lines {
+                writer.writer.append_text(line.as_str())?;
+            }
+            Ok::<BlockingRolloutFileWriter, IoError>(writer)
         })
         .await
-        .map_err(|err| IoError::other(format!("failed to write rollout line: {err}")))?
+        .map_err(|err| IoError::other(format!("failed to write rollout line: {err}")))??;
+        self.inner = Some(writer);
+        Ok(())
+    }
+
+    async fn finish(&mut self) -> std::io::Result<()> {
+        let Some(writer) = self.inner.take() else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || writer.writer.finish())
+            .await
+            .map_err(|err| IoError::other(format!("failed to finish rollout writer: {err}")))?
     }
 }
 
@@ -1074,20 +1103,12 @@ async fn resume_candidate_matches_cwd(
     cwd: &Path,
     default_provider: &str,
 ) -> bool {
-    if cached_cwd.is_some_and(|session_cwd| cwd_matches(session_cwd, cwd)) {
-        return true;
+    if let Ok(Some(turn_context)) = read_latest_turn_context(rollout_path).await {
+        return cwd_matches(turn_context.cwd.as_path(), cwd);
     }
 
-    if let Ok((items, _, _)) = RolloutRecorder::load_rollout_items(rollout_path).await
-        && let Some(latest_turn_context_cwd) = items.iter().rev().find_map(|item| match item {
-            RolloutItem::TurnContext(turn_context) => Some(turn_context.cwd.as_path()),
-            RolloutItem::SessionMeta(_)
-            | RolloutItem::ResponseItem(_)
-            | RolloutItem::Compacted(_)
-            | RolloutItem::EventMsg(_) => None,
-        })
-    {
-        return cwd_matches(latest_turn_context_cwd, cwd);
+    if cached_cwd.is_some_and(|session_cwd| cwd_matches(session_cwd, cwd)) {
+        return true;
     }
 
     metadata::extract_metadata_from_rollout(rollout_path, default_provider)

@@ -19,6 +19,7 @@ use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::file_io::RolloutLineReader;
 use super::file_io::is_rollout_file_name;
+use super::file_io::read_rollout_text;
 use super::file_io::strip_rollout_file_suffix;
 use crate::protocol::EventMsg;
 use crate::state_db;
@@ -28,6 +29,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 
 /// Returned page of thread (thread) summaries.
@@ -1159,6 +1161,29 @@ pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> 
             path.display()
         ))
     })
+}
+
+/// Read the latest TurnContext item from a rollout file, if present.
+pub async fn read_latest_turn_context(path: &Path) -> io::Result<Option<TurnContextItem>> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let text = read_rollout_text(path.as_path())?;
+        for line in text.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+                continue;
+            };
+            if let RolloutItem::TurnContext(item) = rollout_line.item {
+                return Ok(Some(item));
+            }
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|err| io::Error::other(format!("failed to read latest turn context: {err}")))?
 }
 
 async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {
