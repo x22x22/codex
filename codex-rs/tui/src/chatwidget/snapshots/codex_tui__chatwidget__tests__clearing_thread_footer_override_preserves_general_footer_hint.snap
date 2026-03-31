@@ -1,9 +1,9 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: terminal.backend()
+expression: rendered
 ---
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"   Save and close external editor to continue.               100% context left  "
+"   Save and close external editor to continue.                                  "

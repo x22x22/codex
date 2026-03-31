@@ -1,7 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 6666
-expression: terminal.backend()
+expression: rendered
 ---
 "                                                                                "
 "• Working (0s • esc to interrupt)                                               "
@@ -9,4 +8,4 @@ expression: terminal.backend()
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"   BTW starting...                                           100% context left  "
+"   BTW starting...                                                              "
