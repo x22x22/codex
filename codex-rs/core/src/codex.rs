@@ -261,6 +261,7 @@ use crate::injection::app_id_from_path;
 use crate::injection::tool_kind_for_path;
 use crate::instructions::UserInstructions;
 use crate::jobs::ClaimedJob;
+use crate::jobs::JOB_FIRED_BACKGROUND_EVENT_PREFIX;
 use crate::jobs::JOB_UPDATED_BACKGROUND_EVENT_PREFIX;
 use crate::jobs::JobTurnContext;
 use crate::jobs::JobsState;
@@ -2697,13 +2698,14 @@ impl Session {
             return;
         }
         let Some(ClaimedJob {
-            job: _,
+            job,
             context,
             deleted_run_once_job,
         }) = self.jobs.lock().await.claim_next_job(Utc::now())
         else {
             return;
         };
+        self.emit_job_fired_notification(&job).await;
         if deleted_run_once_job {
             self.emit_job_updated_notification().await;
         }
@@ -2755,6 +2757,20 @@ impl Session {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
                 message: format!("{JOB_UPDATED_BACKGROUND_EVENT_PREFIX}{payload}"),
+            }),
+        })
+        .await;
+    }
+
+    async fn emit_job_fired_notification(&self, job: &ThreadJob) {
+        let Ok(payload) = serde_json::to_string(job) else {
+            warn!("failed to serialize job fired payload");
+            return;
+        };
+        self.send_event_raw(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                message: format!("{JOB_FIRED_BACKGROUND_EVENT_PREFIX}{payload}"),
             }),
         })
         .await;
