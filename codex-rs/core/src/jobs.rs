@@ -112,7 +112,9 @@ impl JobSchedule {
     fn next_run_at(self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         match self {
             Self::AfterTurn => None,
-            Self::EverySeconds(seconds) => Some(now + ChronoDuration::seconds(seconds as i64)),
+            Self::EverySeconds(seconds) => {
+                now.checked_add_signed(ChronoDuration::seconds(i64::try_from(seconds).ok()?))
+            }
         }
     }
 }
@@ -147,13 +149,21 @@ impl JobsState {
             ));
         }
         let schedule = JobSchedule::parse(&cron_expression)?;
+        let next_run_at = match schedule {
+            JobSchedule::AfterTurn => None,
+            JobSchedule::EverySeconds(_) => Some(schedule.next_run_at(now).ok_or_else(|| {
+                format!(
+                    "unsupported cron_expression `{cron_expression}`; next run time is out of range"
+                )
+            })?),
+        };
         let job = ThreadJob {
             id: id.clone(),
             cron_expression,
             prompt,
             run_once,
             created_at: now.timestamp(),
-            next_run_at: schedule.next_run_at(now).map(|value| value.timestamp()),
+            next_run_at: next_run_at.map(|value| value.timestamp()),
             last_run_at: None,
         };
         self.jobs.insert(
@@ -307,6 +317,8 @@ mod tests {
     use super::MAX_ACTIVE_JOBS_PER_THREAD;
     use super::MAX_EVERY_SECONDS;
     use super::job_prompt_input_item;
+    use chrono::DateTime;
+    use chrono::Duration as ChronoDuration;
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::models::ContentItem;
@@ -343,6 +355,28 @@ mod tests {
             Err(format!(
                 "unsupported cron_expression `@every {too_large}s`; @every values must be between 1 and {MAX_EVERY_SECONDS} seconds"
             ))
+        );
+    }
+
+    #[test]
+    fn create_job_rejects_every_schedule_when_next_run_at_is_out_of_range() {
+        let now = DateTime::<Utc>::MAX_UTC - ChronoDuration::seconds(1);
+        let mut jobs = JobsState::default();
+
+        let result = jobs.create_job(
+            "job-1".to_string(),
+            "@every:2".to_string(),
+            "overflow".to_string(),
+            /*run_once*/ false,
+            now,
+            /*timer_cancel*/ None,
+        );
+
+        assert_eq!(
+            result,
+            Err(
+                "unsupported cron_expression `@every:2`; next run time is out of range".to_string()
+            )
         );
     }
 
