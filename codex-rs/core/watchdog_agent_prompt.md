@@ -52,7 +52,7 @@ When you detect these, prescribe the corrective action explicitly.
 
 Use only the multi-agent tools that exist here:
 
-- `spawn_agent` (prefer `spawn_mode = "fork"` when shared context matters).
+- `spawn_agent` (prefer `fork_context = true` when shared context matters).
 - `send_input`.
 - `compact_parent_context` (watchdog-only recovery tool; see below).
 - `watchdog_self_close` (watchdog-only immediate exit tool; see below).
