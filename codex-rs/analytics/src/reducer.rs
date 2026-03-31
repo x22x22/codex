@@ -430,21 +430,23 @@ impl AnalyticsReducer {
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
-        out.push(TrackEventRequest::ThreadInitialized(ThreadInitializedEvent {
-            event_type: "codex_thread_initialized",
-            event_params: ThreadInitializedEventParams {
-                thread_id: thread.id,
-                app_server_client: connection_state.app_server_client.clone(),
-                runtime: connection_state.runtime.clone(),
-                model,
-                ephemeral: thread.ephemeral,
-                thread_source: thread_source_name(&thread_source),
-                initialization_mode,
-                subagent_source: None,
-                parent_thread_id: None,
-                created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+        out.push(TrackEventRequest::ThreadInitialized(
+            ThreadInitializedEvent {
+                event_type: "codex_thread_initialized",
+                event_params: ThreadInitializedEventParams {
+                    thread_id: thread.id,
+                    app_server_client: connection_state.app_server_client.clone(),
+                    runtime: connection_state.runtime.clone(),
+                    model,
+                    ephemeral: thread.ephemeral,
+                    thread_source: thread_source_name(&thread_source),
+                    initialization_mode,
+                    subagent_source: None,
+                    parent_thread_id: None,
+                    created_at: u64::try_from(thread.created_at).unwrap_or_default(),
+                },
             },
-        }));
+        ));
     }
 
     fn maybe_emit_turn_event(&mut self, turn_id: &str, out: &mut Vec<TrackEventRequest>) {
@@ -468,18 +470,20 @@ impl AnalyticsReducer {
             .and_then(|connection_id| self.connections.get(&connection_id))
             .map(|connection_state| connection_state.app_server_client.product_client_id.clone())
             .unwrap_or_else(|| originator().value);
-        out.push(TrackEventRequest::TurnEvent(Box::new(CodexTurnEventRequest {
-            event_type: "codex_turn_event",
-            event_params: codex_turn_event_params(
-                product_client_id,
-                thread_id,
-                turn_id.to_string(),
-                num_input_images,
-                resolved_config,
-                completed,
-                turn_state.created_at,
-            ),
-        })));
+        out.push(TrackEventRequest::TurnEvent(Box::new(
+            CodexTurnEventRequest {
+                event_type: "codex_turn_event",
+                event_params: codex_turn_event_params(
+                    product_client_id,
+                    thread_id,
+                    turn_id.to_string(),
+                    num_input_images,
+                    resolved_config,
+                    completed,
+                    turn_state.created_at,
+                ),
+            },
+        )));
         self.turns.remove(turn_id);
     }
 }
