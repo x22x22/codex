@@ -332,17 +332,22 @@ mod windows_impl {
             );
         }
         let caps = load_or_create_cap_sids(codex_home)?;
+        let readonly_sid = caps.readonly;
+        let workspace_sid = caps.workspace;
         let (h_token, psid_generic, psid_workspace): (HANDLE, *mut c_void, Option<*mut c_void>) = unsafe {
             match &policy {
                 SandboxPolicy::ReadOnly { .. } => {
-                    let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
+                    let psid = convert_string_sid_to_sid(&readonly_sid)
+                        .ok_or_else(|| anyhow::anyhow!("invalid readonly SID {readonly_sid}"))?;
                     let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
                     (h, psid, None)
                 }
                 SandboxPolicy::WorkspaceWrite { .. } => {
-                    let psid_generic = convert_string_sid_to_sid(&caps.workspace).unwrap();
+                    let psid_generic = convert_string_sid_to_sid(&workspace_sid)
+                        .ok_or_else(|| anyhow::anyhow!("invalid workspace SID {workspace_sid}"))?;
                     let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
-                    let psid_workspace = convert_string_sid_to_sid(&ws_sid).unwrap();
+                    let psid_workspace = convert_string_sid_to_sid(&ws_sid)
+                        .ok_or_else(|| anyhow::anyhow!("invalid workspace SID {ws_sid}"))?;
                     let base = super::token::get_current_token_for_restriction()?;
                     let h_res = create_workspace_write_token_with_caps_from(
                         base,
@@ -363,7 +368,7 @@ mod windows_impl {
                 && let Ok(base) = super::token::get_current_token_for_restriction()
             {
                 if let Ok(bytes) = super::token::get_logon_sid_bytes(base) {
-                    let mut tmp = bytes.clone();
+                    let mut tmp = bytes;
                     let psid2 = tmp.as_mut_ptr() as *mut c_void;
                     allow_null_device(psid2);
                 }
@@ -536,7 +541,7 @@ mod windows_impl {
         if exit_code == 0 {
             log_success(&command, logs_base_dir);
         } else {
-            log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
+            log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
         }
 
         if !persist_aces {
@@ -569,11 +574,12 @@ mod windows_impl {
 
         ensure_codex_home_exists(codex_home)?;
         let caps = load_or_create_cap_sids(codex_home)?;
-        let psid_generic =
-            unsafe { convert_string_sid_to_sid(&caps.workspace) }.expect("valid workspace SID");
+        let workspace_sid = caps.workspace;
+        let psid_generic = unsafe { convert_string_sid_to_sid(&workspace_sid) }
+            .ok_or_else(|| anyhow::anyhow!("invalid workspace SID {workspace_sid}"))?;
         let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
-        let psid_workspace =
-            unsafe { convert_string_sid_to_sid(&ws_sid) }.expect("valid workspace SID");
+        let psid_workspace = unsafe { convert_string_sid_to_sid(&ws_sid) }
+            .ok_or_else(|| anyhow::anyhow!("invalid workspace SID {ws_sid}"))?;
         let current_dir = cwd.to_path_buf();
         let AllowDenyPaths { allow, deny } =
             compute_allow_paths(sandbox_policy, sandbox_policy_cwd, &current_dir, env_map);
