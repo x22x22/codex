@@ -122,8 +122,8 @@ async fn tool_suggest_is_available_without_search_tool_after_discovery_attempts(
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        !tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "tools list should not include {TOOL_SEARCH_TOOL_NAME}: {tools:?}"
+        tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "tools list should include {TOOL_SEARCH_TOOL_NAME}: {tools:?}"
     );
     assert!(
         tools.iter().any(|name| name == TOOL_SUGGEST_TOOL_NAME),

@@ -7,6 +7,8 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 const TUI_CLIENT_NAME: &str = "codex-tui";
+const AGENT_TOOLS_NAMESPACE: &str = "agents";
+const AGENT_TOOLS_NAMESPACE_DESCRIPTION: &str = "Agent collaboration tools for spawning, messaging, waiting on, listing, and closing subagents.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolSearchAppInfo {
@@ -138,7 +140,10 @@ pub fn create_tool_search_tool(app_tools: &[ToolSearchAppInfo], default_limit: u
         ),
     ]);
 
-    let mut app_descriptions = BTreeMap::new();
+    let mut app_descriptions = BTreeMap::from([(
+        AGENT_TOOLS_NAMESPACE.to_string(),
+        Some(AGENT_TOOLS_NAMESPACE_DESCRIPTION.to_string()),
+    )]);
     for app_tool in app_tools {
         app_descriptions
             .entry(app_tool.name.clone())
