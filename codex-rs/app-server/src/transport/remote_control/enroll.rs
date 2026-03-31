@@ -327,7 +327,7 @@ mod tests {
             Some(state_db.as_ref()),
             &first_target,
             Some("account-a"),
-            None,
+            /*enrollment*/ None,
         )
         .await
         .expect("matching enrollment should clear");

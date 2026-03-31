@@ -344,7 +344,7 @@ mod tests {
     use tokio::time::timeout;
 
     fn initialize_envelope(client_id: &str) -> ClientEnvelope {
-        initialize_envelope_with_stream_id(client_id, None)
+        initialize_envelope_with_stream_id(client_id, /*stream_id*/ None)
     }
 
     fn initialize_envelope_with_stream_id(

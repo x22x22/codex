@@ -471,11 +471,12 @@ impl RemoteControlWebsocket {
             }
             if (matches!(&client_envelope.event, ClientEvent::ClientClosed)
                 || remote_control_message_starts_connection(&client_envelope.event))
-                && let Some(stream_id) = resolved_stream_id.as_ref() {
-                    state
-                        .outbound_buffer
-                        .remove(&client_envelope.client_id, stream_id);
-                }
+                && let Some(stream_id) = resolved_stream_id.as_ref()
+            {
+                state
+                    .outbound_buffer
+                    .remove(&client_envelope.client_id, stream_id);
+            }
             drop(state);
 
             if client_tracker
@@ -864,7 +865,7 @@ mod tests {
             &auth_manager,
             &mut auth_recovery,
             &mut enrollment,
-            None,
+            /*subscribe_cursor*/ None,
         )
         .await
         {
@@ -925,7 +926,7 @@ mod tests {
             &auth_manager,
             &mut auth_recovery,
             &mut enrollment,
-            None,
+            /*subscribe_cursor*/ None,
         )
         .await
         .expect_err("unauthorized response should fail the websocket connect");
@@ -991,7 +992,7 @@ mod tests {
             &auth_manager,
             &mut auth_recovery,
             &mut enrollment,
-            None,
+            /*subscribe_cursor*/ None,
         )
         .await
         .expect_err("unauthorized enrollment should fail the websocket connect");
@@ -1032,7 +1033,7 @@ mod tests {
             async move {
                 RemoteControlWebsocket::new(
                     remote_control_target,
-                    None,
+                    /*state_db*/ None,
                     remote_control_auth_manager(),
                     transport_event_tx,
                     shutdown_token,
