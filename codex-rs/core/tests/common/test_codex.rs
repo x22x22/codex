@@ -17,7 +17,10 @@ use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
+use codex_core::config::ConfigOverrides;
 use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::load_config_layers_state;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -44,8 +47,8 @@ use crate::PathBufExt;
 use crate::PathExt;
 use crate::RemoteEnvConfig;
 use crate::TempDirExt;
+use crate::default_test_overrides;
 use crate::get_remote_test_env;
-use crate::load_default_config_for_test;
 use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
@@ -564,8 +567,18 @@ impl TestCodexBuilder {
             ..built_in_model_providers(/*openai_base_url*/ None)["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
-        let mut config = load_default_config_for_test(home).await;
-        config.cwd = cwd.abs();
+        let overrides = ConfigOverrides {
+            cwd: Some(cwd.abs().to_path_buf()),
+            ..default_test_overrides()
+        };
+        let mut config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .harness_overrides(overrides)
+            .build()
+            .await?;
+        let initial_cwd = config.cwd.clone();
+        let initial_requirements = config.config_layer_stack.requirements().clone();
+        let initial_requirements_toml = config.config_layer_stack.requirements_toml().clone();
         config.model_provider = model_provider;
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
@@ -601,14 +614,43 @@ impl TestCodexBuilder {
             config.features.disable(Feature::ApplyPatchFreeform)?;
         }
 
-        config.config_layer_stack = load_config_layers_state(
-            &config.codex_home,
-            Some(config.cwd.clone()),
-            &[],
-            LoaderOverrides::default(),
-            CloudRequirementsLoader::default(),
-        )
-        .await?;
+        let requirements_changed =
+            *config.config_layer_stack.requirements() != initial_requirements;
+        let requirements_toml_changed =
+            *config.config_layer_stack.requirements_toml() != initial_requirements_toml;
+        if config.cwd != initial_cwd || requirements_changed || requirements_toml_changed {
+            let reloaded_stack = load_config_layers_state(
+                &config.codex_home,
+                Some(config.cwd.clone()),
+                &[],
+                LoaderOverrides::default(),
+                CloudRequirementsLoader::default(),
+            )
+            .await?;
+            let layers = reloaded_stack
+                .get_layers(
+                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                    /*include_disabled*/ true,
+                )
+                .into_iter()
+                .cloned()
+                .collect();
+            let requirements = if requirements_changed {
+                config.config_layer_stack.requirements().clone()
+            } else {
+                reloaded_stack.requirements().clone()
+            };
+            let requirements_toml = if requirements_toml_changed {
+                config.config_layer_stack.requirements_toml().clone()
+            } else {
+                reloaded_stack.requirements_toml().clone()
+            };
+            config.config_layer_stack = codex_core::config_loader::ConfigLayerStack::new(
+                layers,
+                requirements,
+                requirements_toml,
+            )?;
+        }
 
         Ok((config, cwd))
     }
@@ -925,7 +967,12 @@ pub fn test_codex() -> TestCodexBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::config_loader::ConfigLayerStack;
     use codex_core::config_loader::ConfigLayerStackOrdering;
+    use codex_core::config_loader::NetworkConstraints;
+    use codex_core::config_loader::NetworkRequirementsToml;
+    use codex_core::config_loader::RequirementSource;
+    use codex_core::config_loader::Sourced;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -984,6 +1031,58 @@ mod tests {
         assert!(
             config_folders.contains(&repo.path().join(".codex")),
             "expected config layers to include repo .codex folder, got {config_folders:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_config_preserves_mutated_requirements() {
+        let home = TempDir::new().expect("create home");
+        let mut builder = test_codex().with_config(|config| {
+            let layers = config
+                .config_layer_stack
+                .get_layers(
+                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                    /*include_disabled*/ true,
+                )
+                .into_iter()
+                .cloned()
+                .collect();
+            let mut requirements = config.config_layer_stack.requirements().clone();
+            requirements.network = Some(Sourced::new(
+                NetworkConstraints {
+                    enabled: Some(true),
+                    allow_local_binding: Some(true),
+                    ..Default::default()
+                },
+                RequirementSource::CloudRequirements,
+            ));
+            let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+            requirements_toml.network = Some(NetworkRequirementsToml {
+                enabled: Some(true),
+                allow_local_binding: Some(true),
+                ..Default::default()
+            });
+            config.config_layer_stack =
+                ConfigLayerStack::new(layers, requirements, requirements_toml)
+                    .expect("rebuild config layer stack with network requirements");
+        });
+
+        let (config, _) = builder
+            .prepare_config("http://localhost".to_string(), &home)
+            .await
+            .expect("prepare config");
+
+        let requirements = config.config_layer_stack.requirements();
+        assert_eq!(
+            requirements.network,
+            Some(Sourced::new(
+                NetworkConstraints {
+                    enabled: Some(true),
+                    allow_local_binding: Some(true),
+                    ..Default::default()
+                },
+                RequirementSource::CloudRequirements,
+            ))
         );
     }
 }
