@@ -3,6 +3,7 @@
 use anyhow::Context as _;
 use anyhow::ensure;
 use codex_arg0::Arg0PathEntryGuard;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_utils_cargo_bin::CargoBinError;
 use ctor::ctor;
 use std::sync::OnceLock;
@@ -199,6 +200,7 @@ pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
 #[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
+        approvals_reviewer: Some(ApprovalsReviewer::User),
         codex_linux_sandbox_exe: Some(
             find_codex_linux_sandbox_exe().expect("should find binary for codex-linux-sandbox"),
         ),
@@ -208,7 +210,10 @@ fn default_test_overrides() -> ConfigOverrides {
 
 #[cfg(not(target_os = "linux"))]
 fn default_test_overrides() -> ConfigOverrides {
-    ConfigOverrides::default()
+    ConfigOverrides {
+        approvals_reviewer: Some(ApprovalsReviewer::User),
+        ..ConfigOverrides::default()
+    }
 }
 
 #[cfg(target_os = "linux")]

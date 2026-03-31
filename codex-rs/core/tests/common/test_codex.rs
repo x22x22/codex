@@ -973,6 +973,7 @@ mod tests {
     use codex_core::config_loader::NetworkRequirementsToml;
     use codex_core::config_loader::RequirementSource;
     use codex_core::config_loader::Sourced;
+    use codex_protocol::config_types::ApprovalsReviewer;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -1084,5 +1085,18 @@ mod tests {
                 RequirementSource::CloudRequirements,
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_config_defaults_to_manual_approvals_reviewer() {
+        let home = TempDir::new().expect("create home");
+        let mut builder = test_codex();
+
+        let (config, _) = builder
+            .prepare_config("http://example.test".to_string(), &home)
+            .await
+            .expect("prepare config");
+
+        assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     }
 }
