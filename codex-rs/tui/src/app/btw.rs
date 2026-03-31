@@ -12,7 +12,6 @@ pub(super) struct BtwThreadState {
 }
 
 impl App {
-    /// Keeps BTW-specific UI state in sync with the currently displayed thread.
     pub(super) fn sync_btw_thread_ui(&mut self) {
         let clear_btw_ui = |chat_widget: &mut crate::chatwidget::ChatWidget| {
             chat_widget.set_thread_footer_hint_override(/*items*/ None);
@@ -62,13 +61,19 @@ impl App {
             .map(|state| state.parent_thread_id)
     }
 
-    pub(super) async fn maybe_return_from_btw(&mut self, tui: &mut tui::Tui) -> bool {
+    pub(super) async fn maybe_return_from_btw(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+    ) -> bool {
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
             && self.chat_widget.composer_is_empty()
             && let Some(parent_thread_id) = self.active_btw_parent_thread_id()
         {
-            let _ = self.select_agent_thread(tui, parent_thread_id).await;
+            let _ = self
+                .select_agent_thread_and_discard_btw_chain(tui, app_server, parent_thread_id)
+                .await;
             true
         } else {
             false
@@ -93,9 +98,6 @@ impl App {
         }
 
         let mut btw_threads_to_discard = Vec::new();
-        // Selecting the immediate return thread should keep that ancestor reachable. Only discard
-        // the BTW suffix that becomes unreachable after the replacement thread is fully attached
-        // and replayed.
         loop {
             btw_threads_to_discard.push(btw_thread_id);
             let Some(parent_thread_id) = self
@@ -124,14 +126,15 @@ impl App {
             .and_then(|state| state.next_fork_banner_parent_label.take())
     }
 
-    /// Shuts down and forgets one ephemeral BTW thread.
-    ///
-    /// This removes the thread from the core thread manager, aborts its listener task, clears any
-    /// TUI bookkeeping for replay/navigation, and recomputes the footer state. Callers that are
-    /// leaving a nested BTW stack are responsible for discarding the whole hidden chain in the
-    /// correct order.
-    pub(super) async fn discard_btw_thread(&mut self, thread_id: ThreadId) {
-        self.shutdown_and_remove_thread(thread_id).await;
+    pub(super) async fn discard_btw_thread(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) {
+        if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+            tracing::warn!("failed to unsubscribe BTW thread {thread_id}: {err}");
+        }
+        self.abort_thread_event_listener(thread_id);
         self.thread_event_channels.remove(&thread_id);
         self.btw_threads.remove(&thread_id);
         if self.active_thread_id == Some(thread_id) {
@@ -152,18 +155,33 @@ impl App {
 
         let channel = self.thread_event_channels.get(&parent_thread_id)?;
         let store = channel.store.lock().await;
-        match store.session_configured.as_ref().map(|event| &event.msg) {
-            Some(EventMsg::SessionConfigured(session)) => session
-                .thread_name
-                .clone()
-                .filter(|name| !name.trim().is_empty()),
-            _ => None,
+        store
+            .session
+            .as_ref()
+            .and_then(|session| session.thread_name.clone())
+            .filter(|name| !name.trim().is_empty())
+    }
+
+    pub(super) async fn select_agent_thread_and_discard_btw_chain(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let btw_threads_to_discard = self.btw_threads_to_discard_after_switch(thread_id);
+        self.select_agent_thread(tui, app_server, thread_id).await?;
+        if self.active_thread_id == Some(thread_id) {
+            for btw_thread_id in btw_threads_to_discard {
+                self.discard_btw_thread(app_server, btw_thread_id).await;
+            }
         }
+        Ok(())
     }
 
     pub(super) async fn handle_start_btw(
         &mut self,
         tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
         parent_thread_id: ThreadId,
         user_message: crate::chatwidget::UserMessage,
     ) -> Result<AppRunControl> {
@@ -174,65 +192,19 @@ impl App {
         );
         self.refresh_in_memory_config_from_disk_best_effort("starting a BTW subagent")
             .await;
-        let parent_rollout_path = match self.server.get_thread(parent_thread_id).await {
-            Ok(thread) => thread.rollout_path(),
-            Err(err) => {
-                if self.current_displayed_thread_id() == Some(parent_thread_id) {
-                    self.chat_widget.rollout_path()
-                } else {
-                    self.chat_widget
-                        .set_thread_footer_hint_override(/*items*/ None);
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to fork BTW thread from {parent_thread_id}: {err}"
-                    ));
-                    return Ok(AppRunControl::Continue);
-                }
-            }
-        }
-        .filter(|path| path.exists());
-        let Some(parent_rollout_path) = parent_rollout_path else {
-            self.chat_widget
-                .set_thread_footer_hint_override(/*items*/ None);
-            self.chat_widget.add_error_message(
-                "A thread must contain at least one turn before /btw can fork it.".to_string(),
-            );
-            return Ok(AppRunControl::Continue);
-        };
 
-        let fork_result = if self.chat_widget.agent_turn_running() {
-            self.server
-                .fork_thread(
-                    ForkSnapshot::Interrupted,
-                    self.config.clone(),
-                    parent_rollout_path.clone(),
-                    /*persist_extended_history*/ false,
-                    /*parent_trace*/ None,
-                )
-                .await
-        } else {
-            self.server
-                .fork_thread(
-                    ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
-                    self.config.clone(),
-                    parent_rollout_path.clone(),
-                    /*persist_extended_history*/ false,
-                    /*parent_trace*/ None,
-                )
-                .await
-        };
-
-        match fork_result {
+        let mut fork_config = self.config.clone();
+        fork_config.ephemeral = true;
+        match app_server.fork_thread(fork_config, parent_thread_id).await {
             Ok(forked) => {
-                let child_thread_id = forked.thread_id;
+                let child_thread_id = forked.session.thread_id;
                 let next_fork_banner_parent_label =
                     self.fork_banner_parent_label(parent_thread_id).await;
-                self.attach_live_thread(
-                    child_thread_id,
-                    Arc::clone(&forked.thread),
-                    forked.session_configured,
-                    AgentPickerVisibility::Hidden,
-                )
-                .await?;
+                let channel = self.ensure_thread_channel(child_thread_id);
+                {
+                    let mut store = channel.store.lock().await;
+                    store.set_session(forked.session, forked.turns);
+                }
                 self.btw_threads.insert(
                     child_thread_id,
                     BtwThreadState {
@@ -240,19 +212,19 @@ impl App {
                         next_fork_banner_parent_label,
                     },
                 );
-                if let Err(err) = self.select_agent_thread(tui, child_thread_id).await {
-                    self.discard_btw_thread(child_thread_id).await;
+                if let Err(err) = self
+                    .select_agent_thread_and_discard_btw_chain(tui, app_server, child_thread_id)
+                    .await
+                {
+                    self.discard_btw_thread(app_server, child_thread_id).await;
                     return Err(err);
                 }
                 if self.active_thread_id == Some(child_thread_id) {
-                    if let Some(op) = self
+                    let _ = self
                         .chat_widget
-                        .submit_user_message_as_plain_user_turn(user_message)
-                    {
-                        self.note_active_thread_outbound_op(&op).await;
-                    }
+                        .submit_user_message_as_plain_user_turn(user_message);
                 } else {
-                    self.discard_btw_thread(child_thread_id).await;
+                    self.discard_btw_thread(app_server, child_thread_id).await;
                     self.chat_widget.add_error_message(format!(
                         "Failed to switch into BTW thread {child_thread_id}."
                     ));
@@ -261,9 +233,8 @@ impl App {
             Err(err) => {
                 self.chat_widget
                     .set_thread_footer_hint_override(/*items*/ None);
-                let path_display = parent_rollout_path.display();
                 self.chat_widget.add_error_message(format!(
-                    "Failed to start BTW thread from {path_display}: {err}"
+                    "Failed to fork BTW thread from {parent_thread_id}: {err}"
                 ));
             }
         }
