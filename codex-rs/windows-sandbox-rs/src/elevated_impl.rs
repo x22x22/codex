@@ -93,7 +93,7 @@ mod windows_impl {
                     } else {
                         cur.join(gitdir)
                     };
-                    return resolved.parent().map(|p| p.to_path_buf()).or(Some(cur));
+                    return resolved.parent().map(Path::to_path_buf).or(Some(cur));
                 }
                 return Some(cur);
             }
@@ -269,18 +269,25 @@ mod windows_impl {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
         let caps = load_or_create_cap_sids(codex_home)?;
+        let readonly_sid = caps.readonly;
+        let workspace_sid = caps.workspace;
         let (psid_to_use, cap_sids) = match &policy {
-            SandboxPolicy::ReadOnly { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.readonly).unwrap() },
-                vec![caps.readonly.clone()],
-            ),
-            SandboxPolicy::WorkspaceWrite { .. } => (
-                unsafe { convert_string_sid_to_sid(&caps.workspace).unwrap() },
-                vec![
-                    caps.workspace.clone(),
-                    crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
-                ],
-            ),
+            SandboxPolicy::ReadOnly { .. } => {
+                let psid = unsafe { convert_string_sid_to_sid(&readonly_sid) }
+                    .ok_or_else(|| anyhow::anyhow!("invalid readonly SID {readonly_sid}"))?;
+                (psid, vec![readonly_sid])
+            }
+            SandboxPolicy::WorkspaceWrite { .. } => {
+                let psid = unsafe { convert_string_sid_to_sid(&workspace_sid) }
+                    .ok_or_else(|| anyhow::anyhow!("invalid workspace SID {workspace_sid}"))?;
+                (
+                    psid,
+                    vec![
+                        workspace_sid,
+                        crate::cap::workspace_cap_sid_for_cwd(codex_home, cwd)?,
+                    ],
+                )
+            }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!("DangerFullAccess handled above")
             }
@@ -302,7 +309,7 @@ mod windows_impl {
         let runner_exe = find_runner_exe(codex_home, logs_base_dir);
         let runner_cmdline = runner_exe
             .to_str()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .unwrap_or_else(|| "codex-command-runner.exe".to_string());
         let runner_full_cmd = format!(
             "{} {} {}",
@@ -365,7 +372,7 @@ mod windows_impl {
                 ),
                 logs_base_dir,
             );
-            return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
+            return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {err}"));
         }
 
         if let Err(err) = connect_pipe(h_pipe_in) {
@@ -451,7 +458,7 @@ mod windows_impl {
             if exit_code == 0 {
                 log_success(&command, logs_base_dir);
             } else {
-                log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
+                log_failure(&command, &format!("exit code {exit_code}"), logs_base_dir);
             }
 
             Ok(CaptureResult {
