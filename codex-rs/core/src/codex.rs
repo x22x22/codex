@@ -2703,23 +2703,22 @@ impl Session {
     }
 
     pub(crate) async fn maybe_start_pending_job(self: &Arc<Self>) {
+        let has_pending_turn_inputs = self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await;
         let Some(ClaimedJob {
             job,
             context,
             deleted_run_once_job,
         }) = ({
             let mut job_start_in_progress = self.job_start_in_progress.lock().await;
-            let has_pending_turn_inputs = self.has_queued_response_items_for_next_turn().await
-                || self.has_trigger_turn_mailbox_items().await;
-            if *job_start_in_progress
-                || self.active_turn.lock().await.is_some()
-                || has_pending_turn_inputs
-            {
+            let mut active_turn = self.active_turn.lock().await;
+            if *job_start_in_progress || active_turn.is_some() || has_pending_turn_inputs {
                 None
             } else {
                 let claimed = self.jobs.lock().await.claim_next_job(Utc::now());
                 if claimed.is_some() {
                     *job_start_in_progress = true;
+                    *active_turn = Some(ActiveTurn::default());
                 }
                 claimed
             }
