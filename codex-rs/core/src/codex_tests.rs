@@ -2753,6 +2753,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         jobs: Mutex::new(JobsState::default()),
+        job_timers_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3597,6 +3598,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         jobs: Mutex::new(JobsState::default()),
+        job_timers_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3614,6 +3616,16 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
+}
+
+#[tokio::test]
+async fn dropping_session_cancels_job_timers() {
+    let (session, _, _) = make_session_and_context_with_rx().await;
+    let cancel_token = session.job_timers_cancellation_token.clone();
+
+    drop(session);
+
+    assert!(cancel_token.is_cancelled());
 }
 
 #[tokio::test]

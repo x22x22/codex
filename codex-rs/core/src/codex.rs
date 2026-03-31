@@ -822,10 +822,17 @@ pub(crate) struct Session {
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
     jobs: Mutex<JobsState>,
+    job_timers_cancellation_token: CancellationToken,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.job_timers_cancellation_token.cancel();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1940,6 +1947,7 @@ impl Session {
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
             jobs: Mutex::new(JobsState::default()),
+            job_timers_cancellation_token: CancellationToken::new(),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -2716,13 +2724,18 @@ impl Session {
             .await;
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(self.start_task(
+        let session = Arc::clone(self);
+        if let Err(err) = tokio::task::spawn_blocking(move || {
+            futures::executor::block_on(session.start_task(
                 turn_context,
                 Vec::new(),
                 crate::tasks::RegularTask::new(),
             ));
-        });
+        })
+        .await
+        {
+            warn!("failed to start job turn: {err}");
+        }
     }
 
     fn spawn_job_timer(
@@ -2732,9 +2745,11 @@ impl Session {
         cancellation_token: CancellationToken,
     ) {
         let weak = Arc::downgrade(self);
+        let session_cancel = self.job_timers_cancellation_token.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
+                    _ = session_cancel.cancelled() => break,
                     _ = cancellation_token.cancelled() => break,
                     _ = tokio::time::sleep(std::time::Duration::from_secs(seconds)) => {}
                 }

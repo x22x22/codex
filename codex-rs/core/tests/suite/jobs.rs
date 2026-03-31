@@ -17,6 +17,15 @@ use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_job_emits_fired_background_event_when_job_starts() -> Result<()> {
+    assert_after_turn_job_starts_and_emits_fired_event().await
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn create_job_starts_on_current_thread_runtime() -> Result<()> {
+    assert_after_turn_job_starts_and_emits_fired_event().await
+}
+
+async fn assert_after_turn_job_starts_and_emits_fired_event() -> Result<()> {
     let server = start_mock_server().await;
     let _mock = mount_sse_once(
         &server,
