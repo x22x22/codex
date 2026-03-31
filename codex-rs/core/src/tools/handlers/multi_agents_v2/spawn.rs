@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
@@ -139,6 +140,7 @@ impl ToolHandler for Handler {
                     Some(spawn_source.clone()),
                     SpawnAgentOptions {
                         fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
+                        fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
                     },
                 )
                 .await;
