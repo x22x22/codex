@@ -249,6 +249,25 @@ fn find_namespaced_tool<'a>(
         .expect("expected tool in namespace")
 }
 
+fn find_namespaced_tool<'a>(
+    tools: &'a [ConfiguredToolSpec],
+    namespace: &str,
+    expected_name: &str,
+) -> &'a ResponsesApiTool {
+    let namespace_tool = find_tool(tools, namespace);
+    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+        panic!("expected {namespace} namespace tool");
+    };
+    namespace
+        .tools
+        .iter()
+        .find_map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name => Some(tool),
+            _ => None,
+        })
+        .expect("expected tool in namespace")
+}
+
 fn strip_descriptions_schema(schema: &mut JsonSchema) {
     match schema {
         JsonSchema::Boolean { description }
