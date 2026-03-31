@@ -1366,6 +1366,23 @@ async fn user_turn_includes_personality_from_config() {
 }
 
 #[tokio::test]
+async fn user_turn_preserves_explicit_none_personality_from_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_model("gpt-5.2-codex");
+    chat.set_personality(Personality::none());
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { personality, .. } if personality == Some(Personality::none()) => {}
+        other => panic!("expected Op::UserTurn with none personality, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn plan_update_renders_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let update = UpdatePlanArgs {

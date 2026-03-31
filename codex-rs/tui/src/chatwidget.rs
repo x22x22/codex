@@ -5849,8 +5849,7 @@ impl ChatWidget {
             .config
             .personality
             .clone()
-            .filter(|_| self.config.features.enabled(Feature::Personality))
-            .filter(|personality| !personality.is_none());
+            .filter(|_| self.config.features.enabled(Feature::Personality));
         let service_tier = self.config.service_tier.map(Some);
         let op = AppCommand::user_turn(
             items,
