@@ -1372,12 +1372,6 @@ pub(crate) async fn read_session_cwd(
     thread_id: ThreadId,
     path: Option<&Path>,
 ) -> Option<PathBuf> {
-    if let Some(path) = path
-        && let Ok(Some(turn_context)) = read_latest_turn_context(path).await
-    {
-        return Some(turn_context.cwd);
-    }
-
     if let Some(state_db_ctx) = get_state_db(config).await
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
@@ -1385,12 +1379,15 @@ pub(crate) async fn read_session_cwd(
     }
 
     // Prefer the latest TurnContext cwd so resume/fork reflects the most recent
-    // session directory (for the changed-cwd prompt). When the rollout cannot be
-    // read, fall back to persisted thread metadata and then session metadata.
+    // session directory (for the changed-cwd prompt) when DB data is unavailable.
+    // When the rollout cannot be read, fall back to session metadata.
     // The alternative would be mutating the SessionMeta line when the session cwd
     // changes, but the rollout is an append-only JSONL log and rewriting the head
     // would be error-prone.
     let path = path?;
+    if let Ok(Some(turn_context)) = read_latest_turn_context(path).await {
+        return Some(turn_context.cwd);
+    }
     match read_session_meta_line(path).await {
         Ok(meta_line) => Some(meta_line.meta.cwd),
         Err(err) => {
@@ -1410,12 +1407,6 @@ pub(crate) async fn read_session_model(
     thread_id: ThreadId,
     path: Option<&Path>,
 ) -> Option<String> {
-    if let Some(path) = path
-        && let Ok(Some(turn_context)) = read_latest_turn_context(path).await
-    {
-        return Some(turn_context.model);
-    }
-
     if let Some(state_db_ctx) = get_state_db(config).await
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
         && let Some(model) = metadata.model
@@ -1423,6 +1414,10 @@ pub(crate) async fn read_session_model(
         return Some(model);
     }
 
+    let path = path?;
+    if let Ok(Some(turn_context)) = read_latest_turn_context(path).await {
+        return Some(turn_context.model);
+    }
     None
 }
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
