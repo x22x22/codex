@@ -50,8 +50,6 @@ Properties/methods:
 - `thread_unarchive(thread_id: str) -> Thread`
 - `models(*, include_hidden: bool = False) -> ModelListResponse`
 
-`personality` accepts either a raw string id or the built-in `Personality` enum values (`Personality.FRIENDLY`, `Personality.PRAGMATIC`, `Personality.NONE`).
-
 Context manager:
 
 ```python

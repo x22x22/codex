@@ -1358,16 +1358,6 @@ class ChatgptLoginAccountParams(BaseModel):
     ]
 
 
-class ChatgptDeviceCodeLoginAccountParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    type: Annotated[
-        Literal["chatgptDeviceCode"],
-        Field(title="ChatgptDeviceCodev2::LoginAccountParamsType"),
-    ]
-
-
 class ChatgptAuthTokensLoginAccountParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -1403,7 +1393,6 @@ class LoginAccountParams(
     RootModel[
         ApiKeyLoginAccountParams
         | ChatgptLoginAccountParams
-        | ChatgptDeviceCodeLoginAccountParams
         | ChatgptAuthTokensLoginAccountParams
     ]
 ):
@@ -1413,7 +1402,6 @@ class LoginAccountParams(
     root: Annotated[
         ApiKeyLoginAccountParams
         | ChatgptLoginAccountParams
-        | ChatgptDeviceCodeLoginAccountParams
         | ChatgptAuthTokensLoginAccountParams,
         Field(title="LoginAccountParams"),
     ]
@@ -1445,31 +1433,6 @@ class ChatgptLoginAccountResponse(BaseModel):
     ]
 
 
-class ChatgptDeviceCodeLoginAccountResponse(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    login_id: Annotated[str, Field(alias="loginId")]
-    type: Annotated[
-        Literal["chatgptDeviceCode"],
-        Field(title="ChatgptDeviceCodev2::LoginAccountResponseType"),
-    ]
-    user_code: Annotated[
-        str,
-        Field(
-            alias="userCode",
-            description="One-time code the user must enter after signing in.",
-        ),
-    ]
-    verification_url: Annotated[
-        str,
-        Field(
-            alias="verificationUrl",
-            description="URL the client should open in a browser to complete device code authorization.",
-        ),
-    ]
-
-
 class ChatgptAuthTokensLoginAccountResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -1484,7 +1447,6 @@ class LoginAccountResponse(
     RootModel[
         ApiKeyLoginAccountResponse
         | ChatgptLoginAccountResponse
-        | ChatgptDeviceCodeLoginAccountResponse
         | ChatgptAuthTokensLoginAccountResponse
     ]
 ):
@@ -1494,7 +1456,6 @@ class LoginAccountResponse(
     root: Annotated[
         ApiKeyLoginAccountResponse
         | ChatgptLoginAccountResponse
-        | ChatgptDeviceCodeLoginAccountResponse
         | ChatgptAuthTokensLoginAccountResponse,
         Field(title="LoginAccountResponse"),
     ]
@@ -1697,74 +1658,28 @@ class NetworkAccess(Enum):
     enabled = "enabled"
 
 
-class NetworkDomainPermission(Enum):
-    allow = "allow"
-    deny = "deny"
-
-
 class NetworkRequirements(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     allow_local_binding: Annotated[bool | None, Field(alias="allowLocalBinding")] = None
-    allow_unix_sockets: Annotated[
-        list[str] | None,
-        Field(
-            alias="allowUnixSockets",
-            description="Legacy compatibility view derived from `unix_sockets`.",
-        ),
-    ] = None
+    allow_unix_sockets: Annotated[list[str] | None, Field(alias="allowUnixSockets")] = (
+        None
+    )
     allow_upstream_proxy: Annotated[bool | None, Field(alias="allowUpstreamProxy")] = (
         None
     )
-    allowed_domains: Annotated[
-        list[str] | None,
-        Field(
-            alias="allowedDomains",
-            description="Legacy compatibility view derived from `domains`.",
-        ),
-    ] = None
+    allowed_domains: Annotated[list[str] | None, Field(alias="allowedDomains")] = None
     dangerously_allow_all_unix_sockets: Annotated[
         bool | None, Field(alias="dangerouslyAllowAllUnixSockets")
     ] = None
     dangerously_allow_non_loopback_proxy: Annotated[
         bool | None, Field(alias="dangerouslyAllowNonLoopbackProxy")
     ] = None
-    denied_domains: Annotated[
-        list[str] | None,
-        Field(
-            alias="deniedDomains",
-            description="Legacy compatibility view derived from `domains`.",
-        ),
-    ] = None
-    domains: Annotated[
-        dict[str, Any] | None,
-        Field(
-            description="Canonical network permission map for `experimental_network`."
-        ),
-    ] = None
+    denied_domains: Annotated[list[str] | None, Field(alias="deniedDomains")] = None
     enabled: bool | None = None
     http_port: Annotated[int | None, Field(alias="httpPort", ge=0)] = None
-    managed_allowed_domains_only: Annotated[
-        bool | None,
-        Field(
-            alias="managedAllowedDomainsOnly",
-            description="When true, only managed allowlist entries are respected while managed network enforcement is active.",
-        ),
-    ] = None
     socks_port: Annotated[int | None, Field(alias="socksPort", ge=0)] = None
-    unix_sockets: Annotated[
-        dict[str, Any] | None,
-        Field(
-            alias="unixSockets",
-            description="Canonical unix socket permission map for `experimental_network`.",
-        ),
-    ] = None
-
-
-class NetworkUnixSocketPermission(Enum):
-    allow = "allow"
-    none = "none"
 
 
 class NonSteerableTurnKind(Enum):
@@ -1810,17 +1725,10 @@ class PatchChangeKind(
     root: AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind
 
 
-class PersonalitiesListParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    cwds: list[AbsolutePathBuf] | None = None
-
-
-class PersonalityScope(Enum):
-    builtin = "builtin"
-    user = "user"
-    repo = "repo"
+class Personality(Enum):
+    none = "none"
+    friendly = "friendly"
+    pragmatic = "pragmatic"
 
 
 class PlanDeltaNotification(BaseModel):
@@ -3357,7 +3265,7 @@ class ThreadResumeParams(BaseModel):
         Field(description="Configuration overrides for the resumed thread, if any."),
     ] = None
     model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
-    personality: str | None = None
+    personality: Personality | None = None
     sandbox: SandboxMode | None = None
     service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
     thread_id: Annotated[str, Field(alias="threadId")]
@@ -3454,7 +3362,7 @@ class ThreadStartParams(BaseModel):
     ephemeral: bool | None = None
     model: str | None = None
     model_provider: Annotated[str | None, Field(alias="modelProvider")] = None
-    personality: str | None = None
+    personality: Personality | None = None
     sandbox: SandboxMode | None = None
     service_name: Annotated[str | None, Field(alias="serviceName")] = None
     service_tier: Annotated[ServiceTier | None, Field(alias="serviceTier")] = None
@@ -4033,17 +3941,6 @@ class SkillsListRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["skills/list"], Field(title="Skills/listRequestMethod")]
     params: SkillsListParams
-
-
-class PersonalitiesListRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[
-        Literal["personalities/list"], Field(title="Personalities/listRequestMethod")
-    ]
-    params: PersonalitiesListParams
 
 
 class PluginListRequest(BaseModel):
@@ -4976,16 +4873,6 @@ class OverriddenMetadata(BaseModel):
     overriding_layer: Annotated[ConfigLayerMetadata, Field(alias="overridingLayer")]
 
 
-class PersonalityMetadata(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    description: str
-    is_built_in: Annotated[bool, Field(alias="isBuiltIn")]
-    name: str
-    scope: PersonalityScope
-
-
 class PluginDetail(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5664,7 +5551,7 @@ class TurnStartParams(BaseModel):
         ),
     ] = None
     personality: Annotated[
-        str | None,
+        Personality | None,
         Field(
             description="Override the personality for this turn and subsequent turns."
         ),
@@ -5974,21 +5861,6 @@ class ListMcpServerStatusResponse(BaseModel):
     ] = None
 
 
-class PersonalitiesListEntry(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    cwd: str
-    personalities: list[PersonalityMetadata]
-
-
-class PersonalitiesListResponse(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    data: list[PersonalitiesListEntry]
-
-
 class PluginListResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6280,7 +6152,6 @@ class ClientRequest(
         | ThreadLoadedListRequest
         | ThreadReadRequest
         | SkillsListRequest
-        | PersonalitiesListRequest
         | PluginListRequest
         | PluginReadRequest
         | AppListRequest
@@ -6346,7 +6217,6 @@ class ClientRequest(
         | ThreadLoadedListRequest
         | ThreadReadRequest
         | SkillsListRequest
-        | PersonalitiesListRequest
         | PluginListRequest
         | PluginReadRequest
         | AppListRequest

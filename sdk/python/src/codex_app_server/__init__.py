@@ -16,6 +16,7 @@ from .errors import (
 )
 from .generated.v2_all import (
     AskForApproval,
+    Personality,
     PlanType,
     ReasoningEffort,
     ReasoningSummary,
@@ -35,7 +36,6 @@ from .generated.v2_all import (
     TurnStatus,
     TurnSteerParams,
 )
-from .personality import Personality
 from .models import InitializeResponse
 from .api import (
     AsyncCodex,
