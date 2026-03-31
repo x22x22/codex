@@ -43,6 +43,7 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
+use codex_feedback::enqueue_auth_failure_event_tags;
 use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
 use tokio::sync::mpsc;
@@ -426,14 +427,23 @@ pub async fn run_main_with_transport(
         Err(err) => {
             let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
-            Config::load_default_with_cli_overrides(cli_kv_overrides.clone()).map_err(|e| {
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!("error loading default config after config error: {e}"),
-                )
-            })?
+            let mut config = Config::load_default_with_cli_overrides(cli_kv_overrides.clone())
+                .map_err(|e| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("error loading default config after config error: {e}"),
+                    )
+                })?;
+            // When we recover from an invalid config by serving on defaults, keep
+            // feedback-derived uploads disabled until the config is fixed.
+            config.feedback_enabled = false;
+            config
         }
     };
+    let feedback_enabled = config.feedback_enabled;
+    let _auth_failure_reporter_guard = feedback_enabled.then(|| {
+        codex_core::auth::set_auth_failure_reporter(Arc::new(enqueue_auth_failure_event_tags))
+    });
 
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
         let (path, range) = exec_policy_warning_location(&err);
@@ -498,9 +508,8 @@ pub async fn run_main_with_transport(
             .boxed(),
     };
 
-    let feedback_layer = feedback.logger_layer();
-    let feedback_metadata_layer = feedback.metadata_layer();
-    let feedback_auth_event_layer = feedback.auth_event_layer();
+    let feedback_layer = feedback_enabled.then(|| feedback.logger_layer());
+    let feedback_metadata_layer = feedback_enabled.then(|| feedback.metadata_layer());
     let log_db = codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
@@ -517,7 +526,6 @@ pub async fn run_main_with_transport(
         .with(stderr_fmt)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
-        .with(feedback_auth_event_layer)
         .with(log_db_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
