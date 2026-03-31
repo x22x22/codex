@@ -997,10 +997,9 @@ async fn enter_submits_when_plan_stream_is_not_active() {
 
     assert!(chat.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            personality: Some(Personality::Pragmatic),
-            ..
-        } => {}
+        Op::UserTurn { personality, .. } => {
+            assert_eq!(personality, Some(Personality::pragmatic()));
+        }
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
 }
@@ -1114,9 +1113,9 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
+            personality,
             ..
-        } => {}
+        } => assert_eq!(personality, Some(Personality::pragmatic())),
         other => {
             panic!("expected Op::UserTurn with code collab mode, got {other:?}")
         }
@@ -1132,9 +1131,9 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
+            personality,
             ..
-        } => {}
+        } => assert_eq!(personality, Some(Personality::pragmatic())),
         other => {
             panic!("expected Op::UserTurn with code collab mode, got {other:?}")
         }
@@ -1309,9 +1308,9 @@ async fn collab_mode_is_sent_after_enabling() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
+            personality,
             ..
-        } => {}
+        } => assert_eq!(personality, Some(Personality::pragmatic())),
         other => {
             panic!("expected Op::UserTurn, got {other:?}")
         }
@@ -1333,9 +1332,9 @@ async fn collab_mode_applies_default_preset() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
+            personality,
             ..
-        } => {}
+        } => assert_eq!(personality, Some(Personality::pragmatic())),
         other => {
             panic!("expected Op::UserTurn with default collaboration_mode, got {other:?}")
         }
@@ -1351,16 +1350,13 @@ async fn user_turn_includes_personality_from_config() {
     chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     chat.set_model("gpt-5.2-codex");
-    chat.set_personality(Personality::Friendly);
+    chat.set_personality(Personality::friendly());
 
     chat.bottom_pane
         .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
-        Op::UserTurn {
-            personality: Some(Personality::Friendly),
-            ..
-        } => {}
+        Op::UserTurn { personality, .. } => assert_eq!(personality, Some(Personality::friendly())),
         other => panic!("expected Op::UserTurn with friendly personality, got {other:?}"),
     }
 }
