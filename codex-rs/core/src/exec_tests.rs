@@ -269,8 +269,7 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
         SandboxType::None,
         &SandboxPolicy::DangerFullAccess,
         &FileSystemSandboxPolicy::unrestricted(),
-        /*windows_restricted_token_filesystem_overlay*/ None,
-        /*windows_elevated_filesystem_overrides*/ None,
+        /*windows_sandbox_filesystem_overrides*/ None,
         NetworkSandboxPolicy::Enabled,
         /*stdout_stream*/ None,
         /*after_spawn*/ None,
@@ -310,8 +309,7 @@ async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_p
             SandboxType::None,
             &SandboxPolicy::DangerFullAccess,
             &FileSystemSandboxPolicy::unrestricted(),
-            /*windows_restricted_token_filesystem_overlay*/ None,
-            /*windows_elevated_filesystem_overrides*/ None,
+            /*windows_sandbox_filesystem_overrides*/ None,
             NetworkSandboxPolicy::Enabled,
             /*stdout_stream*/ None,
             /*after_spawn*/ None,
@@ -649,7 +647,9 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
             &cwd,
             WindowsSandboxLevel::RestrictedToken,
         ),
-        Ok(Some(WindowsRestrictedTokenFilesystemOverlay {
+        Ok(Some(WindowsSandboxFilesystemOverrides {
+            read_roots_override: None,
+            write_roots_override: None,
             additional_deny_write_paths: expected_deny_write_paths,
         }))
     );
@@ -684,7 +684,7 @@ fn windows_elevated_supports_split_restricted_read_roots() {
             temp_dir.path(),
             WindowsSandboxLevel::Elevated,
         ),
-        Ok(Some(WindowsElevatedFilesystemOverrides {
+        Ok(Some(WindowsSandboxFilesystemOverrides {
             read_roots_override: Some(vec![expected_docs]),
             write_roots_override: None,
             additional_deny_write_paths: vec![],
@@ -736,10 +736,13 @@ fn windows_elevated_supports_split_write_read_carveouts() {
             temp_dir.path(),
             WindowsSandboxLevel::Elevated,
         ),
-        Ok(Some(WindowsElevatedFilesystemOverrides {
+        Ok(Some(WindowsSandboxFilesystemOverrides {
             read_roots_override: None,
             write_roots_override: None,
-            additional_deny_write_paths: vec![expected_docs],
+            additional_deny_write_paths: vec![
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(expected_docs)
+                    .expect("absolute docs"),
+            ],
         }))
     );
 }
@@ -913,11 +916,10 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
         SandboxType::None,
         &SandboxPolicy::new_read_only_policy(),
         &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
-        None,
-        None,
+        /*windows_sandbox_filesystem_overrides*/ None,
         NetworkSandboxPolicy::Restricted,
-        None,
-        None,
+        /*stdout_stream*/ None,
+        /*after_spawn*/ None,
     )
     .await?;
     assert!(output.timed_out);
