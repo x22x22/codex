@@ -17,6 +17,9 @@ use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::config_loader::LoaderOverrides;
+use codex_core::config_loader::load_config_layers_state;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
@@ -598,6 +601,15 @@ impl TestCodexBuilder {
             config.features.disable(Feature::ApplyPatchFreeform)?;
         }
 
+        config.config_layer_stack = load_config_layers_state(
+            &config.codex_home,
+            Some(config.cwd.clone()),
+            &[],
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+        )
+        .await?;
+
         Ok((config, cwd))
     }
 }
@@ -913,6 +925,7 @@ pub fn test_codex() -> TestCodexBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::config_loader::ConfigLayerStackOrdering;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -940,5 +953,37 @@ mod tests {
         })];
 
         let _ = custom_tool_call_output_text(&bodies, "call-2");
+    }
+
+    #[tokio::test]
+    async fn prepare_config_reloads_layer_stack_for_overridden_cwd() {
+        let home = TempDir::new().expect("create home");
+        let repo = TempDir::new().expect("create repo");
+        std::fs::create_dir_all(repo.path().join(".codex")).expect("create repo .codex");
+
+        let overridden_cwd = repo.path().abs();
+        let mut builder = test_codex().with_config(move |config| {
+            config.cwd = overridden_cwd.clone();
+        });
+
+        let (config, _cwd) = builder
+            .prepare_config("http://example.test".to_string(), &home)
+            .await
+            .expect("prepare config");
+
+        let config_folders = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .filter_map(|layer| layer.config_folder().map(|path| path.to_path_buf()))
+            .collect::<Vec<_>>();
+
+        assert!(
+            config_folders.contains(&repo.path().join(".codex")),
+            "expected config layers to include repo .codex folder, got {config_folders:?}"
+        );
     }
 }
