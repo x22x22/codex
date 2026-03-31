@@ -1,3 +1,8 @@
+//! Built-in tool handlers for thread-local runtime job management.
+//!
+//! These handlers bridge `JobCreate`, `JobDelete`, and `JobList` tool calls
+//! onto the current thread session's in-memory job registry.
+
 use async_trait::async_trait;
 use serde::Deserialize;
 

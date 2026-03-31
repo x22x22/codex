@@ -1,3 +1,8 @@
+//! Responses API tool specs for thread-local runtime job management.
+//!
+//! These specs expose the `JobCreate`, `JobDelete`, and `JobList` built-in
+//! tools so models can create, inspect, and delete jobs on the current thread.
+
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
 use crate::ToolSpec;

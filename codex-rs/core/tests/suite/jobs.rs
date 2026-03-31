@@ -1,4 +1,5 @@
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_core::jobs::AFTER_TURN_CRON_EXPRESSION;
 use codex_core::jobs::JOB_FIRED_BACKGROUND_EVENT_PREFIX;
 use codex_core::jobs::ThreadJob;
@@ -41,7 +42,7 @@ async fn assert_after_turn_job_starts_and_emits_fired_event() -> Result<()> {
         config
             .features
             .enable(Feature::JobScheduler)
-            .expect("test config should allow feature update");
+            .unwrap_or_else(|err| panic!("test config should allow feature update: {err}"));
     });
     let test = builder.build(&server).await?;
 
@@ -53,7 +54,7 @@ async fn assert_after_turn_job_starts_and_emits_fired_event() -> Result<()> {
             /*run_once*/ false,
         )
         .await
-        .expect("job should be created");
+        .map_err(|err| anyhow!("{err}"))?;
 
     let payload = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::BackgroundEvent(event) => event
@@ -68,7 +69,7 @@ async fn assert_after_turn_job_starts_and_emits_fired_event() -> Result<()> {
         last_run_at: Some(
             fired
                 .last_run_at
-                .expect("claimed job should record last_run_at"),
+                .ok_or_else(|| anyhow!("claimed job should record last_run_at"))?,
         ),
         ..created
     };

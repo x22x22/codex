@@ -19,6 +19,13 @@ const EVERY_PREFIX: &str = "@every ";
 const EVERY_SECONDS_PREFIX: &str = "@every:";
 pub const JOB_UPDATED_BACKGROUND_EVENT_PREFIX: &str = "job_updated:";
 pub const JOB_FIRED_BACKGROUND_EVENT_PREFIX: &str = "job_fired:";
+pub const MAX_ACTIVE_JOBS_PER_THREAD: usize = 256;
+const ONE_SHOT_JOB_TURN_INSTRUCTIONS: &str =
+    include_str!("../templates/jobs/one_shot_turn_instructions.md");
+const RECURRING_JOB_TURN_INSTRUCTIONS: &str =
+    include_str!("../templates/jobs/recurring_turn_instructions.md");
+const ONE_SHOT_JOB_PROMPT: &str = include_str!("../templates/jobs/one_shot_prompt.md");
+const RECURRING_JOB_PROMPT: &str = include_str!("../templates/jobs/recurring_prompt.md");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadJob {
@@ -124,6 +131,11 @@ impl JobsState {
         now: DateTime<Utc>,
         timer_cancel: Option<CancellationToken>,
     ) -> Result<ThreadJob, String> {
+        if self.jobs.len() >= MAX_ACTIVE_JOBS_PER_THREAD {
+            return Err(format!(
+                "too many active jobs; each thread supports at most {MAX_ACTIVE_JOBS_PER_THREAD} jobs"
+            ));
+        }
         let schedule = JobSchedule::parse(&cron_expression)?;
         let job = ThreadJob {
             id: id.clone(),
@@ -227,31 +239,31 @@ impl JobsState {
 
 pub(crate) fn job_turn_developer_instructions(job: &JobTurnContext) -> String {
     if job.run_once {
-        format!(
-            "This turn was triggered by a one-shot thread job.\ncurrentJobId: {}\nSchedule: {}\n\nThe job prompt has already been injected as hidden context for this turn.\nThis one-shot job has already been removed from the schedule, so you do not need to call JobDelete.\nDo not expose scheduler internals unless they matter to the user.",
-            job.current_job_id, job.cron_expression
-        )
+        render_job_prompt_template(ONE_SHOT_JOB_TURN_INSTRUCTIONS, job)
     } else {
-        format!(
-            "This turn was triggered by a recurring thread job.\ncurrentJobId: {}\nSchedule: {}\n\nThe job prompt has already been injected as hidden context for this turn.\nDo not delete this recurring job just because you completed one run.\nOnly call JobDelete with the exact arguments {{\"id\":\"{}\"}} if the user explicitly asked for a stopping condition and that condition is now satisfied, or if the user explicitly asked to stop the recurring job.\nDo not expose scheduler internals unless they matter to the user.",
-            job.current_job_id, job.cron_expression, job.current_job_id
-        )
+        render_job_prompt_template(RECURRING_JOB_TURN_INSTRUCTIONS, job)
     }
 }
 
 pub(crate) fn job_prompt_input_item(job: &JobTurnContext) -> ResponseInputItem {
     let text = if job.run_once {
-        format!("One-shot scheduled job prompt:\n{}", job.prompt)
+        render_job_prompt_template(ONE_SHOT_JOB_PROMPT, job)
     } else {
-        format!(
-            "Recurring scheduled job prompt:\n{}\n\nThis job should keep running on its schedule unless the user asked for a stopping condition and that condition is now satisfied.\nIf that stopping condition is satisfied, stop the job by calling JobDelete with {{\"id\":\"{}\"}}.",
-            job.prompt, job.current_job_id
-        )
+        render_job_prompt_template(RECURRING_JOB_PROMPT, job)
     };
     ResponseInputItem::Message {
         role: "developer".to_string(),
         content: vec![ContentItem::InputText { text }],
     }
+}
+
+fn render_job_prompt_template(template: &str, job: &JobTurnContext) -> String {
+    template
+        .replace("{{CURRENT_JOB_ID}}", &job.current_job_id)
+        .replace("{{SCHEDULE}}", &job.cron_expression)
+        .replace("{{PROMPT}}", &job.prompt)
+        .trim_end()
+        .to_string()
 }
 
 fn parse_duration_literal(raw: &str) -> Option<u64> {
@@ -280,6 +292,7 @@ mod tests {
     use super::JobSchedule;
     use super::JobTurnContext;
     use super::JobsState;
+    use super::MAX_ACTIVE_JOBS_PER_THREAD;
     use super::job_prompt_input_item;
     use chrono::TimeZone;
     use chrono::Utc;
@@ -323,6 +336,39 @@ mod tests {
         assert_eq!(claimed.context.current_job_id, "job-1");
         assert!(claimed.deleted_run_once_job);
         assert!(jobs.list_jobs().is_empty());
+    }
+
+    #[test]
+    fn create_job_rejects_more_than_maximum_active_jobs() {
+        let now = Utc.timestamp_opt(100, 0).single().expect("valid timestamp");
+        let mut jobs = JobsState::default();
+        for index in 0..MAX_ACTIVE_JOBS_PER_THREAD {
+            jobs.create_job(
+                format!("job-{index}"),
+                AFTER_TURN_CRON_EXPRESSION.to_string(),
+                format!("prompt-{index}"),
+                /*run_once*/ false,
+                now,
+                /*timer_cancel*/ None,
+            )
+            .expect("job should be created");
+        }
+
+        let result = jobs.create_job(
+            "job-overflow".to_string(),
+            AFTER_TURN_CRON_EXPRESSION.to_string(),
+            "overflow".to_string(),
+            /*run_once*/ false,
+            now,
+            /*timer_cancel*/ None,
+        );
+
+        assert_eq!(
+            result,
+            Err(format!(
+                "too many active jobs; each thread supports at most {MAX_ACTIVE_JOBS_PER_THREAD} jobs"
+            ))
+        );
     }
 
     #[test]
