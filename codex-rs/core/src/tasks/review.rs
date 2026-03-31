@@ -32,7 +32,8 @@ use super::SessionTask;
 use super::SessionTaskContext;
 
 static REVIEW_EXIT_SUCCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(crate::client_common::REVIEW_EXIT_SUCCESS_TMPL)
+    let template = crate::client_common::REVIEW_EXIT_SUCCESS_TMPL.replace("\r\n", "\n");
+    Template::parse(&template)
         .unwrap_or_else(|err| panic!("review exit success template must parse: {err}"))
 });
 
