@@ -56,6 +56,7 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
 use codex_core::AnalyticsEventsClient;
+use codex_core::AppServerRpcTransport;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -70,9 +71,10 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_login::AuthMode as LoginAuthMode;
+use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
-use codex_login::auth::ExternalAuthRefresher;
 use codex_login::auth::ExternalAuthTokens;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -87,6 +89,7 @@ use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
     outgoing: Arc<OutgoingMessageSender>,
@@ -101,7 +104,11 @@ impl ExternalAuthRefreshBridge {
 }
 
 #[async_trait]
-impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
+impl ExternalAuth for ExternalAuthRefreshBridge {
+    fn auth_mode(&self) -> LoginAuthMode {
+        LoginAuthMode::Chatgpt
+    }
+
     async fn refresh(
         &self,
         context: ExternalAuthRefreshContext,
@@ -143,11 +150,11 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
         let response: ChatgptAuthTokensRefreshResponse =
             serde_json::from_value(result).map_err(std::io::Error::other)?;
 
-        Ok(ExternalAuthTokens {
-            access_token: response.access_token,
-            chatgpt_account_id: response.chatgpt_account_id,
-            chatgpt_plan_type: response.chatgpt_plan_type,
-        })
+        Ok(ExternalAuthTokens::chatgpt(
+            response.access_token,
+            response.chatgpt_account_id,
+            response.chatgpt_plan_type,
+        ))
     }
 }
 
@@ -162,6 +169,7 @@ pub(crate) struct MessageProcessor {
     fs_watch_manager: FsWatchManager,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
+    rpc_transport: AppServerRpcTransport,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -186,6 +194,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) enable_codex_api_key_env: bool,
+    pub(crate) rpc_transport: AppServerRpcTransport,
 }
 
 impl MessageProcessor {
@@ -205,11 +214,15 @@ impl MessageProcessor {
             config_warnings,
             session_source,
             enable_codex_api_key_env,
+            rpc_transport,
         } = args;
-        let auth_manager = AuthManager::shared(
+        let auth_manager = AuthManager::shared_with_external_auth(
             config.codex_home.clone(),
             enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode,
+            Arc::new(ExternalAuthRefreshBridge {
+                outgoing: outgoing.clone(),
+            }),
         );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
@@ -223,9 +236,6 @@ impl MessageProcessor {
             environment_manager,
         ));
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
-        auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
-            outgoing: outgoing.clone(),
-        }));
         let analytics_events_client = AnalyticsEventsClient::new(
             Arc::clone(&auth_manager),
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
@@ -280,11 +290,12 @@ impl MessageProcessor {
             fs_watch_manager,
             config,
             config_warnings: Arc::new(config_warnings),
+            rpc_transport,
         }
     }
 
     pub(crate) fn clear_runtime_references(&self) {
-        self.auth_manager.clear_external_auth_refresher();
+        self.auth_manager.clear_external_auth();
     }
 
     pub(crate) async fn process_request(
@@ -571,7 +582,7 @@ impl MessageProcessor {
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
                 let originator = name.clone();
-                if let Err(error) = set_default_originator(originator) {
+                if let Err(error) = set_default_originator(originator.clone()) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
                             let error = JSONRPCErrorError {
@@ -594,8 +605,14 @@ impl MessageProcessor {
                         }
                     }
                 }
-                self.analytics_events_client
-                    .track_initialize(connection_id.0, analytics_initialize_params);
+                if self.config.features.enabled(Feature::GeneralAnalytics) {
+                    self.analytics_events_client.track_initialize(
+                        connection_id.0,
+                        analytics_initialize_params,
+                        originator,
+                        self.rpc_transport,
+                    );
+                }
                 set_default_client_residency_requirement(self.config.enforce_residency.value());
                 let user_agent_suffix = format!("{name}; {version}");
                 if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
