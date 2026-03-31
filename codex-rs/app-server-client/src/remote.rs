@@ -264,7 +264,19 @@ impl RemoteAppServerClient {
                                 )
                                 .await
                                 {
-                                    warn!("failed to resolve remote server request: {err}");
+                                    let err_message = err.to_string();
+                                    let _ = deliver_event(
+                                        &event_tx,
+                                        &mut skipped_events,
+                                        AppServerEvent::Disconnected {
+                                            message: format!(
+                                                "remote app server at `{websocket_url}` write failed: {err_message}"
+                                            ),
+                                        },
+                                        &mut stream,
+                                    )
+                                    .await;
+                                    break;
                                 }
                             }
                             RemoteClientCommand::RejectServerRequest {
@@ -281,7 +293,19 @@ impl RemoteAppServerClient {
                                 )
                                 .await
                                 {
-                                    warn!("failed to reject remote server request: {err}");
+                                    let err_message = err.to_string();
+                                    let _ = deliver_event(
+                                        &event_tx,
+                                        &mut skipped_events,
+                                        AppServerEvent::Disconnected {
+                                            message: format!(
+                                                "remote app server at `{websocket_url}` write failed: {err_message}"
+                                            ),
+                                        },
+                                        &mut stream,
+                                    )
+                                    .await;
+                                    break;
                                 }
                             }
                             RemoteClientCommand::Shutdown { response_tx } => {
@@ -541,10 +565,7 @@ impl RemoteAppServerClient {
         result: JsonRpcResult,
     ) -> IoResult<()> {
         self.command_tx
-            .send(RemoteClientCommand::ResolveServerRequest {
-                request_id,
-                result,
-            })
+            .send(RemoteClientCommand::ResolveServerRequest { request_id, result })
             .await
             .map_err(|_| {
                 IoError::new(
@@ -560,10 +581,7 @@ impl RemoteAppServerClient {
         error: JSONRPCErrorError,
     ) -> IoResult<()> {
         self.command_tx
-            .send(RemoteClientCommand::RejectServerRequest {
-                request_id,
-                error,
-            })
+            .send(RemoteClientCommand::RejectServerRequest { request_id, error })
             .await
             .map_err(|_| {
                 IoError::new(
@@ -1019,8 +1037,10 @@ mod tests {
         .expect("reject should return before timeout")
         .expect("reject should enqueue successfully");
 
-        let Some(RemoteClientCommand::RejectServerRequest { request_id, error: queued_error }) =
-            command_rx.recv().await
+        let Some(RemoteClientCommand::RejectServerRequest {
+            request_id,
+            error: queued_error,
+        }) = command_rx.recv().await
         else {
             panic!("expected reject command");
         };

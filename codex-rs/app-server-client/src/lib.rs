@@ -605,10 +605,7 @@ impl InProcessAppServerClient {
         result: JsonRpcResult,
     ) -> IoResult<()> {
         self.command_tx
-            .send(ClientCommand::ResolveServerRequest {
-                request_id,
-                result,
-            })
+            .send(ClientCommand::ResolveServerRequest { request_id, result })
             .await
             .map_err(|_| {
                 IoError::new(
@@ -629,10 +626,7 @@ impl InProcessAppServerClient {
         error: JSONRPCErrorError,
     ) -> IoResult<()> {
         self.command_tx
-            .send(ClientCommand::RejectServerRequest {
-                request_id,
-                error,
-            })
+            .send(ClientCommand::RejectServerRequest { request_id, error })
             .await
             .map_err(|_| {
                 IoError::new(
@@ -1272,7 +1266,8 @@ mod tests {
         .expect("resolve should return before timeout")
         .expect("resolve should enqueue successfully");
 
-        let Some(ClientCommand::ResolveServerRequest { request_id, result }) = command_rx.recv().await
+        let Some(ClientCommand::ResolveServerRequest { request_id, result }) =
+            command_rx.recv().await
         else {
             panic!("expected resolve command");
         };
@@ -1303,8 +1298,10 @@ mod tests {
         .expect("reject should return before timeout")
         .expect("reject should enqueue successfully");
 
-        let Some(ClientCommand::RejectServerRequest { request_id, error: queued_error }) =
-            command_rx.recv().await
+        let Some(ClientCommand::RejectServerRequest {
+            request_id,
+            error: queued_error,
+        }) = command_rx.recv().await
         else {
             panic!("expected reject command");
         };
