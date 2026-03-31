@@ -20,6 +20,7 @@ const EVERY_SECONDS_PREFIX: &str = "@every:";
 pub const JOB_UPDATED_BACKGROUND_EVENT_PREFIX: &str = "job_updated:";
 pub const JOB_FIRED_BACKGROUND_EVENT_PREFIX: &str = "job_fired:";
 pub const MAX_ACTIVE_JOBS_PER_THREAD: usize = 256;
+const MAX_EVERY_SECONDS: u64 = i64::MAX as u64;
 const ONE_SHOT_JOB_TURN_INSTRUCTIONS: &str =
     include_str!("../templates/jobs/one_shot_turn_instructions.md");
 const RECURRING_JOB_TURN_INSTRUCTIONS: &str =
@@ -83,7 +84,7 @@ impl JobSchedule {
             .map(str::trim)
             .and_then(parse_duration_literal)
         {
-            return Ok(Self::EverySeconds(seconds));
+            return Self::parse_every_seconds(seconds, cron_expression);
         }
 
         if let Some(seconds) = cron_expression
@@ -91,12 +92,21 @@ impl JobSchedule {
             .and_then(|raw| raw.parse::<u64>().ok())
             .filter(|seconds| *seconds > 0)
         {
-            return Ok(Self::EverySeconds(seconds));
+            return Self::parse_every_seconds(seconds, cron_expression);
         }
 
         Err(format!(
             "unsupported cron_expression `{cron_expression}`; supported values are `{AFTER_TURN_CRON_EXPRESSION}`, `@every 5m`, or `@every:300`"
         ))
+    }
+
+    fn parse_every_seconds(seconds: u64, cron_expression: &str) -> Result<Self, String> {
+        if seconds > MAX_EVERY_SECONDS {
+            return Err(format!(
+                "unsupported cron_expression `{cron_expression}`; @every values must be between 1 and {MAX_EVERY_SECONDS} seconds"
+            ));
+        }
+        Ok(Self::EverySeconds(seconds))
     }
 
     fn next_run_at(self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -293,6 +303,7 @@ mod tests {
     use super::JobTurnContext;
     use super::JobsState;
     use super::MAX_ACTIVE_JOBS_PER_THREAD;
+    use super::MAX_EVERY_SECONDS;
     use super::job_prompt_input_item;
     use chrono::TimeZone;
     use chrono::Utc;
@@ -313,6 +324,23 @@ mod tests {
         assert_eq!(
             JobSchedule::parse("@every:3600"),
             Ok(JobSchedule::EverySeconds(3600))
+        );
+    }
+
+    #[test]
+    fn rejects_overflowing_every_job_schedules() {
+        let too_large = MAX_EVERY_SECONDS + 1;
+        assert_eq!(
+            JobSchedule::parse(&format!("@every:{too_large}")),
+            Err(format!(
+                "unsupported cron_expression `@every:{too_large}`; @every values must be between 1 and {MAX_EVERY_SECONDS} seconds"
+            ))
+        );
+        assert_eq!(
+            JobSchedule::parse(&format!("@every {too_large}s")),
+            Err(format!(
+                "unsupported cron_expression `@every {too_large}s`; @every values must be between 1 and {MAX_EVERY_SECONDS} seconds"
+            ))
         );
     }
 

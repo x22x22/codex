@@ -818,6 +818,9 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    /// Prevents concurrent job timers from claiming multiple jobs before a
+    /// newly started turn becomes the active turn.
+    job_start_in_progress: Mutex<bool>,
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
@@ -1943,6 +1946,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            job_start_in_progress: Mutex::new(false),
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
@@ -2697,19 +2701,27 @@ impl Session {
     }
 
     pub(crate) async fn maybe_start_pending_job(self: &Arc<Self>) {
-        if self.active_turn.lock().await.is_some() {
-            return;
-        }
-        if self.has_queued_response_items_for_next_turn().await
-            || self.has_trigger_turn_mailbox_items().await
-        {
-            return;
-        }
         let Some(ClaimedJob {
             job,
             context,
             deleted_run_once_job,
-        }) = self.jobs.lock().await.claim_next_job(Utc::now())
+        }) = ({
+            let mut job_start_in_progress = self.job_start_in_progress.lock().await;
+            let has_pending_turn_inputs = self.has_queued_response_items_for_next_turn().await
+                || self.has_trigger_turn_mailbox_items().await;
+            if *job_start_in_progress
+                || self.active_turn.lock().await.is_some()
+                || has_pending_turn_inputs
+            {
+                None
+            } else {
+                let claimed = self.jobs.lock().await.claim_next_job(Utc::now());
+                if claimed.is_some() {
+                    *job_start_in_progress = true;
+                }
+                claimed
+            }
+        })
         else {
             return;
         };
@@ -2725,15 +2737,16 @@ impl Session {
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
         let session = Arc::clone(self);
-        if let Err(err) = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             futures::executor::block_on(session.start_task(
                 turn_context,
                 Vec::new(),
                 crate::tasks::RegularTask::new(),
             ));
         })
-        .await
-        {
+        .await;
+        *self.job_start_in_progress.lock().await = false;
+        if let Err(err) = result {
             warn!("failed to start job turn: {err}");
         }
     }

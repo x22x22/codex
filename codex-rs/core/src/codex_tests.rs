@@ -2749,6 +2749,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        job_start_in_progress: Mutex::new(false),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
@@ -3594,6 +3595,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        job_start_in_progress: Mutex::new(false),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
@@ -3626,6 +3628,46 @@ async fn dropping_session_cancels_job_timers() {
     drop(session);
 
     assert!(cancel_token.is_cancelled());
+}
+
+#[tokio::test]
+async fn maybe_start_pending_job_claims_only_one_job_while_start_is_in_progress() {
+    let (session, _, _) = make_session_and_context_with_rx().await;
+    let now = chrono::Utc::now();
+    {
+        let mut jobs = session.jobs.lock().await;
+        jobs.create_job(
+            "job-1".to_string(),
+            crate::jobs::AFTER_TURN_CRON_EXPRESSION.to_string(),
+            "first".to_string(),
+            /*run_once*/ false,
+            now,
+            /*timer_cancel*/ None,
+        )
+        .expect("first job should be created");
+        jobs.create_job(
+            "job-2".to_string(),
+            crate::jobs::AFTER_TURN_CRON_EXPRESSION.to_string(),
+            "second".to_string(),
+            /*run_once*/ false,
+            now,
+            /*timer_cancel*/ None,
+        )
+        .expect("second job should be created");
+    }
+
+    let first = Arc::clone(&session);
+    let second = Arc::clone(&session);
+    tokio::join!(
+        first.maybe_start_pending_job(),
+        second.maybe_start_pending_job()
+    );
+
+    let jobs = session.jobs.lock().await.list_jobs();
+    assert_eq!(
+        jobs.iter().filter(|job| job.last_run_at.is_some()).count(),
+        1
+    );
 }
 
 #[tokio::test]
