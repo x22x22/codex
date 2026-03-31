@@ -56,6 +56,7 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::connectors;
 use codex_core::AnalyticsEventsClient;
+use codex_core::AppServerRpcTransport;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -144,11 +145,11 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
         let response: ChatgptAuthTokensRefreshResponse =
             serde_json::from_value(result).map_err(std::io::Error::other)?;
 
-        Ok(ExternalAuthTokens {
-            access_token: response.access_token,
-            chatgpt_account_id: response.chatgpt_account_id,
-            chatgpt_plan_type: response.chatgpt_plan_type,
-        })
+        Ok(ExternalAuthTokens::chatgpt(
+            response.access_token,
+            response.chatgpt_account_id,
+            response.chatgpt_plan_type,
+        ))
     }
 }
 
@@ -159,9 +160,11 @@ pub(crate) struct MessageProcessor {
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
     auth_manager: Arc<AuthManager>,
+    analytics_events_client: AnalyticsEventsClient,
     fs_watch_manager: FsWatchManager,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
+    rpc_transport: AppServerRpcTransport,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -186,6 +189,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) rpc_transport: AppServerRpcTransport,
 }
 
 impl MessageProcessor {
@@ -205,7 +209,12 @@ impl MessageProcessor {
             config_warnings,
             session_source,
             auth_manager,
+            rpc_transport,
         } = args;
+        auth_manager.set_external_chatgpt_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
+            outgoing: outgoing.clone(),
+        }));
+        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
@@ -217,9 +226,6 @@ impl MessageProcessor {
             },
             environment_manager,
         ));
-        auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
-            outgoing: outgoing.clone(),
-        }));
         let analytics_events_client = AnalyticsEventsClient::new(
             Arc::clone(&auth_manager),
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
@@ -236,6 +242,7 @@ impl MessageProcessor {
             auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),
             outgoing: outgoing.clone(),
+            analytics_events_client: analytics_events_client.clone(),
             arg0_paths,
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
@@ -256,7 +263,7 @@ impl MessageProcessor {
             loader_overrides,
             cloud_requirements,
             thread_manager,
-            analytics_events_client,
+            analytics_events_client.clone(),
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
         let fs_api = FsApi::default();
@@ -269,14 +276,16 @@ impl MessageProcessor {
             external_agent_config_api,
             fs_api,
             auth_manager,
+            analytics_events_client,
             fs_watch_manager,
             config,
             config_warnings: Arc::new(config_warnings),
+            rpc_transport,
         }
     }
 
     pub(crate) fn clear_runtime_references(&self) {
-        self.auth_manager.clear_external_auth_refresher();
+        self.auth_manager.clear_external_chatgpt_auth_refresher();
     }
 
     pub(crate) async fn process_request(
@@ -541,6 +550,7 @@ impl MessageProcessor {
                 // shared thread when another connected client did not opt into
                 // experimental API). Proposed direction is instance-global first-write-wins
                 // with initialize-time mismatch rejection.
+                let analytics_initialize_params = params.clone();
                 let (experimental_api_enabled, opt_out_notification_methods) =
                     match params.capabilities {
                         Some(capabilities) => (
@@ -562,7 +572,7 @@ impl MessageProcessor {
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
                 let originator = name.clone();
-                if let Err(error) = set_default_originator(originator) {
+                if let Err(error) = set_default_originator(originator.clone()) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
                             let error = JSONRPCErrorError {
@@ -584,6 +594,14 @@ impl MessageProcessor {
                             // internal server error.
                         }
                     }
+                }
+                if self.config.features.enabled(Feature::GeneralAnalytics) {
+                    self.analytics_events_client.track_initialize(
+                        connection_id.0,
+                        analytics_initialize_params,
+                        originator,
+                        self.rpc_transport,
+                    );
                 }
                 set_default_client_residency_requirement(self.config.enforce_residency.value());
                 let user_agent_suffix = format!("{name}; {version}");

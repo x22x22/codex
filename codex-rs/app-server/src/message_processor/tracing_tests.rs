@@ -20,6 +20,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::AppServerRpcTransport;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -254,6 +255,7 @@ fn build_test_processor(
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         auth_manager,
+        rpc_transport: AppServerRpcTransport::Stdio,
     });
     (processor, outgoing_rx)
 }
