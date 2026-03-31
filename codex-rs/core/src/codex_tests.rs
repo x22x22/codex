@@ -248,17 +248,17 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
 
 fn test_model_client_session() -> crate::client::ModelClientSession {
     crate::client::ModelClient::new(
-        None,
+        /*auth_manager*/ None,
         ThreadId::try_from("00000000-0000-4000-8000-000000000001")
             .expect("test thread id should be valid"),
         crate::model_provider_info::ModelProviderInfo::create_openai_provider(
-            /* base_url */ None,
+            /* base_url */ /*base_url*/ None,
         ),
         codex_protocol::protocol::SessionSource::Exec,
-        None,
-        false,
-        false,
-        None,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
     )
     .new_session()
 }
@@ -383,7 +383,7 @@ fn make_connector(id: &str, name: &str) -> AppInfo {
 
 #[test]
 fn assistant_message_stream_parsers_can_be_seeded_from_output_item_added_text() {
-    let mut parsers = AssistantMessageStreamParsers::new(false);
+    let mut parsers = AssistantMessageStreamParsers::new(/*plan_mode*/ false);
     let item_id = "msg-1";
 
     let seeded = parsers.seed_item_text(item_id, "hello <oai-mem-citation>doc");
@@ -400,7 +400,7 @@ fn assistant_message_stream_parsers_can_be_seeded_from_output_item_added_text() 
 
 #[test]
 fn assistant_message_stream_parsers_seed_buffered_prefix_stays_out_of_finish_tail() {
-    let mut parsers = AssistantMessageStreamParsers::new(false);
+    let mut parsers = AssistantMessageStreamParsers::new(/*plan_mode*/ false);
     let item_id = "msg-1";
 
     let seeded = parsers.seed_item_text(item_id, "hello <oai-mem-");
@@ -417,7 +417,7 @@ fn assistant_message_stream_parsers_seed_buffered_prefix_stays_out_of_finish_tai
 
 #[test]
 fn assistant_message_stream_parsers_seed_plan_parser_across_added_and_delta_boundaries() {
-    let mut parsers = AssistantMessageStreamParsers::new(true);
+    let mut parsers = AssistantMessageStreamParsers::new(/*plan_mode*/ true);
     let item_id = "msg-1";
 
     let seeded = parsers.seed_item_text(item_id, "Intro\n<proposed");
@@ -519,7 +519,7 @@ fn validated_network_policy_amendment_host_rejects_mismatch() {
 async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyhow::Result<()> {
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
-        None,
+        /*requirements*/ None,
         &SandboxPolicy::new_workspace_write_policy(),
     )?;
     let mut exec_policy = Policy::empty();
@@ -527,16 +527,16 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
         "example.com",
         NetworkRuleProtocol::Https,
         Decision::Allow,
-        None,
+        /*justification*/ None,
     )?;
 
     let (started_proxy, _) = Session::start_managed_network_proxy(
         &spec,
         &exec_policy,
         &SandboxPolicy::new_workspace_write_policy(),
-        None,
-        None,
-        false,
+        /*network_policy_decider*/ None,
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ false,
         crate::config::NetworkProxyAuditMetadata::default(),
     )
     .await?;
@@ -571,16 +571,16 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
         "example.com",
         NetworkRuleProtocol::Https,
         Decision::Allow,
-        None,
+        /*justification*/ None,
     )?;
 
     let (started_proxy, _) = Session::start_managed_network_proxy(
         &spec,
         &exec_policy,
         &SandboxPolicy::new_workspace_write_policy(),
-        None,
-        None,
-        false,
+        /*network_policy_decider*/ None,
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ false,
         crate::config::NetworkProxyAuditMetadata::default(),
     )
     .await?;
@@ -807,7 +807,9 @@ fn non_app_mcp_tools_remain_visible_without_search_selection() {
         ),
         (
             "mcp__rmcp__echo".to_string(),
-            make_mcp_tool("rmcp", "echo", None, None),
+            make_mcp_tool(
+                "rmcp", "echo", /*connector_id*/ None, /*connector_name*/ None,
+            ),
         ),
     ]);
 
@@ -855,7 +857,9 @@ fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
         ),
         (
             "mcp__rmcp__echo".to_string(),
-            make_mcp_tool("rmcp", "echo", None, None),
+            make_mcp_tool(
+                "rmcp", "echo", /*connector_id*/ None, /*connector_name*/ None,
+            ),
         ),
     ]);
 
@@ -905,7 +909,9 @@ fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
         ),
         (
             "mcp__rmcp__echo".to_string(),
-            make_mcp_tool("rmcp", "echo", None, None),
+            make_mcp_tool(
+                "rmcp", "echo", /*connector_id*/ None, /*connector_name*/ None,
+            ),
         ),
     ]);
 
@@ -1249,7 +1255,13 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         codex_config::Constrained::allow_any(AskForApproval::UnlessTrusted);
     let forked = initial
         .thread_manager
-        .fork_thread(usize::MAX, fork_config, rollout_path, false, None)
+        .fork_thread(
+            usize::MAX,
+            fork_config,
+            rollout_path,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
         .await?;
 
     let collaboration_mode = CollaborationMode {
@@ -1421,7 +1433,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
         state.set_reference_context_item(Some(tc.to_turn_context_item()));
     }
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
 
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 1);
@@ -1468,7 +1480,7 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
         .collect();
     sess.persist_rollout_items(&rollout_items).await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 99).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 99).await;
 
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 99);
@@ -1485,7 +1497,7 @@ async fn thread_rollback_fails_without_persisted_rollout_path() {
     sess.record_into_history(&initial_context, tc.as_ref())
         .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
 
     let error_event = wait_for_thread_rollback_failed(&rx).await;
     assert_eq!(
@@ -1579,7 +1591,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
     }))
     .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 1);
 
@@ -1687,7 +1699,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
     )
     .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 1);
 
@@ -1765,10 +1777,10 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
     ])
     .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
     let first_rollback = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(first_rollback.num_turns, 1);
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
     let second_rollback = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(second_rollback.num_turns, 1);
 
@@ -1803,7 +1815,7 @@ async fn thread_rollback_fails_when_turn_in_progress() {
         .await;
 
     *sess.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 1).await;
 
     let error_event = wait_for_thread_rollback_failed(&rx).await;
     assert_eq!(
@@ -1823,7 +1835,7 @@ async fn thread_rollback_fails_when_num_turns_is_zero() {
     sess.record_into_history(&initial_context, tc.as_ref())
         .await;
 
-    handlers::thread_rollback(&sess, "sub-1".to_string(), 0).await;
+    handlers::thread_rollback(&sess, "sub-1".to_string(), /*num_turns*/ 0).await;
 
     let error_event = wait_for_thread_rollback_failed(&rx).await;
     assert_eq!(error_event.message, "num_turns must be >= 1");
@@ -2222,14 +2234,14 @@ async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
         config.as_ref(),
         RolloutRecorderParams::new(
             ThreadId::default(),
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        None,
-        None,
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
     )
     .await
     .expect("create rollout recorder");
@@ -2268,11 +2280,11 @@ fn session_telemetry(
         conversation_id,
         ModelsManager::get_model_offline_for_tests(config.model.as_deref()).as_str(),
         model_info.slug.as_str(),
-        None,
+        /*account_id*/ None,
         Some("test@test.com".to_string()),
         Some(TelemetryAuthMode::Chatgpt),
         "test_originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "test".to_string(),
         session_source,
     )
@@ -2395,7 +2407,7 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .skills_manager
         .skills_for_cwd(
             &crate::skills_load_input_from_config(&parent_config, Vec::new()),
-            true,
+            /*force_reload*/ true,
         )
         .await;
     let parent_skill = parent_outcome
@@ -2543,7 +2555,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        None,
+        /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     ));
     let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
@@ -2592,7 +2604,10 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -2633,7 +2648,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        None,
+        /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();
@@ -2696,7 +2711,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let state = SessionState::new(session_configuration.clone());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(/*exec_server_url*/ None)
@@ -2782,13 +2800,14 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         per_turn_config,
         model_info,
         &models_manager,
-        None,
+        /*network*/ None,
         environment,
         "turn_id".to_string(),
         Arc::clone(&js_repl),
         skills_outcome,
     );
 
+    let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
     let session = Session {
         conversation_id,
         tx_event,
@@ -2799,6 +2818,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        mailbox,
+        mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -3470,7 +3491,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
-        None,
+        /*model_catalog*/ None,
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();
@@ -3533,7 +3554,10 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let state = SessionState::new(session_configuration.clone());
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(/*exec_server_url*/ None)
@@ -3619,13 +3643,14 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         per_turn_config,
         model_info,
         &models_manager,
-        None,
+        /*network*/ None,
         environment,
         "turn_id".to_string(),
         Arc::clone(&js_repl),
         skills_outcome,
     ));
 
+    let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
     let session = Arc::new(Session {
         conversation_id,
         tx_event,
@@ -3636,6 +3661,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        mailbox,
+        mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -3729,7 +3756,8 @@ async fn record_model_warning_appends_user_message() {
 #[tokio::test]
 async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_tasks() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    sess.set_previous_turn_settings(None).await;
+    sess.set_previous_turn_settings(/*previous_turn_settings*/ None)
+        .await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
@@ -3782,7 +3810,10 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
     ));
     let layers = config
         .config_layer_stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
         .into_iter()
         .cloned()
         .collect();
@@ -3979,7 +4010,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
             }],
-            None,
+            /*reference_context_item*/ None,
         )
         .await;
 
@@ -4033,7 +4064,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone(), None)
+    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
         .await
         .expect("image generation item should succeed");
 
@@ -4090,7 +4121,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone(), None)
+    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
         .await
         .expect("image generation item should still complete");
 
@@ -4182,10 +4213,13 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         .await;
     {
         let mut state = session.state.lock().await;
-        state.set_reference_context_item(None);
+        state.set_reference_context_item(/*item*/ None);
     }
     session
-        .replace_history(vec![compacted_summary.clone()], None)
+        .replace_history(
+            vec![compacted_summary.clone()],
+            /*reference_context_item*/ None,
+        )
         .await;
 
     session
@@ -4220,14 +4254,14 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         config.as_ref(),
         RolloutRecorderParams::new(
             ThreadId::default(),
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        None,
-        None,
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
     )
     .await
     .expect("create rollout recorder");
@@ -4317,14 +4351,14 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         config.as_ref(),
         RolloutRecorderParams::new(
             ThreadId::default(),
-            None,
+            /*forked_from_id*/ None,
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
-        None,
-        None,
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
     )
     .await
     .expect("create rollout recorder");
@@ -4346,7 +4380,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         .await;
     {
         let mut state = session.state.lock().await;
-        state.set_reference_context_item(None);
+        state.set_reference_context_item(/*item*/ None);
     }
 
     session
@@ -4385,7 +4419,7 @@ async fn run_user_shell_command_does_not_set_reference_context_item() {
     let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
     {
         let mut state = session.state.lock().await;
-        state.set_reference_context_item(None);
+        state.set_reference_context_item(/*item*/ None);
     }
 
     handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
@@ -4538,7 +4572,8 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     .await
     .expect("inject pending input into active turn");
 
-    sess.on_task_finished(Arc::clone(&tc), None).await;
+    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+        .await;
 
     let history = sess.clone_history().await;
     let expected = ResponseItem::Message {
@@ -4630,7 +4665,7 @@ async fn steer_input_requires_active_turn() {
     }];
 
     let err = sess
-        .steer_input(input, None)
+        .steer_input(input, /*expected_turn_id*/ None)
         .await
         .expect_err("steering without active turn should fail");
 

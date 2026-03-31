@@ -143,7 +143,10 @@ async fn child_uses_parent_exec_policy_when_non_exec_policy_layers_differ() {
     let mut child_config = parent_config.clone();
     let mut layers: Vec<_> = child_config
         .config_layer_stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
         .into_iter()
         .cloned()
         .collect();
@@ -184,7 +187,10 @@ async fn child_does_not_use_parent_exec_policy_when_requirements_exec_policy_dif
     child_config.config_layer_stack = ConfigLayerStack::new(
         child_config
             .config_layer_stack
-            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
             .into_iter()
             .cloned()
             .collect(),
@@ -319,7 +325,7 @@ async fn merges_requirements_exec_policy_network_rules() -> anyhow::Result<()> {
         "blocked.example.com",
         codex_execpolicy::NetworkRuleProtocol::Https,
         Decision::Forbidden,
-        None,
+        /*justification*/ None,
     )?;
 
     let requirements = ConfigRequirements {
@@ -366,7 +372,7 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
         "blocked.example.com",
         codex_execpolicy::NetworkRuleProtocol::Https,
         Decision::Forbidden,
-        None,
+        /*justification*/ None,
     )?;
 
     let requirements = ConfigRequirements {
@@ -833,7 +839,7 @@ fn unmatched_granular_policy_still_prompts_for_restricted_sandbox_escalation() {
             &read_only_file_system_sandbox_policy(),
             &command,
             SandboxPermissions::RequireEscalated,
-            false,
+            /*used_complex_parsing*/ false,
         )
     );
 }
@@ -851,7 +857,7 @@ fn unmatched_on_request_uses_split_filesystem_policy_for_escalation_prompts() {
             &restricted_file_system_policy,
             &command,
             SandboxPermissions::RequireEscalated,
-            false,
+            /*used_complex_parsing*/ false,
         )
     );
 }
@@ -1376,7 +1382,7 @@ fn derive_requested_execpolicy_amendment_for_test(
 fn derive_requested_execpolicy_amendment_returns_none_for_missing_prefix_rule() {
     assert_eq!(
         None,
-        derive_requested_execpolicy_amendment_for_test(None, &[])
+        derive_requested_execpolicy_amendment_for_test(/*prefix_rule*/ None, &[])
     );
 }
 
