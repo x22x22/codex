@@ -1404,7 +1404,13 @@ async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown
         let codex_home = tmp.path().join(format!("home_no_config_{name}"));
         tokio::fs::create_dir_all(&codex_home).await?;
         if let Some(trust_level) = trust_level {
-            make_config_for_test(&codex_home, &project_root, trust_level, None).await?;
+            make_config_for_test(
+                &codex_home,
+                &project_root,
+                trust_level,
+                /*project_root_markers*/ None,
+            )
+            .await?;
         }
 
         let layers = load_config_layers_state(
@@ -1418,7 +1424,7 @@ async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown
         let project_layers: Vec<_> = layers
             .get_layers(
                 super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
-                true,
+                /*include_disabled*/ true,
             )
             .into_iter()
             .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
