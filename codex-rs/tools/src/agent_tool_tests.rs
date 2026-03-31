@@ -56,7 +56,9 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     assert!(description.contains("visible display (`visible-model`)"));
     assert!(!description.contains("hidden display (`hidden-model`)"));
     assert!(properties.contains_key("task_name"));
+    assert!(properties.contains_key("items"));
     assert!(properties.contains_key("fork_turns"));
+    assert!(!properties.contains_key("message"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
         properties.get("agent_type"),
@@ -64,7 +66,10 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             description: Some("role help".to_string()),
         })
     );
-    assert_eq!(required, Some(vec!["task_name".to_string()]));
+    assert_eq!(
+        required,
+        Some(vec!["task_name".to_string(), "items".to_string()])
+    );
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
         json!(["agent_id", "task_name", "nickname"])
@@ -109,6 +114,7 @@ fn send_message_tool_requires_items_and_uses_submission_output() {
     };
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("items"));
+    assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("message"));
     assert_eq!(
         required,

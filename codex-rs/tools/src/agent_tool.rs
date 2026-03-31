@@ -66,7 +66,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions<'_>) -> ToolSpe
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["task_name".to_string()]),
+            required: Some(vec!["task_name".to_string(), "items".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(spawn_agent_output_schema_v2()),
@@ -128,20 +128,11 @@ pub fn create_send_message_tool() -> ToolSpec {
             },
         ),
         ("items".to_string(), create_collab_input_items_schema()),
-        (
-            "interrupt".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
-                        .to_string(),
-                ),
-            },
-        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_message".to_string(),
-        description: "Add a message to an existing agent without triggering a new turn. Use interrupt=true to stop the current task first. In MultiAgentV2, this tool currently supports text content only."
+        description: "Add a message to an existing agent without triggering a new turn. In MultiAgentV2, this tool currently supports text content only."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -594,15 +585,6 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
 
 fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
     BTreeMap::from([
-        (
-            "message".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Initial plain-text task for the new agent. Use either message or items."
-                        .to_string(),
-                ),
-            },
-        ),
         ("items".to_string(), create_collab_input_items_schema()),
         (
             "agent_type".to_string(),
