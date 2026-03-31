@@ -4172,10 +4172,16 @@ impl App {
             }
             AppEvent::OpenThreadJobs { thread_id } => {
                 match app_server.thread_job_list(thread_id).await {
-                    Ok(jobs) => self.chat_widget.open_thread_jobs_popup(thread_id, jobs),
+                    Ok(jobs) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget.open_thread_jobs_popup(thread_id, jobs);
+                        }
+                    }
                     Err(err) => {
-                        self.chat_widget
-                            .add_error_message(format!("Failed to load thread jobs: {err}"));
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to load thread jobs: {err}"));
+                        }
                     }
                 }
             }
@@ -4197,39 +4203,51 @@ impl App {
                     .await
                 {
                     Ok(job) => {
-                        let summary =
-                            format_job_summary(&job.cron_expression, job.run_once, &job.prompt);
-                        self.chat_widget.add_info_message(
-                            format!("Created thread job from `/loop {spec}`."),
-                            Some(summary),
-                        );
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            let summary =
+                                format_job_summary(&job.cron_expression, job.run_once, &job.prompt);
+                            self.chat_widget.add_info_message(
+                                format!("Created thread job from `/loop {spec}`."),
+                                Some(summary),
+                            );
+                        }
                     }
                     Err(err) => {
-                        self.chat_widget
-                            .add_error_message(format!("Failed to create thread job: {err}"));
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to create thread job: {err}"));
+                        }
                     }
                 },
                 Err(err) => {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to parse `/loop {spec}`: {err}"));
+                    if self.chat_widget.thread_id() == Some(thread_id) {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to parse `/loop {spec}`: {err}"));
+                    }
                 }
             },
             AppEvent::DeleteThreadJob { thread_id, id } => {
                 match app_server.thread_job_delete(thread_id, id.clone()).await {
                     Ok(true) => {
-                        self.chat_widget.add_info_message(
-                            format!("Deleted thread job `{id}`."),
-                            /*hint*/ None,
-                        );
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget.add_info_message(
+                                format!("Deleted thread job `{id}`."),
+                                /*hint*/ None,
+                            );
+                        }
                     }
                     Ok(false) => {
-                        self.chat_widget
-                            .add_error_message(format!("No thread job matched `{id}`."));
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("No thread job matched `{id}`."));
+                        }
                     }
                     Err(err) => {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to delete thread job `{id}`: {err}"
-                        ));
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to delete thread job `{id}`: {err}"
+                            ));
+                        }
                     }
                 }
             }
