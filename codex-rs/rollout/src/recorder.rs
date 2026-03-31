@@ -1,7 +1,6 @@
-//! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
+//! Persist Codex session rollouts (`.jsonl` / `.jsonl.zst`) so sessions can be replayed or
+//! inspected later.
 
-use std::fs;
-use std::fs::File;
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,7 +16,6 @@ use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
@@ -27,6 +25,9 @@ use tracing::warn;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use super::file_io::RolloutLineReader;
+use super::file_io::append_text as append_rollout_text;
+use super::file_io::preferred_rollout_file_suffix;
 use super::list::Cursor;
 use super::list::ThreadItem;
 use super::list::ThreadListConfig;
@@ -61,7 +62,8 @@ use codex_utils_path as path_utils;
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.
 ///
-/// Rollouts are recorded as JSONL and can be inspected with tools such as:
+/// Rollouts are recorded as JSONL, optionally compressed with zstd, and can be inspected after
+/// decompression with tools such as:
 ///
 /// ```ignore
 /// $ jq -C . ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
@@ -366,14 +368,14 @@ impl RolloutRecorder {
     /// For newly created sessions, this precomputes path/metadata and defers
     /// file creation/open until an explicit `persist()` call.
     ///
-    /// For resumed sessions, this immediately opens the existing rollout file.
+    /// For resumed sessions, this validates the existing rollout file path immediately.
     pub async fn new(
         config: &impl RolloutConfigView,
         params: RolloutRecorderParams,
         state_db_ctx: Option<StateDbHandle>,
         state_builder: Option<ThreadMetadataBuilder>,
     ) -> std::io::Result<Self> {
-        let (file, deferred_log_file_info, rollout_path, meta, event_persistence_mode) =
+        let (writer, deferred_log_file_info, rollout_path, meta, event_persistence_mode) =
             match params {
                 RolloutRecorderParams::Create {
                     conversation_id,
@@ -429,18 +431,16 @@ impl RolloutRecorder {
                 RolloutRecorderParams::Resume {
                     path,
                     event_persistence_mode,
-                } => (
-                    Some(
-                        tokio::fs::OpenOptions::new()
-                            .append(true)
-                            .open(&path)
-                            .await?,
-                    ),
-                    None,
-                    path,
-                    None,
-                    event_persistence_mode,
-                ),
+                } => {
+                    tokio::fs::metadata(&path).await?;
+                    (
+                        Some(RolloutFileWriter::new(path.clone())),
+                        None,
+                        path,
+                        None,
+                        event_persistence_mode,
+                    )
+                }
             };
 
         // Clone the cwd for the spawned task to collect git info asynchronously
@@ -450,11 +450,9 @@ impl RolloutRecorder {
         // future will yield, which is fine – we only need to ensure we do not
         // perform *blocking* I/O on the caller's thread.
         let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
-        // Spawn a Tokio task that owns the file handle and performs async
-        // writes. Using `tokio::fs::File` keeps everything on the async I/O
-        // driver instead of blocking the runtime.
+        // Spawn a Tokio task that owns the rollout writer.
         tokio::task::spawn(rollout_writer(
-            file,
+            writer,
             deferred_log_file_info,
             rx,
             meta,
@@ -532,65 +530,10 @@ impl RolloutRecorder {
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
-        let text = tokio::fs::read_to_string(path).await?;
-        if text.trim().is_empty() {
-            return Err(IoError::other("empty session file"));
-        }
-
-        let mut items: Vec<RolloutItem> = Vec::new();
-        let mut thread_id: Option<ThreadId> = None;
-        let mut parse_errors = 0usize;
-        for line in text.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let v: Value = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                    continue;
-                }
-            };
-
-            // Parse the rollout line structure
-            match serde_json::from_value::<RolloutLine>(v.clone()) {
-                Ok(rollout_line) => match rollout_line.item {
-                    RolloutItem::SessionMeta(session_meta_line) => {
-                        // Use the FIRST SessionMeta encountered in the file as the canonical
-                        // thread id and main session information. Keep all items intact.
-                        if thread_id.is_none() {
-                            thread_id = Some(session_meta_line.meta.id);
-                        }
-                        items.push(RolloutItem::SessionMeta(session_meta_line));
-                    }
-                    RolloutItem::ResponseItem(item) => {
-                        items.push(RolloutItem::ResponseItem(item));
-                    }
-                    RolloutItem::Compacted(item) => {
-                        items.push(RolloutItem::Compacted(item));
-                    }
-                    RolloutItem::TurnContext(item) => {
-                        items.push(RolloutItem::TurnContext(item));
-                    }
-                    RolloutItem::EventMsg(_ev) => {
-                        items.push(RolloutItem::EventMsg(_ev));
-                    }
-                },
-                Err(e) => {
-                    trace!("failed to parse rollout line: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
-                }
-            }
-        }
-
-        tracing::debug!(
-            "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
-            items.len(),
-            thread_id,
-            parse_errors,
-        );
-        Ok((items, thread_id, parse_errors))
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || load_rollout_items_sync(path.as_path()))
+            .await
+            .map_err(|err| IoError::other(format!("failed to read rollout items: {err}")))?
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
@@ -625,6 +568,85 @@ impl RolloutRecorder {
         };
         Ok(())
     }
+}
+
+fn load_rollout_items_sync(
+    path: &Path,
+) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
+    let mut reader = RolloutLineReader::open(path)?;
+    let mut items = Vec::new();
+    let mut thread_id = None;
+    let mut parse_errors = 0usize;
+    let mut saw_content = false;
+
+    loop {
+        let line = match reader.next_line() {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => {
+                if !saw_content {
+                    return Err(err);
+                }
+                warn!(
+                    "stopping rollout resume after read error for {path:?}; preserving parsed items: {err}"
+                );
+                parse_errors = parse_errors.saturating_add(1);
+                break;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        saw_content = true;
+
+        let value: Value = match serde_json::from_str(line.as_str()) {
+            Ok(value) => value,
+            Err(err) => {
+                warn!("failed to parse line as JSON: {line:?}, error: {err}");
+                parse_errors = parse_errors.saturating_add(1);
+                continue;
+            }
+        };
+
+        match serde_json::from_value::<RolloutLine>(value.clone()) {
+            Ok(rollout_line) => match rollout_line.item {
+                RolloutItem::SessionMeta(session_meta_line) => {
+                    if thread_id.is_none() {
+                        thread_id = Some(session_meta_line.meta.id);
+                    }
+                    items.push(RolloutItem::SessionMeta(session_meta_line));
+                }
+                RolloutItem::ResponseItem(item) => {
+                    items.push(RolloutItem::ResponseItem(item));
+                }
+                RolloutItem::Compacted(item) => {
+                    items.push(RolloutItem::Compacted(item));
+                }
+                RolloutItem::TurnContext(item) => {
+                    items.push(RolloutItem::TurnContext(item));
+                }
+                RolloutItem::EventMsg(event) => {
+                    items.push(RolloutItem::EventMsg(event));
+                }
+            },
+            Err(err) => {
+                trace!("failed to parse rollout line: {err}");
+                parse_errors = parse_errors.saturating_add(1);
+            }
+        }
+    }
+
+    if !saw_content {
+        return Err(IoError::other("empty session file"));
+    }
+
+    tracing::debug!(
+        "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
+        items.len(),
+        thread_id,
+        parse_errors,
+    );
+    Ok((items, thread_id, parse_errors))
 }
 
 fn truncate_fs_page(
@@ -680,7 +702,10 @@ fn precompute_log_file_info(
         .format(format)
         .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
-    let filename = format!("rollout-{date_str}-{conversation_id}.jsonl");
+    let filename = format!(
+        "rollout-{date_str}-{conversation_id}{}",
+        preferred_rollout_file_suffix()
+    );
 
     let path = dir.join(filename);
 
@@ -690,24 +715,9 @@ fn precompute_log_file_info(
         timestamp,
     })
 }
-
-fn open_log_file(path: &Path) -> std::io::Result<File> {
-    let Some(parent) = path.parent() else {
-        return Err(IoError::other(format!(
-            "rollout path has no parent: {}",
-            path.display()
-        )));
-    };
-    fs::create_dir_all(parent)?;
-    std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(path)
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn rollout_writer(
-    file: Option<tokio::fs::File>,
+    mut writer: Option<RolloutFileWriter>,
     mut deferred_log_file_info: Option<LogFileInfo>,
     mut rx: mpsc::Receiver<RolloutCmd>,
     mut meta: Option<SessionMeta>,
@@ -718,7 +728,6 @@ async fn rollout_writer(
     default_provider: String,
     generate_memories: bool,
 ) -> std::io::Result<()> {
-    let mut writer = file.map(|file| JsonlWriter { file });
     let mut buffered_items = Vec::<RolloutItem>::new();
     if let Some(builder) = state_builder.as_mut() {
         builder.rollout_path = rollout_path.clone();
@@ -773,10 +782,7 @@ async fn rollout_writer(
                                 "deferred rollout recorder missing log file metadata",
                             ));
                         };
-                        let file = open_log_file(log_file_info.path.as_path())?;
-                        writer = Some(JsonlWriter {
-                            file: tokio::fs::File::from_std(file),
-                        });
+                        writer = Some(RolloutFileWriter::new(log_file_info.path));
 
                         if let Some(session_meta) = meta.take() {
                             write_session_meta(
@@ -817,13 +823,6 @@ async fn rollout_writer(
                 let _ = ack.send(());
             }
             RolloutCmd::Flush { ack } => {
-                // Deferred fresh threads may not have an initialized file yet.
-                if let Some(writer) = writer.as_mut()
-                    && let Err(e) = writer.file.flush().await
-                {
-                    let _ = ack.send(());
-                    return Err(e);
-                }
                 let _ = ack.send(());
             }
             RolloutCmd::Shutdown { ack } => {
@@ -837,7 +836,7 @@ async fn rollout_writer(
 
 #[allow(clippy::too_many_arguments)]
 async fn write_session_meta(
-    mut writer: Option<&mut JsonlWriter>,
+    mut writer: Option<&mut RolloutFileWriter>,
     session_meta: SessionMeta,
     cwd: &Path,
     rollout_path: &Path,
@@ -876,7 +875,7 @@ async fn write_session_meta(
 }
 
 async fn write_and_reconcile_items(
-    mut writer: Option<&mut JsonlWriter>,
+    mut writer: Option<&mut RolloutFileWriter>,
     items: &[RolloutItem],
     rollout_path: &Path,
     state_db_ctx: Option<&StateRuntime>,
@@ -884,9 +883,7 @@ async fn write_and_reconcile_items(
     default_provider: &str,
 ) -> std::io::Result<()> {
     if let Some(writer) = writer.as_mut() {
-        for item in items {
-            writer.write_rollout_item(item).await?;
-        }
+        writer.write_rollout_items(items).await?;
     }
     sync_thread_state_after_write(
         state_db_ctx,
@@ -949,8 +946,8 @@ async fn sync_thread_state_after_write(
     .await;
 }
 
-struct JsonlWriter {
-    file: tokio::fs::File,
+struct RolloutFileWriter {
+    path: PathBuf,
 }
 
 #[derive(serde::Serialize)]
@@ -960,27 +957,54 @@ struct RolloutLineRef<'a> {
     item: &'a RolloutItem,
 }
 
-impl JsonlWriter {
+impl RolloutFileWriter {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
     async fn write_rollout_item(&mut self, rollout_item: &RolloutItem) -> std::io::Result<()> {
+        self.write_rollout_items(std::slice::from_ref(rollout_item))
+            .await
+    }
+
+    async fn write_rollout_items(&mut self, rollout_items: &[RolloutItem]) -> std::io::Result<()> {
+        if rollout_items.is_empty() {
+            return Ok(());
+        }
+
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
-        let timestamp = OffsetDateTime::now_utc()
-            .format(timestamp_format)
-            .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
-
-        let line = RolloutLineRef {
-            timestamp,
-            item: rollout_item,
-        };
-        self.write_line(&line).await
+        let mut batch = String::new();
+        for rollout_item in rollout_items {
+            let timestamp = OffsetDateTime::now_utc()
+                .format(timestamp_format)
+                .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
+            let line = RolloutLineRef {
+                timestamp,
+                item: rollout_item,
+            };
+            let mut json = serde_json::to_string(&line)?;
+            json.push('\n');
+            batch.push_str(json.as_str());
+        }
+        self.write_text(batch).await
     }
-    async fn write_line(&mut self, item: &impl serde::Serialize) -> std::io::Result<()> {
-        let mut json = serde_json::to_string(item)?;
-        json.push('\n');
-        self.file.write_all(json.as_bytes()).await?;
-        self.file.flush().await?;
-        Ok(())
+
+    async fn write_text(&mut self, text: String) -> std::io::Result<()> {
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            let Some(parent) = path.parent() else {
+                return Err(IoError::other(format!(
+                    "rollout path has no parent: {}",
+                    path.display()
+                )));
+            };
+            std::fs::create_dir_all(parent)?;
+            append_rollout_text(path.as_path(), text.as_str())
+        })
+        .await
+        .map_err(|err| IoError::other(format!("failed to write rollout line: {err}")))?
     }
 }
 

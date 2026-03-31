@@ -19,6 +19,7 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use crate::INTERACTIVE_SESSION_SOURCES;
+use crate::file_io::read_rollout_text;
 use crate::find_thread_path_by_id_str;
 use crate::list::Cursor;
 use crate::list::ThreadItem;
@@ -918,7 +919,7 @@ async fn test_get_thread_contents() {
     .unwrap();
     let path = &page.items[0].path;
 
-    let content = tokio::fs::read_to_string(path).await.unwrap();
+    let content = read_rollout_text(path).unwrap();
 
     // Page equality (single item)
     let expected_path = home

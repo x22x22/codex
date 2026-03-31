@@ -2972,7 +2972,6 @@ impl CodexMessageProcessor {
                 });
             };
 
-            let required_suffix = format!("{thread_id}.jsonl");
             let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
                 return Err(JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
@@ -2980,9 +2979,7 @@ impl CodexMessageProcessor {
                     data: None,
                 });
             };
-            if !file_name
-                .to_string_lossy()
-                .ends_with(required_suffix.as_str())
+            if !rollout_file_name_matches_thread_id(file_name.to_string_lossy().as_ref(), thread_id)
             {
                 return Err(JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
@@ -5324,7 +5321,6 @@ impl CodexMessageProcessor {
         };
 
         // Verify file name matches thread id.
-        let required_suffix = format!("{thread_id}.jsonl");
         let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -5335,10 +5331,7 @@ impl CodexMessageProcessor {
                 data: None,
             });
         };
-        if !file_name
-            .to_string_lossy()
-            .ends_with(required_suffix.as_str())
-        {
+        if !rollout_file_name_matches_thread_id(file_name.to_string_lossy().as_ref(), thread_id) {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
@@ -8274,7 +8267,7 @@ async fn summary_from_thread_list_item(
 
 fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
     let file_name = path.file_name()?.to_str()?;
-    let stem = file_name.strip_suffix(".jsonl")?;
+    let stem = codex_core::strip_rollout_file_suffix(file_name)?;
     if stem.len() < 37 {
         return None;
     }
@@ -8283,6 +8276,13 @@ fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
         return None;
     }
     ThreadId::from_string(&stem[uuid_start..]).ok()
+}
+
+fn rollout_file_name_matches_thread_id(file_name: &str, thread_id: ThreadId) -> bool {
+    let Some(stem) = codex_core::strip_rollout_file_suffix(file_name) else {
+        return false;
+    };
+    stem.ends_with(&format!("-{thread_id}"))
 }
 
 #[allow(clippy::too_many_arguments)]
