@@ -204,8 +204,10 @@ impl JobsState {
             .filter(|runtime| runtime.pending_run)
             .min_by(|left, right| {
                 left.job
-                    .created_at
-                    .cmp(&right.job.created_at)
+                    .last_run_at
+                    .unwrap_or(left.job.created_at)
+                    .cmp(&right.job.last_run_at.unwrap_or(right.job.created_at))
+                    .then_with(|| left.job.created_at.cmp(&right.job.created_at))
                     .then_with(|| left.job.id.cmp(&right.job.id))
             })
             .map(|runtime| runtime.job.id.clone())?;
@@ -364,6 +366,45 @@ mod tests {
         assert_eq!(claimed.context.current_job_id, "job-1");
         assert!(claimed.deleted_run_once_job);
         assert!(jobs.list_jobs().is_empty());
+    }
+
+    #[test]
+    fn claim_next_job_prefers_pending_job_that_ran_least_recently() {
+        let create_first = Utc.timestamp_opt(100, 0).single().expect("valid timestamp");
+        let create_second = Utc.timestamp_opt(101, 0).single().expect("valid timestamp");
+        let first_claimed_at = Utc.timestamp_opt(110, 0).single().expect("valid timestamp");
+        let second_claimed_at = Utc.timestamp_opt(111, 0).single().expect("valid timestamp");
+        let mut jobs = JobsState::default();
+        jobs.create_job(
+            "job-1".to_string(),
+            AFTER_TURN_CRON_EXPRESSION.to_string(),
+            "older recurring job".to_string(),
+            /*run_once*/ false,
+            create_first,
+            /*timer_cancel*/ None,
+        )
+        .expect("job should be created");
+        jobs.create_job(
+            "job-2".to_string(),
+            AFTER_TURN_CRON_EXPRESSION.to_string(),
+            "newer recurring job".to_string(),
+            /*run_once*/ false,
+            create_second,
+            /*timer_cancel*/ None,
+        )
+        .expect("job should be created");
+
+        let first = jobs
+            .claim_next_job(first_claimed_at)
+            .expect("first job should be claimed");
+        assert_eq!(first.context.current_job_id, "job-1");
+
+        jobs.mark_after_turn_jobs_due();
+
+        let second = jobs
+            .claim_next_job(second_claimed_at)
+            .expect("second job should be claimed");
+        assert_eq!(second.context.current_job_id, "job-2");
     }
 
     #[test]
