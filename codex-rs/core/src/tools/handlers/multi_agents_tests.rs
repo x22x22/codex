@@ -409,7 +409,7 @@ async fn multi_agent_v2_spawn_fork_context_ignores_child_model_overrides() {
 }
 
 #[tokio::test]
-async fn spawn_agent_watchdog_role_returns_handle_without_spawn_mode() {
+async fn spawn_agent_watchdog_role_returns_handle_with_role_defaults() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
