@@ -447,8 +447,10 @@ struct AuthFileParams {
     chatgpt_account_id: Option<String>,
 }
 
-fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
-    let auth_file = get_auth_file(codex_home);
+fn make_test_chatgpt_jwt(
+    chatgpt_account_id: Option<&str>,
+    chatgpt_plan_type: Option<&str>,
+) -> std::io::Result<String> {
     // Create a minimal valid JWT for the id_token field.
     #[derive(Serialize)]
     struct Header {
@@ -464,13 +466,14 @@ fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result
         "user_id": "user-12345",
     });
 
-    if let Some(chatgpt_plan_type) = params.chatgpt_plan_type {
-        auth_payload["chatgpt_plan_type"] = serde_json::Value::String(chatgpt_plan_type);
+    if let Some(chatgpt_plan_type) = chatgpt_plan_type {
+        auth_payload["chatgpt_plan_type"] =
+            serde_json::Value::String(chatgpt_plan_type.to_string());
     }
 
-    if let Some(chatgpt_account_id) = params.chatgpt_account_id {
-        let org_value = serde_json::Value::String(chatgpt_account_id);
-        auth_payload["chatgpt_account_id"] = org_value;
+    if let Some(chatgpt_account_id) = chatgpt_account_id {
+        auth_payload["chatgpt_account_id"] =
+            serde_json::Value::String(chatgpt_account_id.to_string());
     }
 
     let payload = serde_json::json!({
@@ -478,11 +481,19 @@ fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result
         "email_verified": true,
         "https://api.openai.com/auth": auth_payload,
     });
-    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
     let header_b64 = b64(&serde_json::to_vec(&header)?);
     let payload_b64 = b64(&serde_json::to_vec(&payload)?);
     let signature_b64 = b64(b"sig");
-    let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+    Ok(format!("{header_b64}.{payload_b64}.{signature_b64}"))
+}
+
+fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
+    let auth_file = get_auth_file(codex_home);
+    let fake_jwt = make_test_chatgpt_jwt(
+        params.chatgpt_account_id.as_deref(),
+        params.chatgpt_plan_type.as_deref(),
+    )?;
 
     let auth_json_data = json!({
         "OPENAI_API_KEY": params.openai_api_key,

@@ -70,6 +70,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_login::auth::ExternalChatGptAuthRefresher;
 use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
 use codex_login::auth::ExternalAuthRefresher;
@@ -89,11 +90,11 @@ use tracing::Instrument;
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
-struct ExternalAuthRefreshBridge {
+struct ExternalChatGptAuthRefreshBridge {
     outgoing: Arc<OutgoingMessageSender>,
 }
 
-impl ExternalAuthRefreshBridge {
+impl ExternalChatGptAuthRefreshBridge {
     fn map_reason(reason: ExternalAuthRefreshReason) -> ChatgptAuthTokensRefreshReason {
         match reason {
             ExternalAuthRefreshReason::Unauthorized => ChatgptAuthTokensRefreshReason::Unauthorized,
@@ -102,7 +103,15 @@ impl ExternalAuthRefreshBridge {
 }
 
 #[async_trait]
-impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
+impl ExternalAuthRefresher for ExternalChatGptAuthRefreshBridge {
+    fn auth_mode(&self) -> codex_app_server_protocol::AuthMode {
+        codex_app_server_protocol::AuthMode::ChatgptAuthTokens
+    }
+
+    async fn resolve(&self) -> std::io::Result<Option<ExternalAuthTokens>> {
+        Ok(None)
+    }
+
     async fn refresh(
         &self,
         context: ExternalAuthRefreshContext,
@@ -151,6 +160,8 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
         ))
     }
 }
+
+impl ExternalChatGptAuthRefresher for ExternalChatGptAuthRefreshBridge {}
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -210,7 +221,7 @@ impl MessageProcessor {
             config.codex_home.clone(),
             enable_codex_api_key_env,
             config.cli_auth_credentials_store_mode,
-            Arc::new(ExternalAuthRefreshBridge {
+            Arc::new(ExternalChatGptAuthRefreshBridge {
                 outgoing: outgoing.clone(),
             }),
         );
