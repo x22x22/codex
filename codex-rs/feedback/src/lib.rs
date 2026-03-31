@@ -7,6 +7,7 @@ use std::io::{self};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -95,11 +96,19 @@ impl CodexFeedback {
 
     pub fn snapshot(&self, session_id: Option<ThreadId>) -> FeedbackSnapshot {
         let bytes = {
-            let guard = self.inner.ring.lock().expect("mutex poisoned");
+            let guard = self
+                .inner
+                .ring
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             guard.snapshot_bytes()
         };
         let tags = {
-            let guard = self.inner.tags.lock().expect("mutex poisoned");
+            let guard = self
+                .inner
+                .tags
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             guard.clone()
         };
         FeedbackSnapshot {
@@ -324,7 +333,7 @@ impl FeedbackSnapshot {
             use sentry::protocol::Values;
 
             event.exception = Values::from(vec![Exception {
-                ty: title.clone(),
+                ty: title,
                 value: Some(r.to_string()),
                 ..Default::default()
             }]);
@@ -430,7 +439,11 @@ where
             return;
         }
 
-        let mut guard = self.inner.tags.lock().expect("mutex poisoned");
+        let mut guard = self
+            .inner
+            .tags
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         for (key, value) in visitor.tags {
             if guard.len() >= MAX_FEEDBACK_TAGS && !guard.contains_key(&key) {
                 continue;
