@@ -1366,7 +1366,7 @@ async fn user_turn_includes_personality_from_config() {
 }
 
 #[tokio::test]
-async fn user_turn_preserves_explicit_none_personality_from_config() {
+async fn user_turn_preserves_none_personality() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.set_feature_enabled(Feature::Personality, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
@@ -1378,7 +1378,7 @@ async fn user_turn_preserves_explicit_none_personality_from_config() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { personality, .. } if personality == Some(Personality::none()) => {}
-        other => panic!("expected Op::UserTurn with none personality, got {other:?}"),
+        other => panic!("expected none personality, got {other:?}"),
     }
 }
 
