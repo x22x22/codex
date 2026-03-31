@@ -1061,6 +1061,8 @@ mod tests {
                 status: codex_app_server_protocol::TurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         })
     }
 
@@ -1834,6 +1836,8 @@ mod tests {
                             status: codex_app_server_protocol::TurnStatus::Completed,
                             error: None,
                         },
+                        completed_at: 0,
+                        duration_ms: None,
                     }
                 )
             )

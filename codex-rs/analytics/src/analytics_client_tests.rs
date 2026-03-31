@@ -162,6 +162,7 @@ fn sample_turn_started_notification(thread_id: &str, turn_id: &str) -> ServerNot
             status: AppServerTurnStatus::InProgress,
             error: None,
         },
+        created_at: 455,
     })
 }
 
@@ -183,6 +184,8 @@ fn sample_turn_completed_notification(
                 additional_details: None,
             }),
         },
+        completed_at: 456,
+        duration_ms: Some(1234),
     })
 }
 
@@ -468,7 +471,7 @@ fn turn_event_serializes_expected_shape() {
             CompletedTurnState {
                 status: Some(TurnStatus::Completed),
                 turn_error: None,
-                completed_at_secs: 456,
+                completed_at: 456,
                 duration_ms: Some(1234),
             },
             Some(455),
@@ -516,7 +519,7 @@ fn turn_event_serializes_expected_shape() {
                 "reasoning_output_tokens": null,
                 "total_tokens": null,
                 "duration_ms": 1234,
-                "started_at": 455,
+                "created_at": 455,
                 "completed_at": 456
             }
         })
@@ -572,7 +575,7 @@ async fn turn_lifecycle_emits_turn_event() {
                 TurnResolvedConfigFact {
                     turn_id: "turn-2".to_string(),
                     thread_id: "thread-2".to_string(),
-                    num_input_images: 2,
+                    num_input_images: 1,
                     submission_type: None,
                     model: "gpt-5".to_string(),
                     model_provider: "openai".to_string(),
@@ -622,7 +625,7 @@ async fn turn_lifecycle_emits_turn_event() {
     );
     assert_eq!(payload["event_params"]["num_input_images"], json!(1));
     assert_eq!(payload["event_params"]["status"], json!("completed"));
-    assert!(payload["event_params"]["started_at"].as_u64().is_some());
+    assert!(payload["event_params"]["created_at"].as_u64().is_some());
     assert!(payload["event_params"]["completed_at"].as_u64().is_some());
 }
 
@@ -643,7 +646,12 @@ async fn turn_does_not_emit_without_required_prerequisites() {
             &mut out,
         )
         .await;
-    assert!(out.is_empty());
+    assert_eq!(out.len(), 1);
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(
+        payload["event_params"]["product_client_id"],
+        json!(originator().value)
+    );
 
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
@@ -664,7 +672,7 @@ async fn turn_does_not_emit_without_required_prerequisites() {
 }
 
 #[tokio::test]
-async fn turn_completed_without_started_notification_emits_null_started_at() {
+async fn turn_completed_without_started_notification_emits_null_created_at() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
 
@@ -682,8 +690,8 @@ async fn turn_completed_without_started_notification_emits_null_started_at() {
         .await;
 
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
-    assert_eq!(payload["event_params"]["started_at"], json!(null));
-    assert_eq!(payload["event_params"]["duration_ms"], json!(null));
+    assert_eq!(payload["event_params"]["created_at"], json!(null));
+    assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
 }
 
 #[tokio::test]

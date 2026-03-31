@@ -30,8 +30,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -217,7 +215,7 @@ struct PendingTurnStartState {
 struct CompletedTurnState {
     status: Option<TurnStatus>,
     turn_error: Option<CodexErrorInfo>,
-    completed_at_secs: u64,
+    completed_at: u64,
     duration_ms: Option<u64>,
 }
 
@@ -226,7 +224,7 @@ struct TurnState {
     thread_id: Option<String>,
     num_input_images: Option<usize>,
     resolved_config: Option<TurnResolvedConfigFact>,
-    started_at_ms: Option<u64>,
+    created_at: Option<u64>,
     completed: Option<CompletedTurnState>,
 }
 
@@ -552,7 +550,7 @@ struct CodexTurnEventParams {
     reasoning_output_tokens: Option<i64>,
     total_tokens: Option<i64>,
     duration_ms: Option<u64>,
-    started_at: Option<u64>,
+    created_at: Option<u64>,
     completed_at: Option<u64>,
 }
 
@@ -728,7 +726,7 @@ impl AnalyticsReducer {
             thread_id: None,
             num_input_images: None,
             resolved_config: None,
-            started_at_ms: None,
+            created_at: None,
             completed: None,
         });
         turn_state.thread_id = Some(thread_id);
@@ -804,7 +802,7 @@ impl AnalyticsReducer {
                     thread_id: None,
                     num_input_images: None,
                     resolved_config: None,
-                    started_at_ms: None,
+                    created_at: None,
                     completed: None,
                 });
                 turn_state.connection_id = Some(connection_id);
@@ -828,10 +826,10 @@ impl AnalyticsReducer {
                     thread_id: None,
                     num_input_images: None,
                     resolved_config: None,
-                    started_at_ms: None,
+                    created_at: None,
                     completed: None,
                 });
-                turn_state.started_at_ms = Some(now_unix_timestamp_millis());
+                turn_state.created_at = u64::try_from(notification.created_at).ok();
             }
             ServerNotification::TurnCompleted(notification) => {
                 let turn_state =
@@ -842,11 +840,9 @@ impl AnalyticsReducer {
                             thread_id: None,
                             num_input_images: None,
                             resolved_config: None,
-                            started_at_ms: None,
+                            created_at: None,
                             completed: None,
                         });
-                let completed_at_secs = now_unix_timestamp_secs();
-                let completed_at_ms = completed_at_secs.saturating_mul(1000);
                 turn_state.completed = Some(CompletedTurnState {
                     status: analytics_turn_status(notification.turn.status),
                     turn_error: notification.turn.error.and_then(|error| {
@@ -854,10 +850,10 @@ impl AnalyticsReducer {
                             .codex_error_info
                             .map(app_server_codex_error_info_to_core)
                     }),
-                    completed_at_secs,
-                    duration_ms: turn_state
-                        .started_at_ms
-                        .map(|started_at_ms| completed_at_ms.saturating_sub(started_at_ms)),
+                    completed_at: u64::try_from(notification.completed_at).unwrap_or_default(),
+                    duration_ms: notification
+                        .duration_ms
+                        .and_then(|duration_ms| u64::try_from(duration_ms).ok()),
                 });
                 let turn_id = notification.turn.id;
                 self.maybe_emit_turn_event(&turn_id, out);
@@ -896,7 +892,7 @@ impl AnalyticsReducer {
                     num_input_images,
                     resolved_config,
                     completed,
-                    turn_state.started_at_ms.map(|value| value / 1000),
+                    turn_state.created_at,
                 ),
             },
         )));
@@ -1025,7 +1021,7 @@ fn codex_turn_event_params(
     num_input_images: usize,
     resolved_config: TurnResolvedConfigFact,
     completed: CompletedTurnState,
-    started_at: Option<u64>,
+    created_at: Option<u64>,
 ) -> CodexTurnEventParams {
     let TurnResolvedConfigFact {
         turn_id: _resolved_turn_id,
@@ -1082,8 +1078,8 @@ fn codex_turn_event_params(
         reasoning_output_tokens: None,
         total_tokens: None,
         duration_ms: completed.duration_ms,
-        started_at,
-        completed_at: Some(completed.completed_at_secs),
+        created_at,
+        completed_at: Some(completed.completed_at),
     }
 }
 
@@ -1190,20 +1186,6 @@ fn session_source_name(session_source: &SessionSource) -> Option<&'static str> {
         | SessionSource::Custom(_)
         | SessionSource::Unknown => None,
     }
-}
-
-fn now_unix_timestamp_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-fn now_unix_timestamp_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 fn analytics_turn_status(status: codex_app_server_protocol::TurnStatus) -> Option<TurnStatus> {

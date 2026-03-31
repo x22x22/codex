@@ -4363,6 +4363,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         None,
     );
@@ -4406,6 +4407,8 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 status: AppServerTurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         }),
         None,
     );
@@ -4610,6 +4613,7 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         None,
     );
@@ -4649,6 +4653,8 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
                 status: AppServerTurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         }),
         None,
     );
@@ -4932,6 +4938,7 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         None,
     );
@@ -4967,6 +4974,8 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
                     additional_details: None,
                 }),
             },
+            completed_at: 0,
+            duration_ms: None,
         }),
         None,
     );
@@ -4988,6 +4997,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         Some(ReplayKind::ThreadSnapshot),
     );
@@ -5030,6 +5040,7 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         None,
     );
@@ -5084,6 +5095,7 @@ async fn live_app_server_server_overloaded_error_renders_warning() {
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         None,
     );
@@ -5261,6 +5273,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         None,
     );

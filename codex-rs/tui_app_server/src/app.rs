@@ -8288,6 +8288,7 @@ guardian_approval = true
         ServerNotification::TurnStarted(TurnStartedNotification {
             thread_id: thread_id.to_string(),
             turn: test_turn(turn_id, TurnStatus::InProgress, Vec::new()),
+            created_at: 0,
         })
     }
 
@@ -8299,6 +8300,8 @@ guardian_approval = true
         ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: thread_id.to_string(),
             turn: test_turn(turn_id, status, Vec::new()),
+            completed_at: 0,
+            duration_ms: None,
         })
     }
 

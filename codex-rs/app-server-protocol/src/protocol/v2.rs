@@ -4776,6 +4776,9 @@ pub struct ThreadNameUpdatedNotification {
 pub struct TurnStartedNotification {
     pub thread_id: String,
     pub turn: Turn,
+    /// Unix timestamp (in seconds) when the turn started.
+    #[ts(type = "number")]
+    pub created_at: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4802,6 +4805,12 @@ pub struct Usage {
 pub struct TurnCompletedNotification {
     pub thread_id: String,
     pub turn: Turn,
+    /// Unix timestamp (in seconds) when the turn completed.
+    #[ts(type = "number")]
+    pub completed_at: i64,
+    /// Duration between turn start and completion in milliseconds, if known.
+    #[ts(type = "number | null")]
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -731,6 +731,8 @@ mod tests {
                     status: TurnStatus::Completed,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 
@@ -775,6 +777,8 @@ mod tests {
                     status: TurnStatus::Completed,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 
@@ -815,6 +819,8 @@ mod tests {
                     status: TurnStatus::Completed,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 
@@ -855,6 +861,8 @@ mod tests {
                     status: TurnStatus::Failed,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 
@@ -896,6 +904,8 @@ mod tests {
                     status: TurnStatus::Interrupted,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 
