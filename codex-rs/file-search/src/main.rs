@@ -27,12 +27,15 @@ struct StdioReporter {
 impl Reporter for StdioReporter {
     fn report_match(&self, file_match: &FileMatch) {
         if self.write_output_as_json {
-            println!("{}", serde_json::to_string(&file_match).unwrap());
+            match serde_json::to_string(file_match) {
+                Ok(json) => println!("{json}"),
+                Err(err) => eprintln!("Failed to serialize file match as JSON: {err}"),
+            }
         } else if self.show_indices {
-            let indices = file_match
-                .indices
-                .as_ref()
-                .expect("--compute-indices was specified");
+            let Some(indices) = file_match.indices.as_ref() else {
+                println!("{}", file_match.path.to_string_lossy());
+                return;
+            };
             // `indices` is guaranteed to be sorted in ascending order. Instead
             // of calling `contains` for every character (which would be O(N^2)
             // in the worst-case), walk through the `indices` vector once while
@@ -61,7 +64,10 @@ impl Reporter for StdioReporter {
     fn warn_matches_truncated(&self, total_match_count: usize, shown_match_count: usize) {
         if self.write_output_as_json {
             let value = json!({"matches_truncated": true});
-            println!("{}", serde_json::to_string(&value).unwrap());
+            match serde_json::to_string(&value) {
+                Ok(json) => println!("{json}"),
+                Err(err) => eprintln!("Failed to serialize truncation warning as JSON: {err}"),
+            }
         } else {
             eprintln!(
                 "Warning: showing {shown_match_count} out of {total_match_count} results. Provide a more specific pattern or increase the --limit.",

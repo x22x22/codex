@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -195,10 +196,10 @@ pub fn create_session(
         threads: threads.get(),
         compute_indices,
         respect_gitignore,
-        cancelled: cancelled.clone(),
+        cancelled,
         shutdown: Arc::new(AtomicBool::new(false)),
         reporter,
-        work_tx: work_tx.clone(),
+        work_tx,
     });
 
     let matcher_inner = inner.clone();
@@ -611,14 +612,16 @@ struct RunReporter {
 
 impl SessionReporter for RunReporter {
     fn on_update(&self, snapshot: &FileSearchSnapshot) {
-        #[expect(clippy::unwrap_used)]
-        let mut guard = self.snapshot.write().unwrap();
+        let mut guard = self
+            .snapshot
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
         *guard = snapshot.clone();
     }
 
     fn on_complete(&self) {
         let (cv, mutex) = &self.completed;
-        let mut completed = mutex.lock().unwrap();
+        let mut completed = mutex.lock().unwrap_or_else(PoisonError::into_inner);
         *completed = true;
         cv.notify_all();
     }
@@ -627,11 +630,14 @@ impl SessionReporter for RunReporter {
 impl RunReporter {
     fn wait_for_complete(&self) -> FileSearchSnapshot {
         let (cv, mutex) = &self.completed;
-        let mut completed = mutex.lock().unwrap();
+        let mut completed = mutex.lock().unwrap_or_else(PoisonError::into_inner);
         while !*completed {
-            completed = cv.wait(completed).unwrap();
+            completed = cv.wait(completed).unwrap_or_else(PoisonError::into_inner);
         }
-        self.snapshot.read().unwrap().clone()
+        self.snapshot
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
