@@ -66,7 +66,8 @@ impl ExternalAuthRefresher for BearerTokenRefresher {
 
 impl fmt::Debug for BearerTokenRefresher {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BearerTokenRefresher").finish_non_exhaustive()
+        f.debug_struct("BearerTokenRefresher")
+            .finish_non_exhaustive()
     }
 }
 
