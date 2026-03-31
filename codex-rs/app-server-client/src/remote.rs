@@ -111,12 +111,10 @@ enum RemoteClientCommand {
     ResolveServerRequest {
         request_id: RequestId,
         result: JsonRpcResult,
-        response_tx: oneshot::Sender<IoResult<()>>,
     },
     RejectServerRequest {
         request_id: RequestId,
         error: JSONRPCErrorError,
-        response_tx: oneshot::Sender<IoResult<()>>,
     },
     Shutdown {
         response_tx: oneshot::Sender<IoResult<()>>,
@@ -255,9 +253,8 @@ impl RemoteAppServerClient {
                             RemoteClientCommand::ResolveServerRequest {
                                 request_id,
                                 result,
-                                response_tx,
                             } => {
-                                let result = write_jsonrpc_message(
+                                if let Err(err) = write_jsonrpc_message(
                                     &mut stream,
                                     JSONRPCMessage::Response(JSONRPCResponse {
                                         id: request_id,
@@ -265,15 +262,16 @@ impl RemoteAppServerClient {
                                     }),
                                     &websocket_url,
                                 )
-                                .await;
-                                let _ = response_tx.send(result);
+                                .await
+                                {
+                                    warn!("failed to resolve remote server request: {err}");
+                                }
                             }
                             RemoteClientCommand::RejectServerRequest {
                                 request_id,
                                 error,
-                                response_tx,
                             } => {
-                                let result = write_jsonrpc_message(
+                                if let Err(err) = write_jsonrpc_message(
                                     &mut stream,
                                     JSONRPCMessage::Error(JSONRPCError {
                                         error,
@@ -281,8 +279,10 @@ impl RemoteAppServerClient {
                                     }),
                                     &websocket_url,
                                 )
-                                .await;
-                                let _ = response_tx.send(result);
+                                .await
+                                {
+                                    warn!("failed to reject remote server request: {err}");
+                                }
                             }
                             RemoteClientCommand::Shutdown { response_tx } => {
                                 let close_result = stream.close(None).await.map_err(|err| {
@@ -540,12 +540,10 @@ impl RemoteAppServerClient {
         request_id: RequestId,
         result: JsonRpcResult,
     ) -> IoResult<()> {
-        let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
             .send(RemoteClientCommand::ResolveServerRequest {
                 request_id,
                 result,
-                response_tx,
             })
             .await
             .map_err(|_| {
@@ -553,13 +551,7 @@ impl RemoteAppServerClient {
                     ErrorKind::BrokenPipe,
                     "remote app-server worker channel is closed",
                 )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "remote app-server resolve channel is closed",
-            )
-        })?
+            })
     }
 
     pub async fn reject_server_request(
@@ -567,12 +559,10 @@ impl RemoteAppServerClient {
         request_id: RequestId,
         error: JSONRPCErrorError,
     ) -> IoResult<()> {
-        let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
             .send(RemoteClientCommand::RejectServerRequest {
                 request_id,
                 error,
-                response_tx,
             })
             .await
             .map_err(|_| {
@@ -580,13 +570,7 @@ impl RemoteAppServerClient {
                     ErrorKind::BrokenPipe,
                     "remote app-server worker channel is closed",
                 )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "remote app-server reject channel is closed",
-            )
-        })?
+            })
     }
 
     pub async fn next_event(&mut self) -> Option<AppServerEvent> {
@@ -947,6 +931,9 @@ async fn write_jsonrpc_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
 
     #[test]
     fn event_requires_delivery_marks_transcript_and_disconnect_events() {
@@ -978,5 +965,66 @@ mod tests {
         assert!(!event_requires_delivery(&AppServerEvent::Lagged {
             skipped: 1
         }));
+    }
+
+    #[tokio::test]
+    async fn resolve_server_request_returns_after_enqueueing_command() {
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::channel(1);
+        let client = RemoteAppServerClient {
+            command_tx,
+            event_rx,
+            pending_events: VecDeque::new(),
+            worker_handle: tokio::spawn(async {}),
+        };
+
+        timeout(
+            Duration::from_secs(1),
+            client.resolve_server_request(RequestId::Integer(3), serde_json::json!({ "ok": true })),
+        )
+        .await
+        .expect("resolve should return before timeout")
+        .expect("resolve should enqueue successfully");
+
+        let Some(RemoteClientCommand::ResolveServerRequest { request_id, result }) =
+            command_rx.recv().await
+        else {
+            panic!("expected resolve command");
+        };
+        assert_eq!(request_id, RequestId::Integer(3));
+        assert_eq!(result, serde_json::json!({ "ok": true }));
+    }
+
+    #[tokio::test]
+    async fn reject_server_request_returns_after_enqueueing_command() {
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let (_event_tx, event_rx) = mpsc::channel(1);
+        let client = RemoteAppServerClient {
+            command_tx,
+            event_rx,
+            pending_events: VecDeque::new(),
+            worker_handle: tokio::spawn(async {}),
+        };
+
+        let error = JSONRPCErrorError {
+            code: -32000,
+            message: "declined".to_string(),
+            data: None,
+        };
+        timeout(
+            Duration::from_secs(1),
+            client.reject_server_request(RequestId::Integer(4), error.clone()),
+        )
+        .await
+        .expect("reject should return before timeout")
+        .expect("reject should enqueue successfully");
+
+        let Some(RemoteClientCommand::RejectServerRequest { request_id, error: queued_error }) =
+            command_rx.recv().await
+        else {
+            panic!("expected reject command");
+        };
+        assert_eq!(request_id, RequestId::Integer(4));
+        assert_eq!(queued_error, error);
     }
 }
