@@ -197,3 +197,58 @@ async fn personalities_list_uses_cached_catalog_for_repeated_requests() -> Resul
 
     Ok(())
 }
+
+#[tokio::test]
+async fn personalities_list_evicts_old_catalogs_when_cache_grows() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut repos = Vec::new();
+
+    for index in 0..40 {
+        let repo = TempDir::new()?;
+        let repo_personalities = repo.path().join(".codex/personalities");
+        write_personality(
+            &repo_personalities,
+            "night-owl",
+            &format!("Personality {index}"),
+            &format!("Instructions {index}"),
+        )?;
+        repos.push(repo);
+    }
+
+    let first_repo = repos
+        .first()
+        .ok_or_else(|| anyhow!("expected at least one repo"))?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let first = request_personalities_list(&mut mcp, first_repo.path()).await?;
+    let first_entry = &first.data[0];
+    let first_night_owl = first_entry
+        .personalities
+        .iter()
+        .find(|personality| personality.name == "night-owl")
+        .ok_or_else(|| anyhow!("night-owl personality missing on first request"))?;
+    assert_eq!(first_night_owl.description, "Personality 0");
+
+    for repo in repos.iter().skip(1) {
+        request_personalities_list(&mut mcp, repo.path()).await?;
+    }
+
+    write_personality(
+        &first_repo.path().join(".codex/personalities"),
+        "night-owl",
+        "Updated personality",
+        "Updated instructions",
+    )?;
+
+    let reloaded = request_personalities_list(&mut mcp, first_repo.path()).await?;
+    let reloaded_entry = &reloaded.data[0];
+    let reloaded_night_owl = reloaded_entry
+        .personalities
+        .iter()
+        .find(|personality| personality.name == "night-owl")
+        .ok_or_else(|| anyhow!("night-owl personality missing after cache churn"))?;
+    assert_eq!(reloaded_night_owl.description, "Updated personality");
+
+    Ok(())
+}

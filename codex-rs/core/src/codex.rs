@@ -25,6 +25,7 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::config_loader::CloudRequirementsLoader;
+use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
 use crate::connectors;
@@ -2661,7 +2662,39 @@ impl Session {
             )
             .await
             {
-                Ok(config_layer_stack) => catalog_from_layer_stack(&config_layer_stack),
+                Ok(config_layer_stack) => {
+                    let layers = config_layer_stack
+                        .get_layers(
+                            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                            /*include_disabled*/ true,
+                        )
+                        .into_iter()
+                        .cloned()
+                        .collect();
+                    match codex_config::ConfigLayerStack::new(
+                        layers,
+                        turn_context
+                            .config
+                            .config_layer_stack
+                            .requirements()
+                            .clone(),
+                        turn_context
+                            .config
+                            .config_layer_stack
+                            .requirements_toml()
+                            .clone(),
+                    ) {
+                        Ok(reloaded_stack) => catalog_from_layer_stack(&reloaded_stack),
+                        Err(err) => {
+                            warn!(
+                                ?turn_context.cwd,
+                                error = %err,
+                                "failed to apply active config requirements to reloaded personality layers; using raw reload"
+                            );
+                            catalog_from_layer_stack(&config_layer_stack)
+                        }
+                    }
+                }
                 Err(err) => {
                     warn!(
                         ?turn_context.cwd,

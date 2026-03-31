@@ -296,6 +296,7 @@ use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
@@ -396,6 +397,60 @@ enum ThreadShutdownResult {
     TimedOut,
 }
 
+const PERSONALITY_CATALOG_CACHE_CAPACITY: usize = 32;
+
+struct PersonalityCatalogCache {
+    catalogs: HashMap<PathBuf, codex_core::personalities::PersonalityCatalog>,
+    lru: VecDeque<PathBuf>,
+}
+
+impl PersonalityCatalogCache {
+    fn new(cwd: PathBuf, catalog: codex_core::personalities::PersonalityCatalog) -> Self {
+        let mut catalogs = HashMap::new();
+        catalogs.insert(cwd.clone(), catalog);
+        Self {
+            catalogs,
+            lru: VecDeque::from([cwd]),
+        }
+    }
+
+    fn get(&mut self, cwd: &Path) -> Option<codex_core::personalities::PersonalityCatalog> {
+        let catalog = self.catalogs.get(cwd).cloned()?;
+        self.touch(cwd);
+        Some(catalog)
+    }
+
+    fn insert(
+        &mut self,
+        cwd: PathBuf,
+        catalog: codex_core::personalities::PersonalityCatalog,
+    ) -> codex_core::personalities::PersonalityCatalog {
+        if let Some(existing) = self.catalogs.get_mut(&cwd) {
+            *existing = catalog.clone();
+            self.touch(&cwd);
+            return catalog;
+        }
+
+        while self.catalogs.len() >= PERSONALITY_CATALOG_CACHE_CAPACITY {
+            let Some(evicted) = self.lru.pop_front() else {
+                break;
+            };
+            self.catalogs.remove(&evicted);
+        }
+
+        self.catalogs.insert(cwd.clone(), catalog.clone());
+        self.touch(&cwd);
+        catalog
+    }
+
+    fn touch(&mut self, cwd: &Path) {
+        if let Some(index) = self.lru.iter().position(|entry| entry.as_path() == cwd) {
+            self.lru.remove(index);
+        }
+        self.lru.push_back(cwd.to_path_buf());
+    }
+}
+
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.cancel();
@@ -420,8 +475,7 @@ pub(crate) struct CodexMessageProcessor {
     command_exec_manager: CommandExecManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
-    personality_catalogs:
-        Arc<Mutex<HashMap<PathBuf, codex_core::personalities::PersonalityCatalog>>>,
+    personality_catalogs: Arc<Mutex<PersonalityCatalogCache>>,
     background_tasks: TaskTracker,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
@@ -538,10 +592,10 @@ impl CodexMessageProcessor {
             feedback,
             log_db,
         } = args;
-        let personality_catalogs = HashMap::from([(
+        let personality_catalogs = PersonalityCatalogCache::new(
             config.cwd.to_path_buf(),
             codex_core::personalities::catalog_for_config(config.as_ref()),
-        )]);
+        );
         Self {
             auth_manager,
             thread_manager,
@@ -615,13 +669,7 @@ impl CodexMessageProcessor {
         cwd: &AbsolutePathBuf,
         cli_overrides: &[(String, TomlValue)],
     ) -> Result<codex_core::personalities::PersonalityCatalog, JSONRPCErrorError> {
-        if let Some(catalog) = self
-            .personality_catalogs
-            .lock()
-            .await
-            .get(cwd.as_path())
-            .cloned()
-        {
+        if let Some(catalog) = self.personality_catalogs.lock().await.get(cwd.as_path()) {
             return Ok(catalog);
         }
 
@@ -636,11 +684,11 @@ impl CodexMessageProcessor {
         .map_err(|err| config_load_error(&err))?;
         let catalog = codex_core::personalities::catalog_from_layer_stack(&config_layer_stack);
 
-        let mut personality_catalogs = self.personality_catalogs.lock().await;
-        Ok(personality_catalogs
-            .entry(cwd.to_path_buf())
-            .or_insert_with(|| catalog.clone())
-            .clone())
+        Ok(self
+            .personality_catalogs
+            .lock()
+            .await
+            .insert(cwd.to_path_buf(), catalog))
     }
 
     /// If a client sends `developer_instructions: null` during a mode switch,

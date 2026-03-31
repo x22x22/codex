@@ -198,7 +198,7 @@ fn personality_roots(config_layer_stack: &ConfigLayerStack) -> Vec<(PathBuf, Per
     let mut roots = Vec::new();
     for layer in config_layer_stack.get_layers(
         ConfigLayerStackOrdering::HighestPrecedenceFirst,
-        /*include_disabled*/ true,
+        /*include_disabled*/ false,
     ) {
         let Some(config_folder) = layer.config_folder() else {
             continue;
@@ -362,10 +362,16 @@ mod tests {
     use crate::config_loader::CloudRequirementsLoader;
     use crate::config_loader::LoaderOverrides;
     use crate::config_loader::load_config_layers_state;
+    use codex_app_server_protocol::ConfigLayerSource;
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerStack;
+    use codex_config::ConfigRequirements;
+    use codex_config::ConfigRequirementsToml;
     use codex_protocol::config_types::Personality;
     use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::TempDir;
+    use toml::Value as TomlValue;
 
     fn write_personality(root: &std::path::Path, name: &str, description: &str, body: &str) {
         fs::create_dir_all(root).unwrap();
@@ -524,5 +530,49 @@ mod tests {
         let personality = catalog.get(&Personality::from("duped")).unwrap();
         assert_eq!(personality.description, "first");
         assert_eq!(personality.instructions.as_deref(), Some("first body"));
+    }
+
+    #[test]
+    fn disabled_project_layers_do_not_override_active_personalities() {
+        let user_dir = tempfile::tempdir().unwrap();
+        let repo_dir = tempfile::tempdir().unwrap();
+
+        write_personality(
+            user_dir.path(),
+            "night-owl",
+            "User personality",
+            "user body",
+        );
+        write_personality(
+            repo_dir.path(),
+            "night-owl",
+            "Repo personality",
+            "repo body",
+        );
+
+        let user_layer = ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: user_dir.path().join("config.toml").try_into().unwrap(),
+            },
+            TomlValue::Table(toml::map::Map::new()),
+        );
+        let disabled_repo_layer = ConfigLayerEntry::new_disabled(
+            ConfigLayerSource::Project {
+                dot_codex_folder: repo_dir.path().try_into().unwrap(),
+            },
+            TomlValue::Table(toml::map::Map::new()),
+            "inactive",
+        );
+        let stack = ConfigLayerStack::new(
+            vec![user_layer, disabled_repo_layer],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .unwrap();
+
+        let catalog = catalog_from_layer_stack(&stack);
+        let personality = catalog.get(&Personality::from("night-owl")).unwrap();
+        assert_eq!(personality.description, "User personality");
+        assert_eq!(personality.instructions.as_deref(), Some("user body"));
     }
 }
