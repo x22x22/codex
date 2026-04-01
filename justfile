@@ -70,7 +70,7 @@ bazel-test:
     bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
 
 bazel-clippy:
-    bazel build --config=clippy -- //codex-rs/... -//codex-rs/v8-poc:all
+    bazel build --config=clippy -- $(./scripts/list-bazel-clippy-targets.sh)
 
 [no-cd]
 bazel-argument-comment-lint:
