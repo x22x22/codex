@@ -530,7 +530,7 @@ impl TextArea {
                 self.move_cursor_to_end_of_line(/*move_down_at_eol*/ true);
             }
             _o => {
-                #[cfg(feature = "debug-logs")]
+                #[cfg(debug_assertions)]
                 tracing::debug!("Unhandled key event in TextArea: {:?}", _o);
             }
         }
