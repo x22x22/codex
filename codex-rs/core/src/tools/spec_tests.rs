@@ -552,6 +552,7 @@ fn test_build_specs_watchdog_collab_tools_include_self_close_tool() {
     assert_contains_top_level_tool_name(&tools, "send_input");
     assert_contains_top_level_tool_name(&tools, "wait_agent");
     assert_contains_top_level_tool_name(&tools, "close_agent");
+    assert_contains_top_level_tool_name(&tools, "list_agents");
     assert_contains_tool_names(&tools, &["tool_search", "list_agents", "close_agent"]);
     assert_lacks_top_level_tool_name(&tools, "watchdog_self_close");
     assert_lacks_top_level_tool_name(&tools, "compact_parent_context");
