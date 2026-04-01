@@ -82,6 +82,7 @@ impl StatusHistoryHandle {
         } else {
             compose_rate_limit_data_many(rate_limits, now)
         };
+        #[expect(clippy::expect_used)]
         let mut state = self
             .rate_limit_state
             .write()
