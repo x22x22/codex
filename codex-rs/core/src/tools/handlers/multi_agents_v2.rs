@@ -34,6 +34,7 @@ pub(crate) use list_agents::Handler as ListAgentsHandler;
 pub(crate) use send_message::Handler as SendMessageHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
 pub(crate) use wait::Handler as WaitAgentHandler;
+pub(crate) use watchdog_self_close::Handler as WatchdogSelfCloseHandlerV2;
 
 mod assign_task;
 mod close_agent;
