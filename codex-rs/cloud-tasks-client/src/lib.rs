@@ -15,16 +15,9 @@ pub use api::TaskSummary;
 pub use api::TaskText;
 pub use api::TurnAttempt;
 
-#[cfg(feature = "mock")]
-mod mock;
-
-#[cfg(feature = "online")]
 mod http;
-
-#[cfg(feature = "mock")]
-pub use mock::MockClient;
-
-#[cfg(feature = "online")]
+mod mock;
 pub use http::HttpClient;
+pub use mock::MockClient;
 
 // Reusable apply engine now lives in the shared crate `codex-git-utils`.
