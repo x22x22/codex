@@ -41,6 +41,7 @@ use codex_tools::create_send_input_tool_v1;
 use codex_tools::create_send_message_tool;
 use codex_tools::create_spawn_agent_tool_v1;
 use codex_tools::create_spawn_agent_tool_v2;
+use codex_tools::create_update_plan_tool;
 use codex_tools::create_view_image_tool;
 use codex_tools::create_wait_agent_tool_v1;
 use codex_tools::create_wait_agent_tool_v2;
@@ -331,7 +332,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             exec_permission_approvals_enabled: false,
         }),
         create_write_stdin_tool(),
-        PLAN_TOOL.clone(),
+        create_update_plan_tool(),
         request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
