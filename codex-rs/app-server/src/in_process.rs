@@ -50,6 +50,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use crate::auth_manager::auth_manager_from_config;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::error_code::OVERLOADED_ERROR_CODE;
@@ -75,7 +76,6 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AppServerRpcTransport;
-use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -379,13 +379,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             }
         });
 
-        let auth_manager = AuthManager::shared(
-            args.config.codex_home.clone(),
-            args.enable_codex_api_key_env,
-            args.config.cli_auth_credentials_store_mode,
-        );
-        auth_manager
-            .set_forced_chatgpt_workspace_id(args.config.forced_chatgpt_workspace_id.clone());
+        let auth_manager = auth_manager_from_config(&args.config, args.enable_codex_api_key_env);
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
