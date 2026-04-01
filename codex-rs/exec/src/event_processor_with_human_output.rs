@@ -582,8 +582,8 @@ mod tests {
     fn suppresses_final_stdout_message_when_both_streams_are_terminals() {
         assert!(!should_print_final_message_to_stdout(
             Some("hello"),
-            true,
-            true
+            /*stdout_is_terminal*/ true,
+            /*stderr_is_terminal*/ true
         ));
     }
 
@@ -591,8 +591,8 @@ mod tests {
     fn prints_final_stdout_message_when_stdout_is_not_terminal() {
         assert!(should_print_final_message_to_stdout(
             Some("hello"),
-            false,
-            true
+            /*stdout_is_terminal*/ false,
+            /*stderr_is_terminal*/ true
         ));
     }
 
@@ -600,23 +600,26 @@ mod tests {
     fn prints_final_stdout_message_when_stderr_is_not_terminal() {
         assert!(should_print_final_message_to_stdout(
             Some("hello"),
-            true,
-            false
+            /*stdout_is_terminal*/ true,
+            /*stderr_is_terminal*/ false
         ));
     }
 
     #[test]
     fn suppresses_final_stdout_message_when_missing() {
-        assert!(!should_print_final_message_to_stdout(None, false, false));
+        assert!(!should_print_final_message_to_stdout(
+            /*final_message*/ None, /*stdout_is_terminal*/ false,
+            /*stderr_is_terminal*/ false
+        ));
     }
 
     #[test]
     fn prints_final_tty_message_when_not_yet_rendered() {
         assert!(should_print_final_message_to_tty(
             Some("hello"),
-            false,
-            true,
-            true
+            /*final_message_rendered*/ false,
+            /*stdout_is_terminal*/ true,
+            /*stderr_is_terminal*/ true
         ));
     }
 
@@ -624,9 +627,9 @@ mod tests {
     fn suppresses_final_tty_message_when_already_rendered() {
         assert!(!should_print_final_message_to_tty(
             Some("hello"),
-            true,
-            true,
-            true
+            /*final_message_rendered*/ true,
+            /*stdout_is_terminal*/ true,
+            /*stderr_is_terminal*/ true
         ));
     }
 
@@ -731,6 +734,8 @@ mod tests {
                     status: TurnStatus::Completed,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 
@@ -775,6 +780,8 @@ mod tests {
                     status: TurnStatus::Completed,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 
@@ -815,6 +822,8 @@ mod tests {
                     status: TurnStatus::Completed,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 
@@ -855,6 +864,8 @@ mod tests {
                     status: TurnStatus::Failed,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 
@@ -896,6 +907,8 @@ mod tests {
                     status: TurnStatus::Interrupted,
                     error: None,
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 

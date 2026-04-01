@@ -13,7 +13,10 @@ use crate::CodexAuth;
 use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
+use crate::agent::Mailbox;
+use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
+use crate::agent::status::is_final;
 use crate::apps::render_apps_section;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::commit_attribution::commit_message_trailer_instruction;
@@ -39,6 +42,7 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::render_skills_section;
 use crate::rollout::session_index;
+use crate::session_prefix::format_subagent_notification_message;
 use crate::skills_load_input_from_config;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
@@ -95,6 +99,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
@@ -116,6 +121,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_terminal_detection::user_agent;
+use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -837,7 +843,9 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
-    idle_pending_input: Mutex<Vec<ResponseInputItem>>,
+    mailbox: Mailbox,
+    mailbox_rx: Mutex<MailboxReceiver>,
+    idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -1060,8 +1068,16 @@ impl TurnContext {
             .network
             .as_ref()?;
         Some(TurnContextNetworkItem {
-            allowed_domains: network.allowed_domains.clone().unwrap_or_default(),
-            denied_domains: network.denied_domains.clone().unwrap_or_default(),
+            allowed_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
+                .unwrap_or_default(),
+            denied_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
+                .unwrap_or_default(),
         })
     }
 }
@@ -1930,6 +1946,7 @@ impl Session {
         let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
             watch::channel(false);
 
+        let (mailbox, mailbox_rx) = Mailbox::new();
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -1940,6 +1957,8 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            mailbox,
+            mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
@@ -2657,6 +2676,8 @@ impl Session {
             msg,
         };
         self.send_event_raw(event).await;
+        self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
+            .await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
         self.maybe_clear_realtime_handoff_for_event(&legacy_source)
@@ -2669,6 +2690,73 @@ impl Session {
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
+        }
+    }
+
+    /// Forwards terminal turn events from spawned MultiAgentV2 children to their direct parent.
+    async fn maybe_notify_parent_of_terminal_turn(
+        &self,
+        turn_context: &TurnContext,
+        msg: &EventMsg,
+    ) {
+        if !self.enabled(Feature::MultiAgentV2) {
+            return;
+        }
+
+        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
+            return;
+        }
+
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            agent_path: Some(child_agent_path),
+            ..
+        }) = &turn_context.session_source
+        else {
+            return;
+        };
+
+        let Some(status) = agent_status_from_event(msg) else {
+            return;
+        };
+        if !is_final(&status) {
+            return;
+        }
+
+        self.forward_child_completion_to_parent(*parent_thread_id, child_agent_path, status)
+            .await;
+    }
+
+    /// Sends the standard completion envelope from a spawned MultiAgentV2 child to its parent.
+    async fn forward_child_completion_to_parent(
+        &self,
+        parent_thread_id: ThreadId,
+        child_agent_path: &codex_protocol::AgentPath,
+        status: AgentStatus,
+    ) {
+        let Some(parent_agent_path) = child_agent_path
+            .as_str()
+            .rsplit_once('/')
+            .and_then(|(parent, _)| codex_protocol::AgentPath::try_from(parent).ok())
+        else {
+            return;
+        };
+
+        let message = format_subagent_notification_message(child_agent_path.as_str(), &status);
+        let communication = InterAgentCommunication::new(
+            child_agent_path.clone(),
+            parent_agent_path,
+            Vec::new(),
+            message,
+            /*trigger_turn*/ false,
+        );
+        if let Err(err) = self
+            .services
+            .agent_control
+            .send_inter_agent_communication(parent_thread_id, communication)
+            .await
+        {
+            debug!("failed to notify parent thread {parent_thread_id}: {err}");
         }
     }
 
@@ -4096,6 +4184,18 @@ impl Session {
         }
     }
 
+    pub(crate) fn subscribe_mailbox_seq(&self) -> watch::Receiver<u64> {
+        self.mailbox.subscribe()
+    }
+
+    pub(crate) fn enqueue_mailbox_communication(&self, communication: InterAgentCommunication) {
+        self.mailbox.send(communication);
+    }
+
+    pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
+        self.mailbox_rx.lock().await.has_pending_trigger_turn()
+    }
+
     pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
@@ -4109,28 +4209,37 @@ impl Session {
     }
 
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.take_pending_input()
+        let pending_input = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.take_pending_input()
+                }
+                None => Vec::new(),
             }
-            None => Vec::with_capacity(0),
-        }
-    }
-
-    pub(crate) async fn pending_input_snapshot(&self) -> Vec<ResponseInputItem> {
-        let active = self.active_turn.lock().await;
-        match active.as_ref() {
-            Some(at) => {
-                let ts = at.turn_state.lock().await;
-                ts.pending_input_snapshot()
-            }
-            None => Vec::with_capacity(0),
+        };
+        let mailbox_items = {
+            let mut mailbox_rx = self.mailbox_rx.lock().await;
+            mailbox_rx
+                .drain()
+                .into_iter()
+                .map(|mail| mail.to_response_input_item())
+                .collect::<Vec<_>>()
+        };
+        if pending_input.is_empty() {
+            mailbox_items
+        } else if mailbox_items.is_empty() {
+            pending_input
+        } else {
+            let mut pending_input = pending_input;
+            pending_input.extend(mailbox_items);
+            pending_input
         }
     }
 
     /// Queue response items to be injected into the next active turn created for this session.
+    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
@@ -4144,17 +4253,14 @@ impl Session {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
     }
 
-    pub(crate) async fn queued_response_items_for_next_turn_snapshot(
-        &self,
-    ) -> Vec<ResponseInputItem> {
-        self.idle_pending_input.lock().await.clone()
-    }
-
     pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
         !self.idle_pending_input.lock().await.is_empty()
     }
 
     pub async fn has_pending_input(&self) -> bool {
+        if self.mailbox_rx.lock().await.has_pending() {
+            return true;
+        }
         let active = self.active_turn.lock().await;
         match active.as_ref() {
             Some(at) => {
@@ -4541,10 +4647,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::reload_user_config(&sess).await;
                     false
                 }
-                Op::ListCustomPrompts => {
-                    handlers::list_custom_prompts(&sess, sub.id.clone()).await;
-                    false
-                }
                 Op::ListSkills { cwds, force_reload } => {
                     handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
                     false
@@ -4670,13 +4772,11 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
-    use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::InterAgentCommunication;
-    use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
@@ -4819,25 +4919,17 @@ mod handlers {
         }
     }
 
-    /// Records an inter-agent assistant envelope and, when requested, wakes the recipient by
-    /// starting a regular turn if the session is currently idle.
+    /// Records an inter-agent assistant envelope, then lets the shared pending-work scheduler
+    /// decide whether an idle session should start a regular turn.
     pub async fn inter_agent_communication(
         sess: &Arc<Session>,
         sub_id: String,
         communication: InterAgentCommunication,
     ) {
-        let pending_item = communication.to_response_input_item();
-        if let Ok(()) = sess.inject_response_items(vec![pending_item.clone()]).await {
-            return;
-        }
-
-        sess.queue_response_items_for_next_turn(vec![pending_item])
-            .await;
-        if communication.trigger_turn {
-            let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-            sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-                .await;
-            sess.spawn_task(turn_context, Vec::new(), crate::tasks::RegularTask::new())
+        let trigger_turn = communication.trigger_turn;
+        sess.enqueue_mailbox_communication(communication);
+        if trigger_turn {
+            sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
                 .await;
         }
     }
@@ -5059,23 +5151,6 @@ mod handlers {
         let event = Event {
             id: sub_id,
             msg: EventMsg::McpListToolsResponse(snapshot),
-        };
-        sess.send_event_raw(event).await;
-    }
-
-    pub async fn list_custom_prompts(sess: &Session, sub_id: String) {
-        let custom_prompts: Vec<CustomPrompt> =
-            if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
-                crate::custom_prompts::discover_prompts_in(&dir).await
-            } else {
-                Vec::new()
-            };
-
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
-                custom_prompts,
-            }),
         };
         sess.send_event_raw(event).await;
     }
@@ -6721,7 +6796,7 @@ pub(crate) async fn built_tools(
             )
             .await
             .map(|discoverable_tools| {
-                crate::tools::discoverable::filter_tool_suggest_discoverable_tools_for_client(
+                filter_tool_suggest_discoverable_tools_for_client(
                     discoverable_tools,
                     turn_context.app_server_client_name.as_deref(),
                 )
@@ -7032,7 +7107,6 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TurnDiff(_)
         | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::McpListToolsResponse(_)
-        | EventMsg::ListCustomPromptsResponse(_)
         | EventMsg::ListSkillsResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)

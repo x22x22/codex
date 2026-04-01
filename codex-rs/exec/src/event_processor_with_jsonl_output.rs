@@ -663,6 +663,8 @@ mod tests {
                         codex_error_info: None,
                     }),
                 },
+                completed_at: 0,
+                duration_ms: None,
             },
         ));
 

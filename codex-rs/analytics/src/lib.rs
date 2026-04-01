@@ -1,24 +1,21 @@
-mod analytics_client;
+mod client;
+mod events;
+mod facts;
+mod reducer;
 
-pub use analytics_client::AnalyticsEventsClient;
-pub use analytics_client::AnalyticsFact;
-pub use analytics_client::AnalyticsReducer;
-pub use analytics_client::AppInvocation;
-pub use analytics_client::AppMentionedInput;
-pub use analytics_client::AppUsedInput;
-pub use analytics_client::CodexTurnSteerEvent;
-pub use analytics_client::CustomAnalyticsFact;
-pub use analytics_client::InitializationMode;
-pub use analytics_client::InvocationType;
-pub use analytics_client::PluginState;
-pub use analytics_client::PluginStateChangedInput;
-pub use analytics_client::PluginUsedInput;
-pub use analytics_client::SkillInvocation;
-pub use analytics_client::SkillInvokedInput;
-pub use analytics_client::TrackEventsContext;
-pub use analytics_client::TurnResolvedConfigFact;
-pub use analytics_client::TurnStatus;
-pub use analytics_client::TurnSteerRejectionReason;
-pub use analytics_client::TurnSteerResult;
-pub use analytics_client::TurnSubmissionType;
-pub use analytics_client::build_track_events_context;
+pub use client::AnalyticsEventsClient;
+pub use events::AppServerRpcTransport;
+pub use facts::AppInvocation;
+pub use facts::CodexTurnSteerEvent;
+pub use facts::InvocationType;
+pub use facts::SkillInvocation;
+pub use facts::TrackEventsContext;
+pub use facts::TurnResolvedConfigFact;
+pub use facts::TurnStatus;
+pub use facts::TurnSteerRejectionReason;
+pub use facts::TurnSteerResult;
+pub use facts::TurnSubmissionType;
+pub use facts::build_track_events_context;
+
+#[cfg(test)]
+mod analytics_client_tests;

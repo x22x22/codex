@@ -58,7 +58,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         "2025-01-05T12:00:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let original_path = codex_home
@@ -187,7 +187,12 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    create_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+        /*general_analytics_enabled*/ true,
+    )?;
     enable_analytics_capture(&server, codex_home.path()).await?;
 
     let conversation_id = create_fake_rollout(
@@ -196,7 +201,7 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
         "2025-01-05T12:00:00Z",
         "Saved user message",
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -293,6 +298,7 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
         codex_home.path(),
         &model_server.uri(),
         &chatgpt_base_url,
+        /*general_analytics_enabled*/ false,
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -311,7 +317,7 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
         "2025-01-05T12:00:00Z",
         "Saved user message",
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let refresh_token_url = format!("{}/oauth/token", server.uri());
@@ -375,7 +381,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
         "2025-01-05T12:00:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -553,7 +559,13 @@ fn create_config_toml_with_chatgpt_base_url(
     codex_home: &Path,
     server_uri: &str,
     chatgpt_base_url: &str,
+    general_analytics_enabled: bool,
 ) -> std::io::Result<()> {
+    let general_analytics_toml = if general_analytics_enabled {
+        "\n[features]\ngeneral_analytics = true\n".to_string()
+    } else {
+        String::new()
+    };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
@@ -565,6 +577,7 @@ sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
 
 model_provider = "mock_provider"
+{general_analytics_toml}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
