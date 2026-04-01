@@ -611,7 +611,6 @@ mod tests {
                 prompt: "Compute 11! and reply with just the integer result.".to_string(),
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
-                spawn_mode: AgentSpawnMode::Spawn,
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {
@@ -750,7 +749,6 @@ mod tests {
                 prompt: String::new(),
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
-                spawn_mode: AgentSpawnMode::Spawn,
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {

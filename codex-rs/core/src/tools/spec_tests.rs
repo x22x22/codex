@@ -26,6 +26,7 @@ use codex_tools::WaitAgentTimeoutOptions;
 use codex_tools::create_close_agent_tool_v1;
 use codex_tools::create_close_agent_tool_v2;
 use codex_tools::create_exec_command_tool;
+use codex_tools::create_list_agents_tool;
 use codex_tools::create_request_permissions_tool;
 use codex_tools::create_request_user_input_tool;
 use codex_tools::create_resume_agent_tool;
@@ -36,7 +37,6 @@ use codex_tools::create_spawn_agent_tool_v2;
 use codex_tools::create_view_image_tool;
 use codex_tools::create_wait_agent_tool_v1;
 use codex_tools::create_wait_agent_tool_v2;
-use codex_tools::create_watchdog_self_close_tool;
 use codex_tools::create_write_stdin_tool;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -249,25 +249,6 @@ fn find_namespaced_tool<'a>(
         .expect("expected tool in namespace")
 }
 
-fn find_namespaced_tool<'a>(
-    tools: &'a [ConfiguredToolSpec],
-    namespace: &str,
-    expected_name: &str,
-) -> &'a ResponsesApiTool {
-    let namespace_tool = find_tool(tools, namespace);
-    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
-        panic!("expected {namespace} namespace tool");
-    };
-    namespace
-        .tools
-        .iter()
-        .find_map(|tool| match tool {
-            ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name => Some(tool),
-            _ => None,
-        })
-        .expect("expected tool in namespace")
-}
-
 fn strip_descriptions_schema(schema: &mut JsonSchema) {
     match schema {
         JsonSchema::Boolean { description }
@@ -437,7 +418,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             create_send_message_tool(),
             create_wait_agent_tool_v2(wait_agent_timeout_options()),
             create_close_agent_tool_v2(),
-            create_list_agents_tool_v2(),
+            create_list_agents_tool(),
         ]
     } else {
         let mut collab_specs = vec![
@@ -447,11 +428,6 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             create_wait_agent_tool_v1(wait_agent_timeout_options()),
             create_close_agent_tool_v1(),
         ];
-        if config.agent_watchdog {
-            collab_specs.push(create_list_agents_tool(config.agent_watchdog));
-            collab_specs.push(create_compact_parent_context_tool());
-            collab_specs.push(create_watchdog_self_close_tool());
-        }
         collab_specs
     };
     let spec = create_agent_tools_namespace(collab_specs.split_off(0));
@@ -510,54 +486,6 @@ fn test_build_specs_collab_tools_enabled() {
     };
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
-}
-
-#[test]
-fn test_build_specs_watchdog_collab_tools_include_self_close_tool() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::Collab);
-    features.enable(Feature::AgentWatchdog);
-    features.normalize_dependencies();
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    assert_contains_tool_names(
-        &tools,
-        &[
-            "watchdog_self_close",
-            "compact_parent_context",
-            "list_agents",
-            "close_agent",
-        ],
-    );
-
-    let watchdog_self_close = find_tool(&tools, "watchdog_self_close");
-    let ToolSpec::Function(ResponsesApiTool {
-        defer_loading: Some(deferred),
-        ..
-    }) = &watchdog_self_close.spec
-    else {
-        panic!("watchdog_self_close should be a function tool");
-    };
-    assert_eq!(*deferred, true);
 }
 
 #[test]

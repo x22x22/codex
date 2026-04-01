@@ -55,7 +55,7 @@ use codex_tools::create_code_mode_tool;
 use codex_tools::create_exec_command_tool;
 use codex_tools::create_js_repl_reset_tool;
 use codex_tools::create_js_repl_tool;
-use codex_tools::create_list_agents_tool as create_list_agents_tool_v2;
+use codex_tools::create_list_agents_tool;
 use codex_tools::create_list_dir_tool;
 use codex_tools::create_list_mcp_resource_templates_tool;
 use codex_tools::create_list_mcp_resources_tool;
@@ -78,7 +78,6 @@ use codex_tools::create_view_image_tool;
 use codex_tools::create_wait_agent_tool_v1;
 use codex_tools::create_wait_agent_tool_v2;
 use codex_tools::create_wait_tool;
-use codex_tools::create_watchdog_self_close_tool;
 use codex_tools::create_write_stdin_tool;
 use codex_tools::dynamic_tool_to_responses_api_tool;
 use codex_tools::mcp_tool_to_responses_api_tool;
@@ -460,13 +459,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
-    use crate::tools::handlers::multi_agents::CompactParentContextHandler;
-    use crate::tools::handlers::multi_agents::ListAgentsHandler;
+
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
-    use crate::tools::handlers::multi_agents::WatchdogSelfCloseHandler;
+
     use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
     use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;

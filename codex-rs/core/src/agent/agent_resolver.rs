@@ -2,6 +2,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use codex_protocol::ThreadId;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Resolves a single tool-facing agent target to a thread id.
@@ -26,6 +27,28 @@ pub(crate) async fn resolve_agent_target(
             }
             other => FunctionCallError::RespondToModel(other.to_string()),
         })
+}
+
+pub(crate) async fn resolve_agent_targets(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    targets: Vec<String>,
+) -> Result<Vec<ThreadId>, FunctionCallError> {
+    if targets.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "agent targets must be non-empty".to_string(),
+        ));
+    }
+
+    let mut resolved = Vec::with_capacity(targets.len());
+    let mut dedup = HashSet::with_capacity(targets.len());
+    for target in targets {
+        let thread_id = resolve_agent_target(session, turn, &target).await?;
+        if dedup.insert(thread_id) {
+            resolved.push(thread_id);
+        }
+    }
+    Ok(resolved)
 }
 
 fn register_session_root(session: &Arc<Session>, turn: &Arc<TurnContext>) {

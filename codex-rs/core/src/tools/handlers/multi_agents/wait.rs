@@ -282,7 +282,10 @@ async fn wait_for_final_status(
     loop {
         if status_rx.changed().await.is_err() {
             let latest = session.services.agent_control.get_status(thread_id).await;
-            return is_final(&latest).then_some((thread_id, latest));
+            if is_final(&latest) {
+                return Some((thread_id, latest));
+            }
+            return None;
         }
         status = status_rx.borrow().clone();
         if is_final(&status) {

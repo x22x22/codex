@@ -15,6 +15,8 @@ use codex_protocol::protocol::RolloutItem;
 use std::path::Path;
 use tracing::warn;
 
+const MAX_FORK_REFERENCE_DEPTH: usize = 8;
+
 /// Return the indices of user message boundaries in a rollout.
 ///
 /// A user message boundary is a `RolloutItem::ResponseItem(ResponseItem::Message { .. })`
@@ -155,6 +157,80 @@ fn is_trigger_turn_boundary(item: &ResponseItem) -> bool {
     role == "assistant"
         && InterAgentCommunication::from_message_content(content)
             .is_some_and(|communication| communication.trigger_turn)
+}
+
+pub(crate) async fn materialize_rollout_items_for_replay(
+    codex_home: Option<&Path>,
+    rollout_items: &[RolloutItem],
+) -> Vec<RolloutItem> {
+    let mut materialized = Vec::new();
+    let mut stack: Vec<(Vec<RolloutItem>, usize, usize)> = vec![(rollout_items.to_vec(), 0, 0)];
+
+    while let Some((items, mut idx, depth)) = stack.pop() {
+        while idx < items.len() {
+            match &items[idx] {
+                RolloutItem::ForkReference(reference) => {
+                    if depth >= MAX_FORK_REFERENCE_DEPTH {
+                        warn!(
+                            "skipping fork reference recursion at depth {} for {:?}",
+                            depth, reference.rollout_path
+                        );
+                        idx += 1;
+                        continue;
+                    }
+
+                    let resolved_rollout_path = if let Some(codex_home) = codex_home {
+                        match resolve_fork_reference_rollout_path(
+                            codex_home,
+                            &reference.rollout_path,
+                        )
+                        .await
+                        {
+                            Ok(path) => path,
+                            Err(err) => {
+                                warn!(
+                                    "failed to resolve fork reference rollout {:?}: {err}",
+                                    reference.rollout_path
+                                );
+                                idx += 1;
+                                continue;
+                            }
+                        }
+                    } else {
+                        reference.rollout_path.clone()
+                    };
+
+                    let parent_history = match RolloutRecorder::get_rollout_history(
+                        &resolved_rollout_path,
+                    )
+                    .await
+                    {
+                        Ok(history) => history,
+                        Err(err) => {
+                            warn!(
+                                "failed to load fork reference rollout {:?} (resolved from {:?}): {err}",
+                                resolved_rollout_path, reference.rollout_path
+                            );
+                            idx += 1;
+                            continue;
+                        }
+                    };
+                    let parent_items = truncate_rollout_before_nth_user_message_from_start(
+                        &parent_history.get_rollout_items(),
+                        reference.nth_user_message,
+                    );
+
+                    stack.push((items, idx + 1, depth));
+                    stack.push((parent_items, 0, depth + 1));
+                    break;
+                }
+                item => materialized.push(item.clone()),
+            }
+            idx += 1;
+        }
+    }
+
+    materialized
 }
 
 #[cfg(test)]

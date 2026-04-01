@@ -2,6 +2,8 @@ use super::control::AgentControl;
 use super::registry::AgentRegistry;
 use super::registry::exceeds_thread_spawn_depth_limit;
 use super::status::is_final;
+use crate::agent::control::SpawnAgentForkMode;
+use crate::agent::control::SpawnAgentOptions;
 use crate::codex::load_watchdog_prompt;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -348,20 +350,26 @@ impl WatchdogManager {
         // the owner thread instead, the owner can self-wake and rapidly duplicate session
         // state in memory.
         let spawn_result = control_for_spawn
-            .fork_agent(
+            .spawn_agent_with_metadata(
                 helper_config,
-                vec![UserInput::Text {
-                    text: helper_prompt,
-                    text_elements: Vec::new(),
-                }],
-                snapshot.owner_thread_id,
-                usize::MAX,
-                session_source,
+                codex_protocol::protocol::Op::UserInput {
+                    items: vec![UserInput::Text {
+                        text: helper_prompt,
+                        text_elements: Vec::new(),
+                    }],
+                    final_output_json_schema: None,
+                },
+                Some(session_source),
+                SpawnAgentOptions {
+                    fork_parent_spawn_call_id: Some(format!("watchdog_{target_thread_id}")),
+                    fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                },
             )
             .await;
 
         match spawn_result {
-            Ok(helper_id) => {
+            Ok(helper_agent) => {
+                let helper_id = helper_agent.thread_id;
                 info!("watchdog spawned helper {helper_id} for target {target_thread_id}");
                 self.update_after_spawn(target_thread_id, generation, now, Some(helper_id))
                     .await;

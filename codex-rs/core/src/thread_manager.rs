@@ -967,7 +967,7 @@ async fn truncate_before_nth_user_message(
         .iter()
         .any(|item| matches!(item, RolloutItem::ForkReference(_)))
     {
-        items = truncation::materialize_rollout_items_for_replay(codex_home, &items).await;
+        items = truncation::materialize_rollout_items_for_replay(Some(codex_home), &items).await;
     }
     let user_positions = truncation::user_message_positions_in_rollout(&items);
     let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {

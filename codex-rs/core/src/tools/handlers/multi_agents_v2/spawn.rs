@@ -144,8 +144,16 @@ impl ToolHandler for Handler {
                     initial_agent_op.clone(),
                     Some(spawn_source.clone()),
                     SpawnAgentOptions {
-                        fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
-                        fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
+                        fork_parent_spawn_call_id: if fork_context {
+                            Some(call_id.clone())
+                        } else {
+                            None
+                        },
+                        fork_mode: if fork_context {
+                            Some(SpawnAgentForkMode::FullHistory)
+                        } else {
+                            None
+                        },
                     },
                 )
                 .await;
@@ -261,8 +269,7 @@ struct SpawnAgentArgs {
     model: Option<String>,
     model_fallback_list: Option<Vec<SpawnAgentModelFallbackCandidate>>,
     reasoning_effort: Option<ReasoningEffort>,
-    #[serde(default)]
-    fork_context: bool,
+    fork_context: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
