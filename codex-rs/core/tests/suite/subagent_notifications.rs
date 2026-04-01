@@ -18,6 +18,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -38,6 +39,10 @@ const REQUESTED_MODEL: &str = "gpt-5.1";
 const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
 const ROLE_MODEL: &str = "gpt-5.1-codex-max";
 const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
+const FALLBACK_MODEL_A: &str = "gpt-5.1";
+const FALLBACK_REASONING_EFFORT_A: ReasoningEffort = ReasoningEffort::Low;
+const FALLBACK_MODEL_B: &str = "gpt-5.2";
+const FALLBACK_REASONING_EFFORT_B: ReasoningEffort = ReasoningEffort::Medium;
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     let is_zstd = req
@@ -57,6 +62,57 @@ fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     bytes
         .and_then(|body| String::from_utf8(body).ok())
         .is_some_and(|body| body.contains(text))
+}
+
+fn request_uses_model_and_effort(
+    req: &wiremock::Request,
+    model: &str,
+    reasoning_effort: &str,
+) -> bool {
+    let is_zstd = req
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        });
+    let bytes = if is_zstd {
+        zstd::stream::decode_all(std::io::Cursor::new(&req.body)).ok()
+    } else {
+        Some(req.body.clone())
+    };
+    bytes
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .is_some_and(|body| {
+            body.get("model").and_then(Value::as_str) == Some(model)
+                && body
+                    .get("reasoning")
+                    .and_then(|reasoning| reasoning.get("effort"))
+                    .and_then(Value::as_str)
+                    == Some(reasoning_effort)
+        })
+}
+
+fn request_uses_model(req: &wiremock::Request, model: &str) -> bool {
+    let is_zstd = req
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        });
+    let bytes = if is_zstd {
+        zstd::stream::decode_all(std::io::Cursor::new(&req.body)).ok()
+    } else {
+        Some(req.body.clone())
+    };
+    bytes
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .is_some_and(|body| body.get("model").and_then(Value::as_str) == Some(model))
 }
 
 fn has_subagent_notification(req: &ResponsesRequest) -> bool {
@@ -490,6 +546,184 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
 
     assert_eq!(child_snapshot.model, ROLE_MODEL);
     assert_eq!(child_snapshot.reasoning_effort, Some(ROLE_REASONING_EFFORT));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_model_fallback_list_retries_after_quota_exhaustion() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "model_fallback_list": [
+            {
+                "model": FALLBACK_MODEL_A,
+                "reasoning_effort": FALLBACK_REASONING_EFFORT_A,
+            },
+            {
+                "model": FALLBACK_MODEL_B,
+                "reasoning_effort": FALLBACK_REASONING_EFFORT_B,
+            }
+        ]
+    }))?;
+
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let quota_child_attempt = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT)
+                && request_uses_model_and_effort(req, FALLBACK_MODEL_A, "low")
+                && !body_contains(req, SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-child-quota"),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp-child-quota",
+                    "error": {
+                        "code": "insufficient_quota",
+                        "message": "You exceeded your current quota, please check your plan and billing details."
+                    }
+                }
+            }),
+        ]),
+    )
+    .await;
+
+    let fallback_child_attempt = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT)
+                && request_uses_model(req, FALLBACK_MODEL_B)
+                && !body_contains(req, SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-child-fallback"),
+            ev_assistant_message("msg-child-fallback", "child done"),
+            ev_completed("resp-child-fallback"),
+        ]),
+    )
+    .await;
+
+    let _turn1_followup = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config.model = Some(INHERITED_MODEL.to_string());
+        config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let quota_requests = quota_child_attempt
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request.body_json().get("model").and_then(Value::as_str) == Some(FALLBACK_MODEL_A)
+        })
+        .collect::<Vec<_>>();
+    assert!(!quota_requests.is_empty());
+    for quota_request in &quota_requests {
+        let body = quota_request.body_json();
+        assert_eq!(
+            body.get("model").and_then(Value::as_str),
+            Some(FALLBACK_MODEL_A)
+        );
+        assert_eq!(
+            body.get("reasoning")
+                .and_then(|reasoning| reasoning.get("effort"))
+                .and_then(Value::as_str),
+            Some("low")
+        );
+    }
+
+    let fallback_requests = fallback_child_attempt
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request.body_json().get("model").and_then(Value::as_str) == Some(FALLBACK_MODEL_B)
+        })
+        .collect::<Vec<_>>();
+    assert!(!fallback_requests.is_empty());
+    for fallback_request in &fallback_requests {
+        let fallback_body = fallback_request.body_json();
+        assert_eq!(
+            fallback_body.get("model").and_then(Value::as_str),
+            Some(FALLBACK_MODEL_B)
+        );
+        if let Some(effort) = fallback_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("effort"))
+            .and_then(Value::as_str)
+        {
+            assert_eq!(effort, "medium");
+        }
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_snapshot = loop {
+        let spawned_ids = test
+            .thread_manager
+            .list_thread_ids()
+            .await
+            .into_iter()
+            .filter(|id| *id != test.session_configured.session_id)
+            .collect::<Vec<_>>();
+        let mut matching_snapshot = None;
+        for thread_id in spawned_ids {
+            let snapshot = test
+                .thread_manager
+                .get_thread(thread_id)
+                .await?
+                .config_snapshot()
+                .await;
+            if snapshot.model == FALLBACK_MODEL_B
+                && snapshot.reasoning_effort == Some(FALLBACK_REASONING_EFFORT_B)
+            {
+                matching_snapshot = Some(snapshot);
+                break;
+            }
+        }
+        if let Some(snapshot) = matching_snapshot {
+            break snapshot;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for fallback child snapshot");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+
+    assert_eq!(child_snapshot.model, FALLBACK_MODEL_B);
+    assert_eq!(
+        child_snapshot.reasoning_effort,
+        Some(FALLBACK_REASONING_EFFORT_B)
+    );
 
     Ok(())
 }

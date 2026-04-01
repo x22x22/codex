@@ -34,14 +34,13 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
-        let fork_mode = args.fork_mode()?;
         let role_name = args
             .agent_type
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
 
-        let initial_operation = parse_collab_input(/*message*/ None, Some(args.items))?;
+        let initial_operation = parse_collab_input(args.message, args.items)?;
         let prompt = render_input_preview(&initial_operation);
 
         let session_source = turn.session_source.clone();
@@ -63,24 +62,18 @@ impl ToolHandler for Handler {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
-                    model: if fork_context {
-                        String::new()
-                    } else {
-                        args.model_fallback_list
-                            .as_ref()
-                            .and_then(|list| list.first())
-                            .map(|candidate| candidate.model.clone())
-                            .unwrap_or_else(|| args.model.clone().unwrap_or_default())
-                    },
-                    reasoning_effort: if fork_context {
-                        ReasoningEffort::default()
-                    } else {
-                        args.model_fallback_list
-                            .as_ref()
-                            .and_then(|list| list.first())
-                            .and_then(|candidate| candidate.reasoning_effort)
-                            .unwrap_or_else(|| args.reasoning_effort.unwrap_or_default())
-                    },
+                    model: args
+                        .model_fallback_list
+                        .as_ref()
+                        .and_then(|list| list.first())
+                        .map(|candidate| candidate.model.clone())
+                        .unwrap_or_else(|| args.model.clone().unwrap_or_default()),
+                    reasoning_effort: args
+                        .model_fallback_list
+                        .as_ref()
+                        .and_then(|list| list.first())
+                        .and_then(|candidate| candidate.reasoning_effort)
+                        .unwrap_or_else(|| args.reasoning_effort.unwrap_or_default()),
                 }
                 .into(),
             )
@@ -95,80 +88,49 @@ impl ToolHandler for Handler {
             role_name,
             Some(args.task_name.clone()),
         )?;
-        let result = session
-            .services
-            .agent_control
-            .spawn_agent_with_metadata(
-                config,
-                match (spawn_source.get_agent_path(), initial_operation) {
-                    (Some(recipient), Op::UserInput { items, .. })
-                        if items
-                            .iter()
-                            .all(|item| matches!(item, UserInput::Text { .. })) =>
-                    {
-                        Op::InterAgentCommunication {
-                            communication: InterAgentCommunication::new(
-                                turn.session_source
-                                    .get_agent_path()
-                                    .unwrap_or_else(AgentPath::root),
-                                recipient,
-                                Vec::new(),
-                                prompt.clone(),
-                                /*trigger_turn*/ true,
-                            ),
-                        }
-                    }
-                    (_, initial_operation) => initial_operation,
-                },
-                Some(spawn_source),
-                SpawnAgentOptions {
-                    fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
-                    fork_mode,
-                },
-            )
-            .await
-            .map_err(collab_spawn_error);
-        let (new_thread_id, new_agent_metadata, status) = match &result {
-            Ok(spawned_agent) => (
-                Some(spawned_agent.thread_id),
-                Some(spawned_agent.metadata.clone()),
-                spawned_agent.status.clone(),
-            ),
-            Err(_) => (None, None, AgentStatus::NotFound),
+        let initial_agent_op = match (spawn_source.get_agent_path(), initial_operation) {
+            (Some(recipient), Op::UserInput { items, .. })
+                if items
+                    .iter()
+                    .all(|item| matches!(item, UserInput::Text { .. })) =>
+            {
+                Op::InterAgentCommunication {
+                    communication: InterAgentCommunication::new(
+                        turn.session_source
+                            .get_agent_path()
+                            .unwrap_or_else(AgentPath::root),
+                        recipient,
+                        Vec::new(),
+                        prompt.clone(),
+                        /*trigger_turn*/ true,
+                    ),
+                }
+            }
+            (_, initial_operation) => initial_operation,
         };
-        let candidates_to_try = if fork_context {
-            vec![SpawnAgentModelCandidate {
+        let mut candidates_to_try = collect_spawn_agent_model_candidates(
+            args.model_fallback_list.as_ref(),
+            args.model.as_deref(),
+            args.reasoning_effort,
+        );
+        if candidates_to_try.is_empty() {
+            candidates_to_try.push(SpawnAgentModelCandidate {
                 model: None,
                 reasoning_effort: None,
-            }]
-        } else {
-            let mut candidates = collect_spawn_agent_model_candidates(
-                args.model_fallback_list.as_ref(),
-                args.model.as_deref(),
-                args.reasoning_effort,
-            );
-            if candidates.is_empty() {
-                candidates.push(SpawnAgentModelCandidate {
-                    model: None,
-                    reasoning_effort: None,
-                });
-            }
-            candidates
-        };
+            });
+        }
 
         let mut spawn_result = None;
         for (idx, candidate) in candidates_to_try.iter().enumerate() {
             let mut candidate_config = config.clone();
-            if !fork_context {
-                apply_requested_spawn_agent_model_overrides(
-                    &session,
-                    turn.as_ref(),
-                    &mut candidate_config,
-                    candidate.model.as_deref(),
-                    candidate.reasoning_effort,
-                )
-                .await?;
-            }
+            apply_requested_spawn_agent_model_overrides(
+                &session,
+                turn.as_ref(),
+                &mut candidate_config,
+                candidate.model.as_deref(),
+                candidate.reasoning_effort,
+            )
+            .await?;
             apply_role_to_config(&mut candidate_config, role_name)
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
@@ -189,6 +151,16 @@ impl ToolHandler for Handler {
                 .await;
             match attempt_result {
                 Ok(spawned_agent) => {
+                    if spawn_should_retry_on_async_quota_exhaustion(
+                        spawned_agent.status.clone(),
+                        spawned_agent.thread_id,
+                        &session.services.agent_control,
+                    )
+                    .await
+                        && idx + 1 < candidates_to_try.len()
+                    {
+                        continue;
+                    }
                     spawn_result = Some(spawned_agent);
                     break;
                 }
@@ -281,55 +253,16 @@ impl ToolHandler for Handler {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SpawnAgentArgs {
-    items: Vec<UserInput>,
+    message: Option<String>,
+    items: Option<Vec<UserInput>>,
     task_name: String,
     agent_type: Option<String>,
     model: Option<String>,
     model_fallback_list: Option<Vec<SpawnAgentModelFallbackCandidate>>,
     reasoning_effort: Option<ReasoningEffort>,
-    fork_turns: Option<String>,
-    fork_context: Option<bool>,
-}
-
-impl SpawnAgentArgs {
-    fn fork_mode(&self) -> Result<Option<SpawnAgentForkMode>, FunctionCallError> {
-        if self.fork_context.is_some() {
-            return Err(FunctionCallError::RespondToModel(
-                "fork_context is not supported in MultiAgentV2; use fork_turns instead".to_string(),
-            ));
-        }
-
-        let Some(fork_turns) = self
-            .fork_turns
-            .as_deref()
-            .map(str::trim)
-            .filter(|fork_turns| !fork_turns.is_empty())
-        else {
-            return Ok(None);
-        };
-
-        if fork_turns.eq_ignore_ascii_case("none") {
-            return Ok(None);
-        }
-        if fork_turns.eq_ignore_ascii_case("all") {
-            return Ok(Some(SpawnAgentForkMode::FullHistory));
-        }
-
-        let last_n_turns = fork_turns.parse::<usize>().map_err(|_| {
-            FunctionCallError::RespondToModel(
-                "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
-            )
-        })?;
-        if last_n_turns == 0 {
-            return Err(FunctionCallError::RespondToModel(
-                "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
-            ));
-        }
-
-        Ok(Some(SpawnAgentForkMode::LastNTurns(last_n_turns)))
-    }
+    #[serde(default)]
+    fork_context: bool,
 }
 
 #[derive(Debug, Serialize)]
