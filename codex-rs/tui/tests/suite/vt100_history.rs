@@ -1,4 +1,4 @@
-#![cfg(feature = "vt100-tests")]
+#![cfg(debug_assertions)]
 #![expect(clippy::expect_used)]
 
 use crate::test_backend::VT100Backend;
