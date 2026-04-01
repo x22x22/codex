@@ -54,6 +54,12 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
+use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::AppInvocation;
+use codex_analytics::InvocationType;
+use codex_analytics::TurnResolvedConfigFact;
+use codex_analytics::TurnSubmissionType;
+use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_exec_server::Environment;
@@ -354,12 +360,6 @@ use crate::turn_timing::record_turn_ttft_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::AppInvocation;
-use codex_analytics::InvocationType;
-use codex_analytics::TurnResolvedConfigFact;
-use codex_analytics::TurnSubmissionType;
-use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_otel::SessionTelemetry;
@@ -6226,6 +6226,7 @@ pub(crate) async fn run_turn(
             }
         }
     }
+
     last_agent_message
 }
 
