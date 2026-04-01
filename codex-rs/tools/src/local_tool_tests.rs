@@ -364,6 +364,15 @@ fn request_permissions_tool_includes_full_permission_schema() {
 }
 
 #[test]
+fn request_permissions_tool_description_matches_expected_copy() {
+    assert_eq!(
+        request_permissions_tool_description(),
+        "Request additional filesystem or network permissions from the user and wait for the client to grant a subset of the requested permission profile. Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session if the client approves them at session scope."
+            .to_string()
+    );
+}
+
+#[test]
 fn shell_command_tool_matches_expected_spec() {
     let tool = create_shell_command_tool(CommandToolOptions {
         allow_login_shell: true,
