@@ -14,7 +14,6 @@ use async_channel::Sender;
 use async_channel::TrySendError;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_api::ApiError;
 use codex_api::Provider as ApiProvider;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
@@ -22,13 +21,8 @@ use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebrtcClient;
-use codex_api::RealtimeWebrtcConnection;
 use codex_api::endpoint::realtime_webrtc::RealtimeWebrtcEvents;
 use codex_api::endpoint::realtime_webrtc::RealtimeWebrtcWriter;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketClient;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketConnection;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -112,11 +106,10 @@ struct OutputAudioState {
 }
 
 struct RealtimeInputTask {
-    writer: RealtimeTransportWriter,
-    events: RealtimeTransportEvents,
+    writer: RealtimeWebrtcWriter,
+    events: RealtimeWebrtcEvents,
     user_text_rx: Receiver<String>,
     handoff_output_rx: Receiver<HandoffOutput>,
-    audio_rx: Option<Receiver<RealtimeAudioFrame>>,
     events_tx: Sender<RealtimeEvent>,
     handoff_state: RealtimeHandoffState,
     session_kind: RealtimeSessionKind,
@@ -137,103 +130,12 @@ impl RealtimeHandoffState {
 struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     user_text_tx: Sender<String>,
-    writer: RealtimeTransportWriter,
+    writer: RealtimeWebrtcWriter,
     handoff: RealtimeHandoffState,
-    audio_bridge_task: Option<JoinHandle<()>>,
+    audio_bridge_task: JoinHandle<()>,
     input_task: JoinHandle<()>,
     fanout_task: Option<JoinHandle<()>>,
     realtime_active: Arc<AtomicBool>,
-}
-
-enum RealtimeTransportConnection {
-    Websocket(RealtimeWebsocketConnection),
-    Webrtc(RealtimeWebrtcConnection),
-}
-
-#[derive(Clone)]
-enum RealtimeTransportWriter {
-    Websocket(RealtimeWebsocketWriter),
-    Webrtc(RealtimeWebrtcWriter),
-}
-
-#[derive(Clone)]
-enum RealtimeTransportEvents {
-    Websocket(RealtimeWebsocketEvents),
-    Webrtc(RealtimeWebrtcEvents),
-}
-
-impl RealtimeTransportConnection {
-    fn writer(&self) -> RealtimeTransportWriter {
-        match self {
-            Self::Websocket(connection) => RealtimeTransportWriter::Websocket(connection.writer()),
-            Self::Webrtc(connection) => RealtimeTransportWriter::Webrtc(connection.writer()),
-        }
-    }
-
-    fn events(&self) -> RealtimeTransportEvents {
-        match self {
-            Self::Websocket(connection) => RealtimeTransportEvents::Websocket(connection.events()),
-            Self::Webrtc(connection) => RealtimeTransportEvents::Webrtc(connection.events()),
-        }
-    }
-}
-
-impl RealtimeTransportWriter {
-    async fn send_audio_frame(&self, frame: RealtimeAudioFrame) -> Result<(), ApiError> {
-        match self {
-            Self::Websocket(writer) => writer.send_audio_frame(frame).await,
-            Self::Webrtc(writer) => writer.send_audio_frame(frame).await,
-        }
-    }
-
-    async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
-        match self {
-            Self::Websocket(writer) => writer.send_conversation_item_create(text).await,
-            Self::Webrtc(writer) => writer.send_conversation_item_create(text).await,
-        }
-    }
-
-    async fn send_conversation_handoff_append(
-        &self,
-        handoff_id: String,
-        output_text: String,
-    ) -> Result<(), ApiError> {
-        match self {
-            Self::Websocket(writer) => {
-                writer
-                    .send_conversation_handoff_append(handoff_id, output_text)
-                    .await
-            }
-            Self::Webrtc(writer) => {
-                writer
-                    .send_conversation_handoff_append(handoff_id, output_text)
-                    .await
-            }
-        }
-    }
-
-    async fn send_response_create(&self) -> Result<(), ApiError> {
-        match self {
-            Self::Websocket(writer) => writer.send_response_create().await,
-            Self::Webrtc(writer) => writer.send_response_create().await,
-        }
-    }
-
-    async fn send_payload(&self, payload: String) -> Result<(), ApiError> {
-        match self {
-            Self::Websocket(writer) => writer.send_payload(payload).await,
-            Self::Webrtc(writer) => writer.send_payload(payload).await,
-        }
-    }
-}
-
-impl RealtimeTransportEvents {
-    async fn next_event(&self) -> Result<Option<RealtimeEvent>, ApiError> {
-        match self {
-            Self::Websocket(events) => events.next_event().await,
-            Self::Webrtc(events) => events.next_event().await,
-        }
-    }
 }
 
 #[allow(dead_code)]
@@ -269,34 +171,15 @@ impl RealtimeConversationManager {
             RealtimeEventParser::RealtimeV2 => RealtimeSessionKind::V2,
         };
 
-        let connection = match session_kind {
-            RealtimeSessionKind::V1 => {
-                let client = RealtimeWebsocketClient::new(api_provider);
-                RealtimeTransportConnection::Websocket(
-                    client
-                        .connect(
-                            session_config,
-                            extra_headers.unwrap_or_default(),
-                            default_headers(),
-                        )
-                        .await
-                        .map_err(map_api_error)?,
-                )
-            }
-            RealtimeSessionKind::V2 => {
-                let client = RealtimeWebrtcClient::new(api_provider);
-                RealtimeTransportConnection::Webrtc(
-                    client
-                        .connect(
-                            session_config,
-                            extra_headers.unwrap_or_default(),
-                            default_headers(),
-                        )
-                        .await
-                        .map_err(map_api_error)?,
-                )
-            }
-        };
+        let client = RealtimeWebrtcClient::new(api_provider);
+        let connection = client
+            .connect(
+                session_config,
+                extra_headers.unwrap_or_default(),
+                default_headers(),
+            )
+            .await
+            .map_err(map_api_error)?;
 
         let writer = connection.writer();
         let events = connection.events();
@@ -311,20 +194,13 @@ impl RealtimeConversationManager {
 
         let realtime_active = Arc::new(AtomicBool::new(true));
         let handoff = RealtimeHandoffState::new(handoff_output_tx, session_kind);
-        let audio_bridge_task = match &writer {
-            RealtimeTransportWriter::Websocket(_) => None,
-            RealtimeTransportWriter::Webrtc(writer) => Some(spawn_realtime_audio_bridge(
-                writer.clone(),
-                audio_rx.clone(),
-                events_tx.clone(),
-            )),
-        };
+        let audio_bridge_task =
+            spawn_realtime_audio_bridge(writer.clone(), audio_rx, events_tx.clone());
         let task = spawn_realtime_input_task(RealtimeInputTask {
             writer: writer.clone(),
             events,
             user_text_rx,
             handoff_output_rx,
-            audio_rx: matches!(session_kind, RealtimeSessionKind::V1).then_some(audio_rx),
             events_tx,
             handoff_state: handoff.clone(),
             session_kind,
@@ -517,10 +393,8 @@ async fn stop_conversation_state(
     fanout_task_stop: RealtimeFanoutTaskStop,
 ) {
     state.realtime_active.store(false, Ordering::Relaxed);
-    if let Some(audio_bridge_task) = state.audio_bridge_task.take() {
-        audio_bridge_task.abort();
-        let _ = audio_bridge_task.await;
-    }
+    state.audio_bridge_task.abort();
+    let _ = state.audio_bridge_task.await;
     state.input_task.abort();
     let _ = state.input_task.await;
 
@@ -837,7 +711,6 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
         events,
         user_text_rx,
         handoff_output_rx,
-        audio_rx,
         events_tx,
         handoff_state,
         session_kind,
@@ -1075,33 +948,9 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
                         }
                     }
                 }
-                frame = recv_realtime_audio_frame(&audio_rx) => {
-                    match frame {
-                        Ok(frame) => {
-                            if let Err(err) = writer.send_audio_frame(frame).await {
-                                let mapped_error = map_api_error(err);
-                                error!("failed to send input audio: {mapped_error}");
-                                let _ = events_tx
-                                    .send(RealtimeEvent::Error(mapped_error.to_string()))
-                                    .await;
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
             }
         }
     })
-}
-
-async fn recv_realtime_audio_frame(
-    audio_rx: &Option<Receiver<RealtimeAudioFrame>>,
-) -> Result<RealtimeAudioFrame, async_channel::RecvError> {
-    match audio_rx {
-        Some(audio_rx) => audio_rx.recv().await,
-        None => std::future::pending().await,
-    }
 }
 
 fn update_output_audio_state(
