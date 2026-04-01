@@ -36,6 +36,15 @@ fn tool_spec_name_covers_all_variants() {
         "lookup_order"
     );
     assert_eq!(
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "agents".to_string(),
+            description: "Agent tools".to_string(),
+            tools: Vec::new(),
+        })
+        .name(),
+        "agents"
+    );
+    assert_eq!(
         ToolSpec::ToolSearch {
             execution: "sync".to_string(),
             description: "Search for tools".to_string(),

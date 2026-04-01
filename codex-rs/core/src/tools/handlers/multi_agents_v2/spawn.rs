@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
@@ -34,13 +35,14 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+        let fork_mode = args.fork_mode()?;
         let role_name = args
             .agent_type
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
 
-        let initial_operation = parse_collab_input(args.message, args.items)?;
+        let initial_operation = parse_collab_input(/*message*/ None, Some(args.items))?;
         let prompt = render_input_preview(&initial_operation);
 
         let session_source = turn.session_source.clone();
@@ -94,25 +96,46 @@ impl ToolHandler for Handler {
             role_name,
             Some(args.task_name.clone()),
         )?;
-        let initial_agent_op = match (spawn_source.get_agent_path(), initial_operation) {
-            (Some(recipient), Op::UserInput { items, .. })
-                if items
-                    .iter()
-                    .all(|item| matches!(item, UserInput::Text { .. })) =>
-            {
-                Op::InterAgentCommunication {
-                    communication: InterAgentCommunication::new(
-                        turn.session_source
-                            .get_agent_path()
-                            .unwrap_or_else(AgentPath::root),
-                        recipient,
-                        Vec::new(),
-                        prompt.clone(),
-                        /*trigger_turn*/ true,
-                    ),
-                }
-            }
-            (_, initial_operation) => initial_operation,
+        let result = session
+            .services
+            .agent_control
+            .spawn_agent_with_metadata(
+                config,
+                match (spawn_source.get_agent_path(), initial_operation) {
+                    (Some(recipient), Op::UserInput { items, .. })
+                        if items
+                            .iter()
+                            .all(|item| matches!(item, UserInput::Text { .. })) =>
+                    {
+                        Op::InterAgentCommunication {
+                            communication: InterAgentCommunication::new(
+                                turn.session_source
+                                    .get_agent_path()
+                                    .unwrap_or_else(AgentPath::root),
+                                recipient,
+                                Vec::new(),
+                                prompt.clone(),
+                                /*trigger_turn*/ true,
+                            ),
+                        }
+                    }
+                    (_, initial_operation) => initial_operation,
+                },
+                Some(spawn_source),
+                SpawnAgentOptions {
+                    fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
+                    fork_mode,
+                },
+            )
+            .await
+            .map_err(collab_spawn_error);
+        let (new_thread_id, new_agent_metadata, status) = match &result {
+            Ok(spawned_agent) => (
+                Some(spawned_agent.thread_id),
+                Some(spawned_agent.metadata.clone()),
+                spawned_agent.status.clone(),
+            ),
+            Err(_) => (None, None, AgentStatus::NotFound),
         };
         let candidates_to_try = if fork_context {
             vec![SpawnAgentModelCandidate {
@@ -264,15 +287,55 @@ impl ToolHandler for Handler {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SpawnAgentArgs {
-    message: Option<String>,
-    items: Option<Vec<UserInput>>,
+    items: Vec<UserInput>,
     task_name: String,
     agent_type: Option<String>,
     model: Option<String>,
     model_fallback_list: Option<Vec<SpawnAgentModelFallbackCandidate>>,
     reasoning_effort: Option<ReasoningEffort>,
+    fork_turns: Option<String>,
     fork_context: Option<bool>,
+}
+
+impl SpawnAgentArgs {
+    fn fork_mode(&self) -> Result<Option<SpawnAgentForkMode>, FunctionCallError> {
+        if self.fork_context.is_some() {
+            return Err(FunctionCallError::RespondToModel(
+                "fork_context is not supported in MultiAgentV2; use fork_turns instead".to_string(),
+            ));
+        }
+
+        let Some(fork_turns) = self
+            .fork_turns
+            .as_deref()
+            .map(str::trim)
+            .filter(|fork_turns| !fork_turns.is_empty())
+        else {
+            return Ok(None);
+        };
+
+        if fork_turns.eq_ignore_ascii_case("none") {
+            return Ok(None);
+        }
+        if fork_turns.eq_ignore_ascii_case("all") {
+            return Ok(Some(SpawnAgentForkMode::FullHistory));
+        }
+
+        let last_n_turns = fork_turns.parse::<usize>().map_err(|_| {
+            FunctionCallError::RespondToModel(
+                "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
+            )
+        })?;
+        if last_n_turns == 0 {
+            return Err(FunctionCallError::RespondToModel(
+                "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
+            ));
+        }
+
+        Ok(Some(SpawnAgentForkMode::LastNTurns(last_n_turns)))
+    }
 }
 
 #[derive(Debug, Serialize)]

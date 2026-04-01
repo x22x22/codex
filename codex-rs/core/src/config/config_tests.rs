@@ -244,44 +244,22 @@ web_search = false
 }
 
 #[test]
-fn config_toml_deserializes_custom_models() {
-    let custom_models = r#"
-[[custom_models]]
-name = "gpt-5.4 1m"
-model = "gpt-5.4"
-model_context_window = 1000000
-model_auto_compact_token_limit = 900000
-"#;
-    let custom_models_cfg = toml::from_str::<ConfigToml>(custom_models)
-        .expect("TOML deserialization should succeed for custom models");
+fn rejects_provider_auth_with_env_key() {
+    let err = toml::from_str::<ConfigToml>(
+        r#"
+[model_providers.corp]
+name = "Corp"
+env_key = "CORP_TOKEN"
 
-    assert_eq!(
-        custom_models_cfg.custom_models,
-        vec![CustomModelToml {
-            name: "gpt-5.4 1m".to_string(),
-            model: "gpt-5.4".to_string(),
-            model_context_window: Some(1_000_000),
-            model_auto_compact_token_limit: Some(900_000),
-        }]
-    );
-
-    let config = Config::load_from_base_config_with_overrides(
-        custom_models_cfg,
-        ConfigOverrides::default(),
-        tempdir().expect("tempdir").path().to_path_buf(),
+[model_providers.corp.auth]
+command = "print-token"
+"#,
     )
-    .expect("load config from custom models settings");
+    .unwrap_err();
 
-    assert_eq!(
-        config.custom_models,
-        HashMap::from([(
-            "gpt-5.4 1m".to_string(),
-            CustomModelConfig {
-                model: "gpt-5.4".to_string(),
-                model_context_window: Some(1_000_000),
-                model_auto_compact_token_limit: Some(900_000),
-            },
-        )])
+    assert!(
+        err.to_string()
+            .contains("model_providers.corp: provider auth cannot be combined with env_key")
     );
 }
 
@@ -4399,6 +4377,7 @@ model_verbosity = "high"
         wire_api: crate::WireApi::Responses,
         env_key_instructions: None,
         experimental_bearer_token: None,
+        auth: None,
         query_params: None,
         http_headers: None,
         env_http_headers: None,

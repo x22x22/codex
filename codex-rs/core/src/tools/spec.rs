@@ -7,10 +7,6 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
-use crate::tools::discoverable::DiscoverablePluginInfo;
-use crate::tools::discoverable::DiscoverableTool;
-use crate::tools::discoverable::DiscoverableToolAction;
-use crate::tools::discoverable::DiscoverableToolType;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::tools::handlers::TOOL_SEARCH_TOOL_NAME;
@@ -41,11 +37,14 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_tools::CommandToolOptions;
+use codex_tools::DiscoverableTool;
+use codex_tools::DiscoverableToolType;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ResponsesApiTool;
 use codex_tools::ShellToolOptions;
 use codex_tools::SpawnAgentToolOptions;
+use codex_tools::ToolSearchAppInfo;
+use codex_tools::ToolSuggestEntry;
 use codex_tools::ViewImageToolOptions;
 use codex_tools::WaitAgentTimeoutOptions;
 use codex_tools::augment_tool_spec_for_code_mode;
@@ -73,6 +72,8 @@ use codex_tools::create_spawn_agent_tool_v1;
 use codex_tools::create_spawn_agent_tool_v2;
 use codex_tools::create_spawn_agents_on_csv_tool;
 use codex_tools::create_test_sync_tool;
+use codex_tools::create_tool_search_tool;
+use codex_tools::create_tool_suggest_tool;
 use codex_tools::create_view_image_tool;
 use codex_tools::create_wait_agent_tool_v1;
 use codex_tools::create_wait_agent_tool_v2;
@@ -83,37 +84,21 @@ use codex_tools::dynamic_tool_to_responses_api_tool;
 use codex_tools::mcp_tool_to_responses_api_tool;
 use codex_tools::tool_spec_to_code_mode_tool_definition;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_template::Template;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::LazyLock;
 
 pub type JsonSchema = codex_tools::JsonSchema;
 
 #[cfg(test)]
 pub(crate) use codex_tools::mcp_call_tool_result_output_schema;
 
-const TOOL_SEARCH_DESCRIPTION_TEMPLATE_SOURCE: &str =
-    include_str!("../../templates/search_tool/tool_description.md");
-const TOOL_SEARCH_DESCRIPTION_TEMPLATE_KEY: &str = "app_descriptions";
+const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
 const AGENT_TOOLS_NAMESPACE: &str = "agents";
 const AGENT_TOOLS_NAMESPACE_DESCRIPTION: &str = "Agent collaboration tools for spawning, messaging, waiting on, listing, and closing subagents.";
-static TOOL_SEARCH_DESCRIPTION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(TOOL_SEARCH_DESCRIPTION_TEMPLATE_SOURCE)
-        .unwrap_or_else(|err| panic!("tool_search description template must parse: {err}"))
-});
-const TOOL_SUGGEST_DESCRIPTION_TEMPLATE_SOURCE: &str =
-    include_str!("../../templates/search_tool/tool_suggest_description.md");
-const TOOL_SUGGEST_DESCRIPTION_TEMPLATE_KEY: &str = "discoverable_tools";
-static TOOL_SUGGEST_DESCRIPTION_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(TOOL_SUGGEST_DESCRIPTION_TEMPLATE_SOURCE)
-        .unwrap_or_else(|err| panic!("tool_suggest description template must parse: {err}"))
-});
-const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
@@ -383,223 +368,6 @@ fn supports_image_generation(model_info: &ModelInfo) -> bool {
     model_info.input_modalities.contains(&InputModality::Image)
 }
 
-fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "query".to_string(),
-            JsonSchema::String {
-                description: Some("Search query for apps tools.".to_string()),
-            },
-        ),
-        (
-            "limit".to_string(),
-            JsonSchema::Number {
-                description: Some(format!(
-                    "Maximum number of tools to return (defaults to {TOOL_SEARCH_DEFAULT_LIMIT})."
-                )),
-            },
-        ),
-    ]);
-    let mut app_descriptions = BTreeMap::from([(
-        AGENT_TOOLS_NAMESPACE.to_string(),
-        Some(AGENT_TOOLS_NAMESPACE_DESCRIPTION.to_string()),
-    )]);
-    for tool in app_tools.values() {
-        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            continue;
-        }
-
-        let Some(connector_name) = tool
-            .connector_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|connector_name| !connector_name.is_empty())
-        else {
-            continue;
-        };
-
-        let connector_description = tool
-            .connector_description
-            .as_deref()
-            .map(str::trim)
-            .filter(|connector_description| !connector_description.is_empty())
-            .map(str::to_string);
-
-        app_descriptions
-            .entry(connector_name.to_string())
-            .and_modify(|existing: &mut Option<String>| {
-                if existing.is_none() {
-                    *existing = connector_description.clone();
-                }
-            })
-            .or_insert(connector_description);
-    }
-
-    let app_descriptions = if app_descriptions.is_empty() {
-        "None currently enabled.".to_string()
-    } else {
-        app_descriptions
-            .into_iter()
-            .map(
-                |(connector_name, connector_description)| match connector_description {
-                    Some(connector_description) => {
-                        format!("- {connector_name}: {connector_description}")
-                    }
-                    None => format!("- {connector_name}"),
-                },
-            )
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    let description = TOOL_SEARCH_DESCRIPTION_TEMPLATE
-        .render([(
-            TOOL_SEARCH_DESCRIPTION_TEMPLATE_KEY,
-            app_descriptions.as_str(),
-        )])
-        .unwrap_or_else(|err| panic!("tool_search description template must render: {err}"));
-
-    ToolSpec::ToolSearch {
-        execution: "client".to_string(),
-        description,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["query".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    }
-}
-
-fn create_tool_suggest_tool(discoverable_tools: &[DiscoverableTool]) -> ToolSpec {
-    let discoverable_tool_ids = discoverable_tools
-        .iter()
-        .map(DiscoverableTool::id)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let properties = BTreeMap::from([
-        (
-            "tool_type".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "action_type".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Suggested action for the tool. Use \"install\" or \"enable\".".to_string(),
-                ),
-            },
-        ),
-        (
-            "tool_id".to_string(),
-            JsonSchema::String {
-                description: Some(format!(
-                    "Connector or plugin id to suggest. Must be one of: {discoverable_tool_ids}."
-                )),
-            },
-        ),
-        (
-            "suggest_reason".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Concise one-line user-facing reason why this tool can help with the current request."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-    let discoverable_tools = format_discoverable_tools(discoverable_tools);
-    let description = TOOL_SUGGEST_DESCRIPTION_TEMPLATE
-        .render([(
-            TOOL_SUGGEST_DESCRIPTION_TEMPLATE_KEY,
-            discoverable_tools.as_str(),
-        )])
-        .unwrap_or_else(|err| panic!("tool_suggest description template must render: {err}"));
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: TOOL_SUGGEST_TOOL_NAME.to_string(),
-        description,
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec![
-                "tool_type".to_string(),
-                "action_type".to_string(),
-                "tool_id".to_string(),
-                "suggest_reason".to_string(),
-            ]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn format_discoverable_tools(discoverable_tools: &[DiscoverableTool]) -> String {
-    let mut discoverable_tools = discoverable_tools.to_vec();
-    discoverable_tools.sort_by(|left, right| {
-        left.name()
-            .cmp(right.name())
-            .then_with(|| left.id().cmp(right.id()))
-    });
-
-    discoverable_tools
-        .into_iter()
-        .map(|tool| {
-            let description = tool
-                .description()
-                .filter(|description| !description.trim().is_empty())
-                .map(ToString::to_string)
-                .unwrap_or_else(|| match &tool {
-                    DiscoverableTool::Connector(_) => "No description provided.".to_string(),
-                    DiscoverableTool::Plugin(plugin) => format_plugin_summary(plugin.as_ref()),
-                });
-            let default_action = match tool.tool_type() {
-                DiscoverableToolType::Connector => DiscoverableToolAction::Install,
-                DiscoverableToolType::Plugin => DiscoverableToolAction::Install,
-            };
-            format!(
-                "- {} (id: `{}`, type: {}, action: {}): {}",
-                tool.name(),
-                tool.id(),
-                tool.tool_type().as_str(),
-                default_action.as_str(),
-                description
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn format_plugin_summary(plugin: &DiscoverablePluginInfo) -> String {
-    let mut details = Vec::new();
-    if plugin.has_skills {
-        details.push("skills".to_string());
-    }
-    if !plugin.mcp_server_names.is_empty() {
-        details.push(format!(
-            "MCP servers: {}",
-            plugin.mcp_server_names.join(", ")
-        ));
-    }
-    if !plugin.app_connector_ids.is_empty() {
-        details.push(format!(
-            "app connectors: {}",
-            plugin.app_connector_ids.join(", ")
-        ));
-    }
-
-    if details.is_empty() {
-        "No description provided.".to_string()
-    } else {
-        details.join("; ")
-    }
-}
-
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
@@ -640,90 +408,6 @@ fn create_agent_tools_namespace(tools: Vec<ToolSpec>) -> ToolSpec {
     })
 }
 
-fn create_compact_parent_context_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "reason".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional short reason describing why the parent appears stuck.".to_string(),
-                ),
-            },
-        ),
-        (
-            "evidence".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional concrete evidence of non-progress, such as repeated identical replies with no tool or file actions.".to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "compact_parent_context".to_string(),
-        description: "Watchdog-only: request compaction for the watchdog helper's parent thread when it is idle and appears stuck."
-            .to_string(),
-        strict: false,
-        defer_loading: Some(true),
-        parameters: JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_list_agents_tool(agent_watchdog: bool) -> ToolSpec {
-    let description = if agent_watchdog {
-        "List agents spawned by an agent, optionally recursively. This is a status view; polling it will not make a watchdog fire."
-    } else {
-        "List agents spawned by an agent, optionally recursively."
-    };
-    let properties = BTreeMap::from([
-        (
-            "id".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Identifier of the parent agent whose spawned agents to list. Defaults to the current agent."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "recursive".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true (default), include all descendants recursively. When false, include only direct children."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "all".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, include completed/failed/canceled agents in addition to live agents."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "list_agents".to_string(),
-        description: description.to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
 fn register_agent_tool_handler<H>(builder: &mut ToolRegistryBuilder, name: &str, handler: Arc<H>)
 where
     H: crate::tools::registry::ToolHandler + 'static,
@@ -789,7 +473,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
-    use crate::tools::handlers::multi_agents_v2::WatchdogSelfCloseHandlerV2;
     let mut builder = ToolRegistryBuilder::new();
 
     let shell_handler = Arc::new(ShellHandler);
@@ -978,12 +661,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("request_permissions", request_permissions_handler);
     }
 
-    if config.search_tool && (app_tools.is_some() || config.collab_tools) {
+    let include_tool_search = config.search_tool || config.collab_tools;
+    if include_tool_search && (app_tools.is_some() || config.collab_tools) {
         let app_tools = app_tools.unwrap_or_default();
         let search_tool_handler = Arc::new(ToolSearchHandler::new(app_tools.clone()));
         push_tool_spec(
             &mut builder,
-            create_tool_search_tool(&app_tools),
+            create_tool_search_tool(
+                &tool_search_app_infos(&app_tools),
+                TOOL_SEARCH_DEFAULT_LIMIT,
+            ),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
@@ -1003,7 +690,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             .filter(|tools| !tools.is_empty())
     {
         builder.push_spec_with_parallel_support(
-            create_tool_suggest_tool(discoverable_tools),
+            create_tool_suggest_tool(&tool_suggest_entries(discoverable_tools)),
             /*supports_parallel_tool_calls*/ true,
         );
         builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
@@ -1123,7 +810,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     if config.collab_tools {
         if config.multi_agent_v2 {
-            let mut agent_tools = vec![
+            let agent_tools = vec![
                 create_spawn_agent_tool_v2(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description: crate::agent::role::spawn_tool_spec::build(
@@ -1138,12 +825,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
                 }),
                 create_close_agent_tool_v2(),
-                create_list_agents_tool_v2(),
+                create_list_agents_tool(),
             ];
-            if config.agent_watchdog {
-                agent_tools.push(create_compact_parent_context_tool());
-                agent_tools.push(create_watchdog_self_close_tool());
-            }
             push_tool_spec(
                 &mut builder,
                 create_agent_tools_namespace(agent_tools),
@@ -1160,15 +843,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
             register_agent_tool_handler(&mut builder, "wait_agent", Arc::new(WaitAgentHandlerV2));
             register_agent_tool_handler(&mut builder, "close_agent", Arc::new(CloseAgentHandlerV2));
             register_agent_tool_handler(&mut builder, "list_agents", Arc::new(ListAgentsHandlerV2));
-            if config.agent_watchdog {
-                register_agent_tool_handler(
-                    &mut builder,
-                    "watchdog_self_close",
-                    Arc::new(WatchdogSelfCloseHandlerV2),
-                );
-            }
         } else {
-            let mut agent_tools = vec![
+            let agent_tools = vec![
                 create_spawn_agent_tool_v1(SpawnAgentToolOptions {
                     available_models: &config.available_models,
                     agent_type_description: crate::agent::role::spawn_tool_spec::build(
@@ -1184,11 +860,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 }),
                 create_close_agent_tool_v1(),
             ];
-            if config.agent_watchdog {
-                agent_tools.push(create_list_agents_tool(config.agent_watchdog));
-                agent_tools.push(create_compact_parent_context_tool());
-                agent_tools.push(create_watchdog_self_close_tool());
-            }
             push_tool_spec(
                 &mut builder,
                 create_agent_tools_namespace(agent_tools),
@@ -1200,19 +871,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             register_agent_tool_handler(&mut builder, "resume_agent", Arc::new(ResumeAgentHandler));
             register_agent_tool_handler(&mut builder, "wait_agent", Arc::new(WaitAgentHandler));
             register_agent_tool_handler(&mut builder, "close_agent", Arc::new(CloseAgentHandler));
-            register_agent_tool_handler(&mut builder, "list_agents", Arc::new(ListAgentsHandler));
-            if config.agent_watchdog {
-                register_agent_tool_handler(
-                    &mut builder,
-                    "compact_parent_context",
-                    Arc::new(CompactParentContextHandler),
-                );
-                register_agent_tool_handler(
-                    &mut builder,
-                    "watchdog_self_close",
-                    Arc::new(WatchdogSelfCloseHandler),
-                );
-            }
         }
     }
 
@@ -1281,6 +939,54 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     builder
+}
+
+fn tool_search_app_infos(app_tools: &HashMap<String, ToolInfo>) -> Vec<ToolSearchAppInfo> {
+    app_tools
+        .values()
+        .filter(|tool| tool.server_name == CODEX_APPS_MCP_SERVER_NAME)
+        .filter_map(|tool| {
+            let name = tool
+                .connector_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|connector_name| !connector_name.is_empty())?
+                .to_string();
+            let description = tool
+                .connector_description
+                .as_deref()
+                .map(str::trim)
+                .filter(|connector_description| !connector_description.is_empty())
+                .map(str::to_string);
+            Some(ToolSearchAppInfo { name, description })
+        })
+        .collect()
+}
+
+fn tool_suggest_entries(discoverable_tools: &[DiscoverableTool]) -> Vec<ToolSuggestEntry> {
+    discoverable_tools
+        .iter()
+        .map(|tool| match tool {
+            DiscoverableTool::Connector(connector) => ToolSuggestEntry {
+                id: connector.id.clone(),
+                name: connector.name.clone(),
+                description: connector.description.clone(),
+                tool_type: DiscoverableToolType::Connector,
+                has_skills: false,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: Vec::new(),
+            },
+            DiscoverableTool::Plugin(plugin) => ToolSuggestEntry {
+                id: plugin.id.clone(),
+                name: plugin.name.clone(),
+                description: plugin.description.clone(),
+                tool_type: DiscoverableToolType::Plugin,
+                has_skills: plugin.has_skills,
+                mcp_server_names: plugin.mcp_server_names.clone(),
+                app_connector_ids: plugin.app_connector_ids.clone(),
+            },
+        })
+        .collect()
 }
 
 #[cfg(test)]

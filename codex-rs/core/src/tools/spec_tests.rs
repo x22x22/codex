@@ -13,7 +13,11 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_tools::AdditionalProperties;
 use codex_tools::CommandToolOptions;
 use codex_tools::ConfiguredToolSpec;
+use codex_tools::DiscoverablePluginInfo;
+use codex_tools::DiscoverableTool;
 use codex_tools::FreeformTool;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ResponsesApiWebSearchFilters;
 use codex_tools::ResponsesApiWebSearchUserLocation;
 use codex_tools::SpawnAgentToolOptions;
@@ -224,6 +228,25 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
         }
     }
     panic!("expected tool {expected_name}")
+}
+
+fn find_namespaced_tool<'a>(
+    tools: &'a [ConfiguredToolSpec],
+    namespace: &str,
+    expected_name: &str,
+) -> &'a ResponsesApiTool {
+    let namespace_tool = find_tool(tools, namespace);
+    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+        panic!("expected {namespace} namespace tool");
+    };
+    namespace
+        .tools
+        .iter()
+        .find_map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) if tool.name == expected_name => Some(tool),
+            _ => None,
+        })
+        .expect("expected tool in namespace")
 }
 
 fn strip_descriptions_schema(schema: &mut JsonSchema) {
@@ -458,12 +481,16 @@ fn test_build_specs_collab_tools_enabled() {
         &[],
     )
     .build();
-    assert_contains_tool_names(
-        &tools,
-        &["spawn_agent", "send_input", "wait_agent", "close_agent"],
-    );
+    assert_contains_tool_names(&tools, &["agents"]);
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
     assert_lacks_tool_name(&tools, "list_agents");
+
+    let spawn_agent = find_namespaced_tool(&tools, "agents", "spawn_agent");
+    let JsonSchema::Object { properties, .. } = &spawn_agent.parameters else {
+        panic!("spawn_agent should use object params");
+    };
+    assert!(properties.contains_key("fork_context"));
+    assert!(!properties.contains_key("fork_turns"));
 }
 
 #[test]
@@ -538,76 +565,58 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         &[],
     )
     .build();
-    assert_contains_tool_names(
-        &tools,
-        &[
-            "spawn_agent",
-            "send_message",
-            "assign_task",
-            "wait_agent",
-            "close_agent",
-            "list_agents",
-        ],
-    );
+    assert_contains_tool_names(&tools, &["agents"]);
 
-    let spawn_agent = find_tool(&tools, "spawn_agent");
-    let ToolSpec::Function(ResponsesApiTool {
-        parameters,
-        output_schema,
+    let spawn_agent = find_namespaced_tool(&tools, "agents", "spawn_agent");
+    let JsonSchema::Object {
+        properties: _,
+        required,
         ..
-    }) = &spawn_agent.spec
+    } = &spawn_agent.parameters
     else {
         panic!("spawn_agent should be a function tool");
     };
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("spawn_agent should use object params");
-    };
-    assert!(properties.contains_key("task_name"));
-    assert_eq!(required.as_ref(), Some(&vec!["task_name".to_string()]));
-    let output_schema = output_schema
+    let output_schema = spawn_agent
+        .output_schema
         .as_ref()
         .expect("spawn_agent should define output schema");
+    assert_eq!(
+        required.as_ref(),
+        Some(&vec!["task_name".to_string(), "items".to_string()])
+    );
     assert_eq!(
         output_schema["required"],
         json!(["agent_id", "task_name", "nickname"])
     );
 
-    let send_message = find_tool(&tools, "send_message");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &send_message.spec else {
+    let send_message = find_namespaced_tool(&tools, "agents", "send_message");
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = &send_message.parameters
+    else {
         panic!("send_message should be a function tool");
     };
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("send_message should use object params");
-    };
+    assert!(properties.contains_key("items"));
+    assert!(!properties.contains_key("message"));
     assert!(properties.contains_key("target"));
+    assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("message"));
     assert_eq!(
         required.as_ref(),
         Some(&vec!["target".to_string(), "items".to_string()])
     );
 
-    let assign_task = find_tool(&tools, "assign_task");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &assign_task.spec else {
+    let assign_task = find_namespaced_tool(&tools, "agents", "assign_task");
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = &assign_task.parameters
+    else {
         panic!("assign_task should be a function tool");
     };
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("assign_task should use object params");
-    };
     assert!(properties.contains_key("target"));
     assert!(!properties.contains_key("message"));
     assert_eq!(
@@ -615,55 +624,42 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         Some(&vec!["target".to_string(), "items".to_string()])
     );
 
-    let wait_agent = find_tool(&tools, "wait_agent");
-    let ToolSpec::Function(ResponsesApiTool {
-        parameters,
-        output_schema,
+    let wait_agent = find_namespaced_tool(&tools, "agents", "wait_agent");
+    let JsonSchema::Object {
+        properties,
+        required,
         ..
-    }) = &wait_agent.spec
+    } = &wait_agent.parameters
     else {
         panic!("wait_agent should be a function tool");
     };
-    let JsonSchema::Object {
-        properties,
-        required,
-        ..
-    } = parameters
-    else {
-        panic!("wait_agent should use object params");
-    };
-    assert!(properties.contains_key("targets"));
-    assert_eq!(required.as_ref(), Some(&vec!["targets".to_string()]));
-    let output_schema = output_schema
+    let output_schema = wait_agent
+        .output_schema
         .as_ref()
         .expect("wait_agent should define output schema");
+    assert!(!properties.contains_key("targets"));
+    assert!(properties.contains_key("timeout_ms"));
+    assert_eq!(required, &None);
     assert_eq!(
         output_schema["properties"]["message"]["description"],
         json!("Brief wait summary without the agent's final content.")
     );
 
-    let list_agents = find_tool(&tools, "list_agents");
-    let ToolSpec::Function(ResponsesApiTool {
-        parameters,
-        output_schema,
-        ..
-    }) = &list_agents.spec
-    else {
-        panic!("list_agents should be a function tool");
-    };
+    let list_agents = find_namespaced_tool(&tools, "agents", "list_agents");
     let JsonSchema::Object {
         properties,
         required,
         ..
-    } = parameters
+    } = &list_agents.parameters
     else {
-        panic!("list_agents should use object params");
+        panic!("list_agents should be a function tool");
     };
-    assert!(properties.contains_key("path_prefix"));
-    assert_eq!(required.as_ref(), None);
-    let output_schema = output_schema
+    let output_schema = list_agents
+        .output_schema
         .as_ref()
         .expect("list_agents should define output schema");
+    assert!(properties.contains_key("path_prefix"));
+    assert_eq!(required.as_ref(), None);
     assert_eq!(
         output_schema["properties"]["agents"]["items"]["required"],
         json!(["agent_name", "agent_status", "last_task_message"])
@@ -696,16 +692,7 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
         &[],
     )
     .build();
-    assert_contains_tool_names(
-        &tools,
-        &[
-            "spawn_agent",
-            "send_input",
-            "wait_agent",
-            "close_agent",
-            "spawn_agents_on_csv",
-        ],
-    );
+    assert_contains_tool_names(&tools, &["agents", "spawn_agents_on_csv"]);
 }
 
 #[test]
@@ -814,15 +801,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
     .build();
     assert_contains_tool_names(
         &tools,
-        &[
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-            "spawn_agents_on_csv",
-            "report_agent_job_result",
-        ],
+        &["agents", "spawn_agents_on_csv", "report_agent_job_result"],
     );
     assert_lacks_tool_name(&tools, "request_user_input");
 }
@@ -1445,11 +1424,7 @@ fn test_build_specs_gpt5_codex_default() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "agents",
         ],
     );
 }
@@ -1468,11 +1443,7 @@ fn test_build_specs_gpt51_codex_default() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "agents",
         ],
     );
 }
@@ -1493,11 +1464,7 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "agents",
         ],
     );
 }
@@ -1518,11 +1485,7 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "agents",
         ],
     );
 }
@@ -1541,11 +1504,7 @@ fn test_gpt_5_1_codex_max_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "agents",
         ],
     );
 }
@@ -1564,11 +1523,7 @@ fn test_codex_5_1_mini_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "agents",
         ],
     );
 }
@@ -1586,11 +1541,7 @@ fn test_gpt_5_defaults() {
             "request_user_input",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "agents",
         ],
     );
 }
@@ -1609,11 +1560,7 @@ fn test_gpt_5_1_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "agents",
         ],
     );
 }
@@ -1634,11 +1581,7 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
+            "agents",
         ],
     );
 }
