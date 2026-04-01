@@ -2818,7 +2818,6 @@ async fn construct_mcp_tool_call_end_notification(
             Some(McpToolCallResult {
                 content: value.content.clone(),
                 structured_content: value.structured_content.clone(),
-                meta: value.meta.clone(),
             }),
             None,
         ),
@@ -3748,9 +3747,7 @@ mod tests {
             content: content.clone(),
             is_error: Some(false),
             structured_content: None,
-            meta: Some(serde_json::json!({
-                "ui/resourceUri": "ui://widget/list-resources.html"
-            })),
+            meta: None,
         };
 
         let end_event = McpToolCallEndEvent {
@@ -3785,9 +3782,6 @@ mod tests {
                 result: Some(McpToolCallResult {
                     content,
                     structured_content: None,
-                    meta: Some(serde_json::json!({
-                        "ui/resourceUri": "ui://widget/list-resources.html"
-                    })),
                 }),
                 error: None,
                 duration_ms: Some(0),
