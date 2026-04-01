@@ -851,6 +851,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 status: AppServerTurnStatus::InProgress,
                 error: None,
             },
+            created_at: 0,
         }),
         /*replay_kind*/ None,
     );
