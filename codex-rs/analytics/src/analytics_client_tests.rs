@@ -46,6 +46,9 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
+use codex_app_server_protocol::ThreadTokenUsage;
+use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -216,12 +219,40 @@ fn sample_turn_resolved_config(turn_id: &str) -> TurnResolvedConfigFact {
     }
 }
 
+fn sample_thread_token_usage_updated_notification(
+    thread_id: &str,
+    turn_id: &str,
+) -> ServerNotification {
+    ServerNotification::ThreadTokenUsageUpdated(ThreadTokenUsageUpdatedNotification {
+        thread_id: thread_id.to_string(),
+        turn_id: turn_id.to_string(),
+        token_usage: ThreadTokenUsage {
+            total: TokenUsageBreakdown {
+                total_tokens: 500,
+                input_tokens: 200,
+                cached_input_tokens: 50,
+                output_tokens: 220,
+                reasoning_output_tokens: 30,
+            },
+            last: TokenUsageBreakdown {
+                total_tokens: 321,
+                input_tokens: 123,
+                cached_input_tokens: 45,
+                output_tokens: 140,
+                reasoning_output_tokens: 13,
+            },
+            model_context_window: Some(200_000),
+        },
+    })
+}
+
 async fn ingest_turn_prerequisites(
     reducer: &mut AnalyticsReducer,
     out: &mut Vec<TrackEventRequest>,
     include_initialize: bool,
     include_resolved_config: bool,
     include_started: bool,
+    include_token_usage: bool,
 ) {
     if include_initialize {
         reducer
@@ -287,6 +318,17 @@ async fn ingest_turn_prerequisites(
                 AnalyticsFact::Notification(Box::new(sample_turn_started_notification(
                     "thread-2", "turn-2",
                 ))),
+                out,
+            )
+            .await;
+    }
+
+    if include_token_usage {
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(
+                    sample_thread_token_usage_updated_notification("thread-2", "turn-2"),
+                )),
                 out,
             )
             .await;
@@ -956,6 +998,7 @@ async fn turn_lifecycle_emits_turn_event() {
         /*include_initialize*/ true,
         /*include_resolved_config*/ true,
         /*include_started*/ true,
+        /*include_token_usage*/ true,
     )
     .await;
     reducer
@@ -984,6 +1027,14 @@ async fn turn_lifecycle_emits_turn_event() {
     assert_eq!(payload["event_params"]["created_at"], json!(455));
     assert_eq!(payload["event_params"]["completed_at"], json!(456));
     assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
+    assert_eq!(payload["event_params"]["input_tokens"], json!(123));
+    assert_eq!(payload["event_params"]["cached_input_tokens"], json!(45));
+    assert_eq!(payload["event_params"]["output_tokens"], json!(140));
+    assert_eq!(
+        payload["event_params"]["reasoning_output_tokens"],
+        json!(13)
+    );
+    assert_eq!(payload["event_params"]["total_tokens"], json!(321));
 }
 
 #[tokio::test]
@@ -997,6 +1048,7 @@ async fn turn_does_not_emit_without_required_prerequisites() {
         /*include_initialize*/ false,
         /*include_resolved_config*/ true,
         /*include_started*/ false,
+        /*include_token_usage*/ false,
     )
     .await;
     reducer
@@ -1026,6 +1078,7 @@ async fn turn_does_not_emit_without_required_prerequisites() {
         /*include_initialize*/ true,
         /*include_resolved_config*/ false,
         /*include_started*/ false,
+        /*include_token_usage*/ false,
     )
     .await;
     reducer
@@ -1053,6 +1106,7 @@ async fn turn_completed_without_started_notification_emits_null_created_at() {
         /*include_initialize*/ true,
         /*include_resolved_config*/ true,
         /*include_started*/ false,
+        /*include_token_usage*/ false,
     )
     .await;
     reducer
@@ -1070,6 +1124,14 @@ async fn turn_completed_without_started_notification_emits_null_created_at() {
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
     assert_eq!(payload["event_params"]["created_at"], json!(null));
     assert_eq!(payload["event_params"]["duration_ms"], json!(1234));
+    assert_eq!(payload["event_params"]["input_tokens"], json!(null));
+    assert_eq!(payload["event_params"]["cached_input_tokens"], json!(null));
+    assert_eq!(payload["event_params"]["output_tokens"], json!(null));
+    assert_eq!(
+        payload["event_params"]["reasoning_output_tokens"],
+        json!(null)
+    );
+    assert_eq!(payload["event_params"]["total_tokens"], json!(null));
 }
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {

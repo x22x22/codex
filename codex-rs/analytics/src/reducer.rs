@@ -34,6 +34,7 @@ use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::UserInput;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
@@ -83,6 +84,7 @@ struct TurnState {
     thread_id: Option<String>,
     num_input_images: Option<usize>,
     resolved_config: Option<TurnResolvedConfigFact>,
+    token_usage: Option<TokenUsageBreakdown>,
     created_at: Option<u64>,
     completed: Option<CompletedTurnState>,
 }
@@ -206,6 +208,7 @@ impl AnalyticsReducer {
             thread_id: None,
             num_input_images: None,
             resolved_config: None,
+            token_usage: None,
             created_at: None,
             completed: None,
         });
@@ -358,6 +361,7 @@ impl AnalyticsReducer {
                     thread_id: None,
                     num_input_images: None,
                     resolved_config: None,
+                    token_usage: None,
                     created_at: None,
                     completed: None,
                 });
@@ -382,10 +386,26 @@ impl AnalyticsReducer {
                     thread_id: None,
                     num_input_images: None,
                     resolved_config: None,
+                    token_usage: None,
                     created_at: None,
                     completed: None,
                 });
                 turn_state.created_at = u64::try_from(notification.created_at).ok();
+            }
+            ServerNotification::ThreadTokenUsageUpdated(notification) => {
+                let turn_state =
+                    self.turns
+                        .entry(notification.turn_id.clone())
+                        .or_insert(TurnState {
+                            connection_id: None,
+                            thread_id: None,
+                            num_input_images: None,
+                            resolved_config: None,
+                            token_usage: None,
+                            created_at: None,
+                            completed: None,
+                        });
+                turn_state.token_usage = Some(notification.token_usage.last);
             }
             ServerNotification::TurnCompleted(notification) => {
                 let turn_state =
@@ -396,6 +416,7 @@ impl AnalyticsReducer {
                             thread_id: None,
                             num_input_images: None,
                             resolved_config: None,
+                            token_usage: None,
                             created_at: None,
                             completed: None,
                         });
@@ -453,18 +474,13 @@ impl AnalyticsReducer {
         let Some(turn_state) = self.turns.get(turn_id) else {
             return;
         };
-        let Some(thread_id) = turn_state.thread_id.clone() else {
+        if turn_state.thread_id.is_none()
+            || turn_state.num_input_images.is_none()
+            || turn_state.resolved_config.is_none()
+            || turn_state.completed.is_none()
+        {
             return;
-        };
-        let Some(num_input_images) = turn_state.num_input_images else {
-            return;
-        };
-        let Some(resolved_config) = turn_state.resolved_config.clone() else {
-            return;
-        };
-        let Some(completed) = turn_state.completed.clone() else {
-            return;
-        };
+        }
         let product_client_id = turn_state
             .connection_id
             .and_then(|connection_id| self.connections.get(&connection_id))
@@ -475,12 +491,8 @@ impl AnalyticsReducer {
                 event_type: "codex_turn_event",
                 event_params: codex_turn_event_params(
                     product_client_id,
-                    thread_id,
                     turn_id.to_string(),
-                    num_input_images,
-                    resolved_config,
-                    completed,
-                    turn_state.created_at,
+                    turn_state,
                 ),
             },
         )));
@@ -490,13 +502,19 @@ impl AnalyticsReducer {
 
 fn codex_turn_event_params(
     product_client_id: String,
-    thread_id: String,
     turn_id: String,
-    num_input_images: usize,
-    resolved_config: TurnResolvedConfigFact,
-    completed: CompletedTurnState,
-    created_at: Option<u64>,
+    turn_state: &TurnState,
 ) -> CodexTurnEventParams {
+    let (Some(thread_id), Some(num_input_images), Some(resolved_config), Some(completed)) = (
+        turn_state.thread_id.clone(),
+        turn_state.num_input_images,
+        turn_state.resolved_config.clone(),
+        turn_state.completed.clone(),
+    ) else {
+        unreachable!("turn event params require a fully populated turn state");
+    };
+    let token_usage = turn_state.token_usage.clone();
+    let created_at = turn_state.created_at;
     let TurnResolvedConfigFact {
         turn_id: _resolved_turn_id,
         thread_id: _resolved_thread_id,
@@ -546,11 +564,13 @@ fn codex_turn_event_params(
         subagent_tool_call_count: None,
         web_search_count: None,
         image_generation_count: None,
-        input_tokens: None,
-        cached_input_tokens: None,
-        output_tokens: None,
-        reasoning_output_tokens: None,
-        total_tokens: None,
+        input_tokens: token_usage.as_ref().map(|usage| usage.input_tokens),
+        cached_input_tokens: token_usage.as_ref().map(|usage| usage.cached_input_tokens),
+        output_tokens: token_usage.as_ref().map(|usage| usage.output_tokens),
+        reasoning_output_tokens: token_usage
+            .as_ref()
+            .map(|usage| usage.reasoning_output_tokens),
+        total_tokens: token_usage.as_ref().map(|usage| usage.total_tokens),
         duration_ms: completed.duration_ms,
         created_at,
         completed_at: Some(completed.completed_at),

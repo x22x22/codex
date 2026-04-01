@@ -5877,37 +5877,35 @@ pub(crate) async fn run_turn(
             .await;
     }
 
-    if !input.is_empty() {
-        let is_first_turn = {
-            let mut state = sess.state.lock().await;
-            state.take_next_turn_is_first()
-        };
-        sess.services
-            .analytics_events_client
-            .track_turn_resolved_config(TurnResolvedConfigFact {
-                turn_id: tracking.turn_id.clone(),
-                thread_id: tracking.thread_id.clone(),
-                num_input_images: input
-                    .iter()
-                    .filter(|item| {
-                        matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
-                    })
-                    .count(),
-                submission_type: None,
-                model: turn_context.model_info.slug.clone(),
-                model_provider: turn_context.config.model_provider_id.clone(),
-                sandbox_policy: turn_context.sandbox_policy.get().clone(),
-                reasoning_effort: turn_context.reasoning_effort,
-                reasoning_summary: Some(turn_context.reasoning_summary),
-                service_tier: turn_context.config.service_tier,
-                approval_policy: turn_context.approval_policy.value(),
-                approvals_reviewer: turn_context.config.approvals_reviewer,
-                sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
-                collaboration_mode: turn_context.collaboration_mode.mode,
-                personality: turn_context.personality,
-                is_first_turn,
-            });
-    }
+    let is_first_turn = {
+        let mut state = sess.state.lock().await;
+        state.take_next_turn_is_first()
+    };
+    sess.services
+        .analytics_events_client
+        .track_turn_resolved_config(TurnResolvedConfigFact {
+            turn_id: tracking.turn_id.clone(),
+            thread_id: tracking.thread_id.clone(),
+            num_input_images: input
+                .iter()
+                .filter(|item| {
+                    matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })
+                })
+                .count(),
+            submission_type: None,
+            model: turn_context.model_info.slug.clone(),
+            model_provider: turn_context.config.model_provider_id.clone(),
+            sandbox_policy: turn_context.sandbox_policy.get().clone(),
+            reasoning_effort: turn_context.reasoning_effort,
+            reasoning_summary: Some(turn_context.reasoning_summary),
+            service_tier: turn_context.config.service_tier,
+            approval_policy: turn_context.approval_policy.value(),
+            approvals_reviewer: turn_context.config.approvals_reviewer,
+            sandbox_network_access: turn_context.network_sandbox_policy.is_enabled(),
+            collaboration_mode: turn_context.collaboration_mode.mode,
+            personality: turn_context.personality,
+            is_first_turn,
+        });
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
