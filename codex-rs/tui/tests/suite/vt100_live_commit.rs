@@ -1,4 +1,4 @@
-#![cfg(feature = "vt100-tests")]
+#![cfg(debug_assertions)]
 
 use crate::test_backend::VT100Backend;
 use ratatui::layout::Rect;
