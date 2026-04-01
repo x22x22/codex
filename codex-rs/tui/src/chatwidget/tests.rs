@@ -4490,6 +4490,8 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 status: AppServerTurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         }),
         /*replay_kind*/ None,
     );
@@ -4733,6 +4735,8 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
                 status: AppServerTurnStatus::Completed,
                 error: None,
             },
+            completed_at: 0,
+            duration_ms: None,
         }),
         /*replay_kind*/ None,
     );
@@ -5051,6 +5055,8 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
                     additional_details: None,
                 }),
             },
+            completed_at: 0,
+            duration_ms: None,
         }),
         /*replay_kind*/ None,
     );
