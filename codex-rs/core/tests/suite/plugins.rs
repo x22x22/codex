@@ -365,14 +365,13 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let deadline = Instant::now() + Duration::from_secs(10);
-    let event = loop {
+    let plugin_event = loop {
         let requests = server.received_requests().await.unwrap_or_default();
         if let Some(event) = requests
             .into_iter()
             .filter(|request| request.url.path() == "/codex/analytics-events/events")
             .find_map(|request| {
-                let payload: serde_json::Value =
-                    serde_json::from_slice(&request.body).expect("analytics payload");
+                let payload: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
                 payload["events"].as_array().and_then(|events| {
                     events
                         .iter()
@@ -388,7 +387,8 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert_eq!(event["event_type"], "codex_plugin_used");
+
+    let event = plugin_event;
     assert_eq!(event["event_params"]["plugin_id"], "sample@test");
     assert_eq!(event["event_params"]["plugin_name"], "sample");
     assert_eq!(event["event_params"]["marketplace_name"], "test");
