@@ -220,6 +220,8 @@ class CodexAppServerHost(
                 CodexBinaryLocator.resolve(context).absolutePath,
                 "-c",
                 "enable_request_compression=false",
+                "-c",
+                "features.default_mode_request_user_input=true",
                 "app-server",
                 "--listen",
                 "stdio://",
@@ -1317,7 +1319,9 @@ class CodexAppServerHost(
             $startupContextInstructions
             $detachedSessionInstructions
             The delegated objective may include a required final target presentation such as ATTACHED, DETACHED_HIDDEN, or DETACHED_SHOWN. Treat that as a hard completion requirement and do not report success until the framework session actually matches it.
+            If the objective omits a parameter that materially changes what action you take or what user-visible outcome occurs, do not guess. Call request_user_input before acting. Examples include alarm time, timer duration, recipient, destination, account choice, destructive confirmation, and any other choice where a wrong assumption would surprise the user.
             If you need clarification or a decision from the supervising Agent, call request_user_input with concise free-form question text.
+            Do not ask a plain-text clarifying question in a normal assistant message. When you need user input, use request_user_input and wait.
             Do not use hidden control protocols.
             Finish with a normal assistant message describing what you accomplished or what blocked you.
             $stagedRecoveryContextInstructions

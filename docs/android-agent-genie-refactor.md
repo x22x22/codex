@@ -64,10 +64,13 @@ The current repo now contains these implementation slices:
   device commands stay in the normal Codex tool path.
 - Non-bridge Genie questions surface through AgentSDK question flow by mapping
   `request_user_input` back into Agent-managed questions and answers.
-- The Agent also attempts to answer Genie questions through its hosted Codex
-  runtime before falling back to notification/UI escalation, and now submits
-  those answers through the same framework-session bridge instead of a separate
-  Kotlin-only path.
+- Genie-hosted app-server sessions now explicitly enable
+  `request_user_input` in Default mode so ambiguous delegated tasks can pause in
+  real framework `WAITING_FOR_USER` state instead of guessing or emitting a
+  plain-text question as a normal completion.
+- The Agent now auto-answers only internal bridge questions. User-facing Genie
+  questions remain user-facing and are surfaced through the normal framework
+  question flow, notifications, and desktop/UI answer surfaces.
 - The Agent now records an explicit per-child final presentation policy
   (`ATTACHED`, `DETACHED_HIDDEN`, `DETACHED_SHOWN`, or `AGENT_CHOICE`) and
   uses the framework-authoritative `AgentSessionInfo.getTargetPresentation()`
@@ -216,8 +219,8 @@ the Android Agent/Genie flow.
   - typed detached frame capture with runtime-aware recovery
 - `request_user_input` bridged from hosted Codex back into AgentSDK questions
 - Agent-owned question notifications for Genie questions that need user input
-- Agent-mediated free-form answers for Genie questions, using the hosted Agent
-  Codex runtime as the temporary answer engine
+- Agent-mediated answers only for internal bridge questions that the user
+  should never see as product-facing prompts
 - Agent planning can now use `request_user_input` to ask the user clarifying
   questions before launching child Genie sessions
 - Abstract-unix-socket support in the legacy Rust bridge via `@name` or

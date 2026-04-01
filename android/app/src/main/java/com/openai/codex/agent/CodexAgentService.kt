@@ -6,7 +6,6 @@ import android.app.agent.AgentSessionEvent
 import android.app.agent.AgentSessionInfo
 import android.os.Process
 import android.util.Log
-import java.io.IOException
 import kotlin.concurrent.thread
 import org.json.JSONObject
 
@@ -16,23 +15,11 @@ class CodexAgentService : AgentService() {
         private const val BRIDGE_REQUEST_PREFIX = "__codex_bridge__ "
         private const val BRIDGE_RESPONSE_PREFIX = "__codex_bridge_result__ "
         private const val BRIDGE_METHOD_GET_RUNTIME_STATUS = "getRuntimeStatus"
-        private const val AUTO_ANSWER_ESCALATE_PREFIX = "ESCALATE:"
-        private const val AUTO_ANSWER_INSTRUCTIONS =
-            "You are Codex acting as the Android Agent supervising a Genie execution. If you can answer the current Genie question from the available session context, call the framework session tool `android.framework.sessions.answer_question` exactly once with a short free-form answer. You may inspect current framework state with `android.framework.sessions.list`. If user input is required, do not call any framework tool. Instead reply with `ESCALATE: ` followed by the exact question the Agent should ask the user."
-        private const val MAX_AUTO_ANSWER_CONTEXT_CHARS = 800
         private val handledGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val pendingGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val pendingQuestionLoads = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val handledBridgeRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val pendingParentRollups = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    }
-
-    private sealed class AutoAnswerResult {
-        data object Answered : AutoAnswerResult()
-
-        data class Escalate(
-            val question: String,
-        ) : AutoAnswerResult()
     }
 
     private val agentManager by lazy { getSystemService(AgentManager::class.java) }
@@ -219,55 +206,29 @@ class CodexAgentService : AgentService() {
         val events = manager.getSessionEvents(session.sessionId)
         val question = findLatestQuestion(events) ?: return
         updateQuestionNotification(session, question)
-        maybeAutoAnswerGenieQuestion(session, question, events)
+        maybeAutoAnswerGenieQuestion(session, question)
     }
 
     private fun maybeAutoAnswerGenieQuestion(
         session: AgentSessionInfo,
         question: String,
-        events: List<AgentSessionEvent>,
     ) {
+        if (!isBridgeQuestion(question)) {
+            return
+        }
         val questionKey = genieQuestionKey(session.sessionId, question)
         if (handledGenieQuestions.contains(questionKey) || !pendingGenieQuestions.add(questionKey)) {
             return
         }
         thread(name = "CodexAgentAutoAnswer-${session.sessionId}") {
-            Log.i(TAG, "Attempting Agent auto-answer for ${session.sessionId}")
+            Log.i(TAG, "Attempting Agent bridge-answer for ${session.sessionId}")
             runCatching {
-                if (isBridgeQuestion(question)) {
-                    answerBridgeQuestion(session, question)
-                    handledGenieQuestions.add(questionKey)
-                        AgentQuestionNotifier.cancel(this, session.sessionId)
-                        Log.i(TAG, "Answered bridge question for ${session.sessionId}")
-                    } else {
-                        when (val result = requestGenieAutoAnswer(session, question, events)) {
-                            AutoAnswerResult.Answered -> {
-                                handledGenieQuestions.add(questionKey)
-                            AgentQuestionNotifier.cancel(this, session.sessionId)
-                            Log.i(TAG, "Auto-answered Genie question for ${session.sessionId}")
-                        }
-                        is AutoAnswerResult.Escalate -> {
-                            if (sessionController.isSessionWaitingForUser(session.sessionId)) {
-                                AgentQuestionNotifier.showQuestion(
-                                    context = this,
-                                    sessionId = session.sessionId,
-                                    targetPackage = session.targetPackage,
-                                    question = result.question,
-                                )
-                            }
-                        }
-                    }
-                }
+                answerBridgeQuestion(session, question)
+                handledGenieQuestions.add(questionKey)
+                AgentQuestionNotifier.cancel(this, session.sessionId)
+                Log.i(TAG, "Answered bridge question for ${session.sessionId}")
             }.onFailure { err ->
-                Log.i(TAG, "Agent auto-answer unavailable for ${session.sessionId}: ${err.message}")
-                if (!isBridgeQuestion(question) && sessionController.isSessionWaitingForUser(session.sessionId)) {
-                    AgentQuestionNotifier.showQuestion(
-                        context = this,
-                        sessionId = session.sessionId,
-                        targetPackage = session.targetPackage,
-                        question = question,
-                    )
-                }
+                Log.i(TAG, "Agent bridge-answer unavailable for ${session.sessionId}: ${err.message}")
             }
             pendingGenieQuestions.remove(questionKey)
         }
@@ -291,90 +252,6 @@ class CodexAgentService : AgentService() {
             targetPackage = session.targetPackage,
             question = question,
         )
-    }
-
-    private fun requestGenieAutoAnswer(
-        session: AgentSessionInfo,
-        question: String,
-        events: List<AgentSessionEvent>,
-    ): AutoAnswerResult {
-        val runtimeStatus = AgentCodexAppServerClient.readRuntimeStatus(this)
-        if (!runtimeStatus.authenticated) {
-            throw IOException("Agent runtime is not authenticated")
-        }
-        val frameworkToolBridge = AgentFrameworkToolBridge(this, sessionController)
-        var answered = false
-        val response = AgentCodexAppServerClient.requestText(
-            context = this,
-            instructions = AUTO_ANSWER_INSTRUCTIONS,
-            prompt = buildAutoAnswerPrompt(session, question, events),
-            dynamicTools = frameworkToolBridge.buildQuestionResolutionToolSpecs(),
-            toolCallHandler = { toolName, arguments ->
-                if (
-                    toolName == AgentFrameworkToolBridge.ANSWER_QUESTION_TOOL &&
-                    arguments.optString("sessionId").trim().isEmpty()
-                ) {
-                    arguments.put("sessionId", session.sessionId)
-                }
-                if (
-                    toolName == AgentFrameworkToolBridge.ANSWER_QUESTION_TOOL &&
-                    arguments.optString("parentSessionId").trim().isEmpty() &&
-                    !session.parentSessionId.isNullOrBlank()
-                ) {
-                    arguments.put("parentSessionId", session.parentSessionId)
-                }
-                val toolResult = frameworkToolBridge.handleToolCall(
-                    toolName = toolName,
-                    arguments = arguments,
-                    userObjective = question,
-                    focusedSessionId = session.sessionId,
-                )
-                if (toolName == AgentFrameworkToolBridge.ANSWER_QUESTION_TOOL) {
-                    answered = true
-                }
-                toolResult
-            },
-            frameworkSessionId = session.sessionId,
-        ).trim()
-        if (answered) {
-            return AutoAnswerResult.Answered
-        }
-        if (response.startsWith(AUTO_ANSWER_ESCALATE_PREFIX, ignoreCase = true)) {
-            val escalateQuestion = response.substringAfter(':').trim().ifEmpty { question }
-            return AutoAnswerResult.Escalate(escalateQuestion)
-        }
-        if (response.isNotBlank()) {
-            sessionController.answerQuestion(session.sessionId, response, session.parentSessionId)
-            return AutoAnswerResult.Answered
-        }
-        throw IOException("Agent runtime did not return an answer")
-    }
-
-    private fun buildAutoAnswerPrompt(
-        session: AgentSessionInfo,
-        question: String,
-        events: List<AgentSessionEvent>,
-    ): String {
-        val recentContext = renderRecentContext(events)
-        return """
-            Target package: ${session.targetPackage ?: "unknown"}
-            Current Genie question: $question
-
-            Recent session context:
-            $recentContext
-        """.trimIndent()
-    }
-
-    private fun renderRecentContext(events: List<AgentSessionEvent>): String {
-        val context = events
-            .takeLast(6)
-            .joinToString("\n") { event ->
-                "${eventTypeToString(event.type)}: ${event.message ?: ""}"
-            }
-        if (context.length <= MAX_AUTO_ANSWER_CONTEXT_CHARS) {
-            return context.ifBlank { "No prior Genie context." }
-        }
-        return context.takeLast(MAX_AUTO_ANSWER_CONTEXT_CHARS)
     }
 
     private fun findLatestQuestion(events: List<AgentSessionEvent>): String? {
@@ -450,19 +327,6 @@ class CodexAgentService : AgentService() {
             BRIDGE_RESPONSE_PREFIX + response.toString(),
             session.parentSessionId,
         )
-    }
-
-    private fun eventTypeToString(type: Int): String {
-        return when (type) {
-            AgentSessionEvent.TYPE_TRACE -> "Trace"
-            AgentSessionEvent.TYPE_QUESTION -> "Question"
-            AgentSessionEvent.TYPE_RESULT -> "Result"
-            AgentSessionEvent.TYPE_ERROR -> "Error"
-            AgentSessionEvent.TYPE_POLICY -> "Policy"
-            AgentSessionEvent.TYPE_DETACHED_ACTION -> "DetachedAction"
-            AgentSessionEvent.TYPE_ANSWER -> "Answer"
-            else -> "Event($type)"
-        }
     }
 
     private fun genieQuestionKey(sessionId: String, question: String): String {

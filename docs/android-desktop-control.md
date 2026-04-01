@@ -75,6 +75,10 @@ Attach lifecycle semantics:
   - if a Genie is running unattached, it first retries automatically with staged
     recovery context; if automatic retries are exhausted, it also pauses into an
     attachable idle recovery thread instead of failing immediately
+- User-facing Genie clarification questions now remain in framework
+  `WAITING_FOR_USER` state until the user answers them through the device UI or
+  `codex android sessions answer`. Only internal bridge questions are answered
+  automatically by the Agent service.
 
 ## CLI shape
 
