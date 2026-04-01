@@ -548,6 +548,10 @@ fn test_build_specs_watchdog_collab_tools_include_self_close_tool() {
     .build();
 
     assert_contains_top_level_tool_name(&tools, "watchdog");
+    assert_contains_top_level_tool_name(&tools, "spawn_agent");
+    assert_contains_top_level_tool_name(&tools, "send_input");
+    assert_contains_top_level_tool_name(&tools, "wait_agent");
+    assert_contains_top_level_tool_name(&tools, "close_agent");
     assert_contains_tool_names(&tools, &["tool_search", "list_agents", "close_agent"]);
     assert_lacks_top_level_tool_name(&tools, "watchdog_self_close");
     assert_lacks_top_level_tool_name(&tools, "compact_parent_context");
