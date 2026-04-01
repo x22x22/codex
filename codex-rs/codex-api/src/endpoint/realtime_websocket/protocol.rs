@@ -31,7 +31,7 @@ pub struct RealtimeSessionConfig {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
-pub(super) enum RealtimeOutboundMessage {
+pub(crate) enum RealtimeOutboundMessage {
     #[serde(rename = "input_audio_buffer.append")]
     InputAudioBufferAppend { audio: String },
     #[serde(rename = "conversation.handoff.append")]
@@ -48,7 +48,7 @@ pub(super) enum RealtimeOutboundMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionUpdateSession {
+pub(crate) struct SessionUpdateSession {
     #[serde(rename = "type")]
     pub(super) r#type: SessionType,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -148,7 +148,7 @@ pub(super) struct SessionAudioOutputFormat {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct ConversationMessageItem {
+pub(crate) struct ConversationMessageItem {
     #[serde(rename = "type")]
     pub(super) r#type: ConversationItemType,
     pub(super) role: ConversationRole,
@@ -170,13 +170,13 @@ pub(super) enum ConversationRole {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
-pub(super) enum ConversationItemPayload {
+pub(crate) enum ConversationItemPayload {
     Message(ConversationMessageItem),
     FunctionCallOutput(ConversationFunctionCallOutputItem),
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct ConversationFunctionCallOutputItem {
+pub(crate) struct ConversationFunctionCallOutputItem {
     #[serde(rename = "type")]
     pub(super) r#type: ConversationItemType,
     pub(super) call_id: String,
@@ -212,7 +212,7 @@ pub(super) enum SessionToolType {
     Function,
 }
 
-pub(super) fn parse_realtime_event(
+pub(crate) fn parse_realtime_event(
     payload: &str,
     event_parser: RealtimeEventParser,
 ) -> Option<RealtimeEvent> {

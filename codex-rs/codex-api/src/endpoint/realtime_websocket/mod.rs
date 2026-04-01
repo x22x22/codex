@@ -1,5 +1,5 @@
 pub mod methods;
-mod methods_common;
+pub(crate) mod methods_common;
 mod methods_v1;
 mod methods_v2;
 pub mod protocol;

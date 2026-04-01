@@ -11,10 +11,10 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 
-pub(super) const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
+pub(crate) const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const AGENT_FINAL_MESSAGE_PREFIX: &str = "\"Agent Final Message\":\n\n";
 
-pub(super) fn normalized_session_mode(
+pub(crate) fn normalized_session_mode(
     event_parser: RealtimeEventParser,
     session_mode: RealtimeSessionMode,
 ) -> RealtimeSessionMode {
@@ -24,7 +24,7 @@ pub(super) fn normalized_session_mode(
     }
 }
 
-pub(super) fn conversation_item_create_message(
+pub(crate) fn conversation_item_create_message(
     event_parser: RealtimeEventParser,
     text: String,
 ) -> RealtimeOutboundMessage {
@@ -34,7 +34,7 @@ pub(super) fn conversation_item_create_message(
     }
 }
 
-pub(super) fn conversation_handoff_append_message(
+pub(crate) fn conversation_handoff_append_message(
     event_parser: RealtimeEventParser,
     handoff_id: String,
     output_text: String,
@@ -48,7 +48,7 @@ pub(super) fn conversation_handoff_append_message(
     }
 }
 
-pub(super) fn session_update_session(
+pub(crate) fn session_update_session(
     event_parser: RealtimeEventParser,
     instructions: String,
     session_mode: RealtimeSessionMode,
@@ -60,7 +60,7 @@ pub(super) fn session_update_session(
     }
 }
 
-pub(super) fn websocket_intent(event_parser: RealtimeEventParser) -> Option<&'static str> {
+pub(crate) fn websocket_intent(event_parser: RealtimeEventParser) -> Option<&'static str> {
     match event_parser {
         RealtimeEventParser::V1 => v1_websocket_intent(),
         RealtimeEventParser::RealtimeV2 => v2_websocket_intent(),

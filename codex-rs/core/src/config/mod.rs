@@ -491,22 +491,22 @@ pub struct Config {
     pub realtime_audio: RealtimeAudioConfig,
 
     /// Experimental / do not use. Overrides only the realtime conversation
-    /// websocket transport base URL (the `Op::RealtimeConversation`
+    /// transport base URL (the `Op::RealtimeConversation`
     /// `/v1/realtime`
     /// connection) without changing normal provider HTTP requests.
     pub experimental_realtime_ws_base_url: Option<String>,
-    /// Experimental / do not use. Selects the realtime websocket model/snapshot
+    /// Experimental / do not use. Selects the realtime transport model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
-    /// Experimental / do not use. Realtime websocket session selection.
+    /// Experimental / do not use. Realtime transport session selection.
     /// `version` controls v1/v2 and `type` controls conversational/transcription.
     pub realtime: RealtimeConfig,
     /// Experimental / do not use. Overrides only the realtime conversation
-    /// websocket transport instructions (the `Op::RealtimeConversation`
-    /// `/ws` session.update instructions) without changing normal prompts.
+    /// transport instructions (the `Op::RealtimeConversation`
+    /// session instructions) without changing normal prompts.
     pub experimental_realtime_ws_backend_prompt: Option<String>,
     /// Experimental / do not use. Replaces the synthesized realtime startup
-    /// context appended to websocket session instructions. An empty string
+    /// context appended to realtime session instructions. An empty string
     /// disables startup context injection entirely.
     pub experimental_realtime_ws_startup_context: Option<String>,
     /// Experimental / do not use. Replaces the built-in realtime start
@@ -1290,23 +1290,23 @@ pub struct ConfigToml {
     pub audio: Option<RealtimeAudioToml>,
 
     /// Experimental / do not use. Overrides only the realtime conversation
-    /// websocket transport base URL (the `Op::RealtimeConversation`
+    /// transport base URL (the `Op::RealtimeConversation`
     /// `/v1/realtime`
     /// connection) without changing normal provider HTTP requests.
     pub experimental_realtime_ws_base_url: Option<String>,
-    /// Experimental / do not use. Selects the realtime websocket model/snapshot
+    /// Experimental / do not use. Selects the realtime transport model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
-    /// Experimental / do not use. Realtime websocket session selection.
+    /// Experimental / do not use. Realtime transport session selection.
     /// `version` controls v1/v2 and `type` controls conversational/transcription.
     #[serde(default)]
     pub realtime: Option<RealtimeToml>,
     /// Experimental / do not use. Overrides only the realtime conversation
-    /// websocket transport instructions (the `Op::RealtimeConversation`
-    /// `/ws` session.update instructions) without changing normal prompts.
+    /// transport instructions (the `Op::RealtimeConversation`
+    /// session instructions) without changing normal prompts.
     pub experimental_realtime_ws_backend_prompt: Option<String>,
     /// Experimental / do not use. Replaces the synthesized realtime startup
-    /// context appended to websocket session instructions. An empty string
+    /// context appended to realtime session instructions. An empty string
     /// disables startup context injection entirely.
     pub experimental_realtime_ws_startup_context: Option<String>,
     /// Experimental / do not use. Replaces the built-in realtime start
