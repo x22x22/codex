@@ -1,16 +1,12 @@
-use std::collections::HashMap;
-
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadDependencyEnvSetParams;
-use codex_app_server_protocol::ThreadDependencyEnvSetResponse;
-use codex_app_server_protocol::ThreadEnvContainsParams;
-use codex_app_server_protocol::ThreadEnvContainsResponse;
+use codex_app_server_protocol::ThreadCreateApiKeyFinishParams;
+use codex_app_server_protocol::ThreadCreateApiKeyFinishResponse;
+use codex_app_server_protocol::ThreadCreateApiKeyStartParams;
+use codex_app_server_protocol::ThreadCreateApiKeyStartResponse;
 use codex_login::CreatedApiKey;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
-use codex_login::PendingCreateApiKey;
-use codex_login::start_create_api_key as start_create_api_key_flow;
 use codex_protocol::ThreadId;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -39,49 +35,42 @@ async fn start_create_api_key_command(
     request_handle: AppServerRequestHandle,
     app_event_tx: AppEventSender,
 ) -> PlainHistoryCell {
-    match is_openai_api_key_set_in_session(thread_id, &request_handle).await {
-        Ok(true) => return existing_api_key_message(),
-        Ok(false) => {}
-        Err(err) => {
-            return history_cell::new_error_event(format!(
-                "Failed to check API key environment: {err}"
-            ));
-        }
-    }
-
-    let session = match start_create_api_key_flow() {
-        Ok(session) => session,
+    let response = match start_create_api_key_flow(thread_id, &request_handle).await {
+        Ok(response) => response,
         Err(err) => {
             return history_cell::new_error_event(format!(
                 "Failed to start API key creation: {err}"
             ));
         }
     };
-    let browser_opened = session.open_browser();
-    let start_message =
-        continue_in_browser_message(session.auth_url(), session.callback_port(), browser_opened);
+    let ThreadCreateApiKeyStartResponse::Started {
+        auth_url,
+        callback_port,
+    } = response
+    else {
+        return existing_api_key_message();
+    };
+    let browser_opened = webbrowser::open(&auth_url).is_ok();
+    let start_message = continue_in_browser_message(&auth_url, callback_port, browser_opened);
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(start_message)));
 
-    complete_command(session, thread_id, request_handle).await
+    complete_command(thread_id, request_handle).await
 }
 
-async fn is_openai_api_key_set_in_session(
+async fn start_create_api_key_flow(
     thread_id: ThreadId,
     request_handle: &AppServerRequestHandle,
-) -> Result<bool, String> {
-    let request = ClientRequest::ThreadEnvContains {
+) -> Result<ThreadCreateApiKeyStartResponse, String> {
+    let request = ClientRequest::ThreadCreateApiKeyStart {
         request_id: create_api_key_request_id(),
-        params: ThreadEnvContainsParams {
+        params: ThreadCreateApiKeyStartParams {
             thread_id: thread_id.to_string(),
-            key: OPENAI_API_KEY_ENV_VAR.to_string(),
         },
     };
-    let response = request_handle
-        .request_typed::<ThreadEnvContainsResponse>(request)
+    request_handle
+        .request_typed::<ThreadCreateApiKeyStartResponse>(request)
         .await
-        .map_err(|err| err.to_string())?;
-
-    Ok(response.contains)
+        .map_err(|err| err.to_string())
 }
 
 fn existing_api_key_message() -> PlainHistoryCell {
@@ -150,47 +139,44 @@ fn continue_in_browser_message(
 }
 
 async fn complete_command(
-    session: PendingCreateApiKey,
     thread_id: ThreadId,
     request_handle: AppServerRequestHandle,
 ) -> PlainHistoryCell {
-    let created = match session.finish().await {
+    let created = match finish_create_api_key_flow(thread_id, &request_handle).await {
         Ok(created) => created,
         Err(err) => {
             return history_cell::new_error_event(format!("API key creation failed: {err}"));
         }
     };
     let copy_result = clipboard_text::copy_text_to_clipboard(&created.project_api_key);
-    let session_env_result =
-        apply_api_key_to_current_session(&created.project_api_key, thread_id, request_handle).await;
 
-    success_cell(&created, copy_result, session_env_result)
+    success_cell(&created, copy_result)
 }
 
-async fn apply_api_key_to_current_session(
-    api_key: &str,
+async fn finish_create_api_key_flow(
     thread_id: ThreadId,
-    request_handle: AppServerRequestHandle,
-) -> Result<(), String> {
-    let request = ClientRequest::ThreadDependencyEnvSet {
+    request_handle: &AppServerRequestHandle,
+) -> Result<CreatedApiKey, String> {
+    let request = ClientRequest::ThreadCreateApiKeyFinish {
         request_id: create_api_key_request_id(),
-        params: ThreadDependencyEnvSetParams {
+        params: ThreadCreateApiKeyFinishParams {
             thread_id: thread_id.to_string(),
-            values: HashMap::from([(OPENAI_API_KEY_ENV_VAR.to_string(), api_key.to_string())]),
         },
     };
     request_handle
-        .request_typed::<ThreadDependencyEnvSetResponse>(request)
+        .request_typed::<ThreadCreateApiKeyFinishResponse>(request)
         .await
-        .map(|_| ())
+        .map(|response| CreatedApiKey {
+            organization_id: response.organization_id,
+            organization_title: response.organization_title,
+            default_project_id: response.default_project_id,
+            default_project_title: response.default_project_title,
+            project_api_key: response.project_api_key,
+        })
         .map_err(|err| err.to_string())
 }
 
-fn success_cell(
-    created: &CreatedApiKey,
-    copy_result: Result<(), String>,
-    session_env_result: Result<(), String>,
-) -> PlainHistoryCell {
+fn success_cell(created: &CreatedApiKey, copy_result: Result<(), String>) -> PlainHistoryCell {
     let organization = created
         .organization_title
         .clone()
@@ -204,22 +190,20 @@ fn success_cell(
         Ok(()) => "I copied the full key to your clipboard.".to_string(),
         Err(err) => format!("Could not copy the key to your clipboard: {err}."),
     };
-    let session_env_status = match session_env_result {
-        Ok(()) => format!(
-            "I also set {OPENAI_API_KEY_ENV_VAR} in this Codex session for future commands."
-        ),
-        Err(err) => {
-            format!("Could not set {OPENAI_API_KEY_ENV_VAR} in this Codex session: {err}")
-        }
-    };
-
     PlainHistoryCell::new(vec![
         vec![
             "• ".dim(),
             format!("Created an API key for {organization} / {project}: {masked_api_key}.").into(),
         ]
         .into(),
-        vec!["  ".into(), format!("{copy_status} {session_env_status}").into()].into(),
+        vec![
+            "  ".into(),
+            format!(
+                "{copy_status} I also set {OPENAI_API_KEY_ENV_VAR} in this Codex session for future commands."
+            )
+            .into(),
+        ]
+        .into(),
         "".into(),
         vec![
             "  ".into(),
@@ -272,7 +256,6 @@ mod tests {
                 project_api_key: "sk-proj-1234567890".to_string(),
             },
             Ok(()),
-            Ok(()),
         );
 
         assert_eq!(
@@ -292,7 +275,6 @@ mod tests {
                 project_api_key: "sk-proj-1234567890".to_string(),
             },
             Err("clipboard unavailable".to_string()),
-            Ok(()),
         );
 
         assert_eq!(

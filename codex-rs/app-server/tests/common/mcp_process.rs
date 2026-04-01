@@ -58,8 +58,8 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
-use codex_app_server_protocol::ThreadDependencyEnvSetParams;
-use codex_app_server_protocol::ThreadEnvContainsParams;
+use codex_app_server_protocol::ThreadCreateApiKeyFinishParams;
+use codex_app_server_protocol::ThreadCreateApiKeyStartParams;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -368,22 +368,23 @@ impl McpProcess {
         self.send_request("thread/name/set", params).await
     }
 
-    /// Send a `thread/dependencyEnv/set` JSON-RPC request.
-    pub async fn send_thread_dependency_env_set_request(
+    /// Send a `thread/createApiKey/start` JSON-RPC request.
+    pub async fn send_thread_create_api_key_start_request(
         &mut self,
-        params: ThreadDependencyEnvSetParams,
+        params: ThreadCreateApiKeyStartParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/dependencyEnv/set", params).await
+        self.send_request("thread/createApiKey/start", params).await
     }
 
-    /// Send a `thread/env/contains` JSON-RPC request.
-    pub async fn send_thread_env_contains_request(
+    /// Send a `thread/createApiKey/finish` JSON-RPC request.
+    pub async fn send_thread_create_api_key_finish_request(
         &mut self,
-        params: ThreadEnvContainsParams,
+        params: ThreadCreateApiKeyFinishParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/env/contains", params).await
+        self.send_request("thread/createApiKey/finish", params)
+            .await
     }
 
     /// Send a `thread/metadata/update` JSON-RPC request.

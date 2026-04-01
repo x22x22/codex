@@ -139,8 +139,8 @@ Example with notification opt-out:
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
-- `thread/dependencyEnv/set` — merge session-scoped environment variables into a loaded thread so future spawned commands can inherit them; returns `{}` on success.
-- `thread/env/contains` — check whether a loaded thread has an environment variable available via the app-server process environment or a session-scoped dependency override; returns `{ "contains": true | false }`.
+- `thread/createApiKey/start` — start browser-based project API key creation for a loaded thread. If `OPENAI_API_KEY` is already available in the server process or thread dependency env, returns `{ "status": "alreadySet" }`; otherwise returns `{ "status": "started", "authUrl": "...", "callbackPort": 5000 }`.
+- `thread/createApiKey/finish` — wait for the browser OAuth callback, mint a project API key, attach it to the thread dependency env for future spawned commands, and return the key plus org/project labels.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
@@ -393,22 +393,30 @@ Use `thread/metadata/update` to patch sqlite-backed metadata for a thread withou
 } }
 ```
 
-### Example: Set thread dependency environment
+### Example: Create an API key for a thread
 
-Use `thread/dependencyEnv/set` to merge session-scoped environment variables into a loaded thread. These values are inherited by future spawned commands for that thread. Use `thread/env/contains` to check whether a key is already available in the app-server process environment or the thread's dependency environment.
+Use `thread/createApiKey/start` to start browser OAuth for project API key creation, then `thread/createApiKey/finish` to wait for completion and attach the minted key to that thread's dependency env.
 
 ```json
-{ "method": "thread/dependencyEnv/set", "id": 26, "params": {
-    "threadId": "thr_123",
-    "values": { "OPENAI_API_KEY": "sk-..." }
+{ "method": "thread/createApiKey/start", "id": 26, "params": {
+    "threadId": "thr_123"
 } }
-{ "id": 26, "result": {} }
+{ "id": 26, "result": {
+    "status": "started",
+    "authUrl": "https://auth.openai.com/oauth/authorize?...",
+    "callbackPort": 5000
+} }
 
-{ "method": "thread/env/contains", "id": 27, "params": {
-    "threadId": "thr_123",
-    "key": "OPENAI_API_KEY"
+{ "method": "thread/createApiKey/finish", "id": 27, "params": {
+    "threadId": "thr_123"
 } }
-{ "id": 27, "result": { "contains": true } }
+{ "id": 27, "result": {
+    "organizationId": "org_...",
+    "organizationTitle": "Personal",
+    "defaultProjectId": "proj_...",
+    "defaultProjectTitle": "Default project",
+    "projectApiKey": "sk-proj-..."
+} }
 ```
 
 ### Example: Archive a thread

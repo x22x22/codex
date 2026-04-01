@@ -245,13 +245,13 @@ client_request_definitions! {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
     },
-    ThreadDependencyEnvSet => "thread/dependencyEnv/set" {
-        params: v2::ThreadDependencyEnvSetParams,
-        response: v2::ThreadDependencyEnvSetResponse,
+    ThreadCreateApiKeyStart => "thread/createApiKey/start" {
+        params: v2::ThreadCreateApiKeyStartParams,
+        response: v2::ThreadCreateApiKeyStartResponse,
     },
-    ThreadEnvContains => "thread/env/contains" {
-        params: v2::ThreadEnvContainsParams,
-        response: v2::ThreadEnvContainsResponse,
+    ThreadCreateApiKeyFinish => "thread/createApiKey/finish" {
+        params: v2::ThreadCreateApiKeyFinishParams,
+        response: v2::ThreadCreateApiKeyFinishResponse,
     },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
