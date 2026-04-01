@@ -16,10 +16,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
-codex-cloud-tasks-client = { path = "../cloud-tasks-client", features = [
-    "mock",
-    "online",
-] }
+codex-cloud-tasks-client = { path = "../cloud-tasks-client" }
 codex-client = { workspace = true }
 codex-core = { path = "../core" }
 codex-git-utils = { workspace = true }
