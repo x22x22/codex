@@ -64,11 +64,15 @@ fn has_subagent_notification(req: &ResponsesRequest) -> bool {
         .any(|text| text.contains("<subagent_notification>"))
 }
 
-fn cache_prefix_request_body(request: &ResponsesRequest, call_id: &str) -> Result<Value> {
+fn cache_prefix_request_body_without_prompt_cache_key(
+    request: &ResponsesRequest,
+    call_id: &str,
+) -> Result<Value> {
     let mut body = request.body_json();
     let Some(object) = body.as_object_mut() else {
         anyhow::bail!("expected JSON object request body");
     };
+    object.remove("prompt_cache_key");
 
     let input = object
         .get_mut("input")
@@ -102,6 +106,12 @@ fn prompt_cache_key(request: &ResponsesRequest) -> Option<String> {
         .get("prompt_cache_key")
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+struct ForkedChildRequests {
+    parent_session_id: String,
+    parent_followup_request: ResponsesRequest,
+    child_request: ResponsesRequest,
 }
 
 fn normalize_tools_for_cache_prefix(tools: &Value) -> Value {
@@ -373,6 +383,102 @@ async fn spawn_child_and_capture_snapshot(
         .await)
 }
 
+async fn spawn_child_and_capture_fork_requests(server: &MockServer) -> Result<ForkedChildRequests> {
+    let seed_turn = mount_sse_once_match(
+        server,
+        |req: &wiremock::Request| body_contains(req, TURN_0_FORK_PROMPT),
+        sse(vec![
+            ev_response_created("resp-seed-1"),
+            ev_assistant_message("msg-seed-1", "seeded"),
+            ev_completed("resp-seed-1"),
+        ]),
+    )
+    .await;
+
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "fork_context": true,
+    }))?;
+    let spawn_turn = mount_sse_once_match(
+        server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let child_request_log = mount_sse_once_match(
+        server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT)
+                && body_contains(req, FORKED_SPAWN_AGENT_OUTPUT_MESSAGE)
+        },
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_assistant_message("msg-child-1", "child done"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+
+    let turn1_followup = mount_sse_once_match(
+        server,
+        |req: &wiremock::Request| {
+            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, CHILD_PROMPT)
+        },
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(server).await?;
+    let parent_session_id = test.session_configured.session_id.to_string();
+
+    test.submit_turn(TURN_0_FORK_PROMPT).await?;
+    let _ = seed_turn.single_request();
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let _ = spawn_turn.single_request();
+    let parent_followup_request = wait_for_requests(&turn1_followup)
+        .await?
+        .into_iter()
+        .next()
+        .expect("parent follow-up request should be captured");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_request = loop {
+        if let Some(request) = child_request_log
+            .requests()
+            .into_iter()
+            .find(|request| request.body_contains_text(CHILD_PROMPT))
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for forked child request");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+
+    Ok(ForkedChildRequests {
+        parent_session_id,
+        parent_followup_request,
+        child_request,
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn subagent_notification_is_included_without_wait() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -400,107 +506,47 @@ async fn subagent_notification_is_included_without_wait() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawned_child_receives_forked_parent_context() -> Result<()> {
+async fn spawned_child_request_reuses_parent_prompt_cache_key() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
+    let requests = spawn_child_and_capture_fork_requests(&server).await?;
 
-    let seed_turn = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, TURN_0_FORK_PROMPT),
-        sse(vec![
-            ev_response_created("resp-seed-1"),
-            ev_assistant_message("msg-seed-1", "seeded"),
-            ev_completed("resp-seed-1"),
-        ]),
-    )
-    .await;
-
-    let spawn_args = serde_json::to_string(&json!({
-        "message": CHILD_PROMPT,
-        "fork_context": true,
-    }))?;
-    let spawn_turn = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
-        sse(vec![
-            ev_response_created("resp-turn1-1"),
-            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
-            ev_completed("resp-turn1-1"),
-        ]),
-    )
-    .await;
-
-    let child_request_log = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT)
-                && body_contains(req, FORKED_SPAWN_AGENT_OUTPUT_MESSAGE)
-        },
-        sse(vec![
-            ev_response_created("resp-child-1"),
-            ev_assistant_message("msg-child-1", "child done"),
-            ev_completed("resp-child-1"),
-        ]),
-    )
-    .await;
-
-    let turn1_followup = mount_sse_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, CHILD_PROMPT)
-        },
-        sse(vec![
-            ev_response_created("resp-turn1-2"),
-            ev_assistant_message("msg-turn1-2", "parent done"),
-            ev_completed("resp-turn1-2"),
-        ]),
-    )
-    .await;
-
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::Collab)
-            .expect("test config should allow feature update");
-    });
-    let test = builder.build(&server).await?;
-
-    test.submit_turn(TURN_0_FORK_PROMPT).await?;
-    let _ = seed_turn.single_request();
-
-    test.submit_turn(TURN_1_PROMPT).await?;
-    let _ = spawn_turn.single_request();
-    let parent_followup_requests = wait_for_requests(&turn1_followup).await?;
-    let parent_followup_request = parent_followup_requests
-        .first()
-        .expect("parent follow-up request should be captured");
-
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let child_request = loop {
-        if let Some(request) = child_request_log
-            .requests()
-            .into_iter()
-            .find(|request| request.body_contains_text(CHILD_PROMPT))
-        {
-            break request;
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for forked child request");
-        }
-        sleep(Duration::from_millis(10)).await;
-    };
-    assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
-    assert!(child_request.body_contains_text("seeded"));
-    let parent_cache_prefix = cache_prefix_request_body(parent_followup_request, SPAWN_CALL_ID)?;
-    let child_cache_prefix = cache_prefix_request_body(&child_request, SPAWN_CALL_ID)?;
     assert_eq!(
-        prompt_cache_key(parent_followup_request),
-        prompt_cache_key(&child_request),
-        "forked parent and child requests must reuse the same prompt_cache_key so backend sharding can colocate them for KV cache reuse"
+        prompt_cache_key(&requests.parent_followup_request),
+        Some(requests.parent_session_id.clone()),
+        "parent follow-up requests should use the parent session id as prompt_cache_key"
     );
     assert_eq!(
-        parent_cache_prefix, child_cache_prefix,
+        prompt_cache_key(&requests.child_request),
+        Some(requests.parent_session_id),
+        "forked child requests must reuse the parent prompt_cache_key so backend sharding can colocate them for KV cache reuse"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_child_preserves_parent_prefix_and_tool_surface() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let requests = spawn_child_and_capture_fork_requests(&server).await?;
+
+    assert!(
+        requests
+            .child_request
+            .body_contains_text(TURN_0_FORK_PROMPT)
+    );
+    assert!(requests.child_request.body_contains_text("seeded"));
+    let parent_prefix = cache_prefix_request_body_without_prompt_cache_key(
+        &requests.parent_followup_request,
+        SPAWN_CALL_ID,
+    )?;
+    let child_prefix =
+        cache_prefix_request_body_without_prompt_cache_key(&requests.child_request, SPAWN_CALL_ID)?;
+    assert_eq!(
+        parent_prefix, child_prefix,
         "forked child requests must preserve every cache-relevant request field and the conversation-item prefix exactly through the shared spawn_agent call; namespace shells and non-deferred tools must stay stable, while deferred namespace members may only appear after tool_search_output"
     );
 
