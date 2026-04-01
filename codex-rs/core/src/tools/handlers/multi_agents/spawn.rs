@@ -1,4 +1,6 @@
 use super::*;
+use crate::agent::RemovedWatchdog;
+use crate::agent::WatchdogRegistration;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::render_input_preview;
@@ -9,6 +11,7 @@ use crate::agent::role::default_fork_context_for_role;
 use crate::agent::role::watchdog_interval_for_role;
 use crate::config::Config;
 use codex_features::Feature;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use std::collections::HashSet;
 
@@ -136,8 +139,16 @@ impl ToolHandler for Handler {
                         /*task_name*/ None,
                     )?),
                     SpawnAgentOptions {
-                        fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
-                        fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
+                        fork_parent_spawn_call_id: if fork_context {
+                            Some(call_id.clone())
+                        } else {
+                            None
+                        },
+                        fork_mode: if fork_context {
+                            Some(SpawnAgentForkMode::FullHistory)
+                        } else {
+                            None
+                        },
                     },
                 )
                 .await;
@@ -288,7 +299,17 @@ async fn spawn_watchdog(
     spawn_source: SessionSource,
 ) -> crate::error::Result<ThreadId> {
     let target_thread_id = agent_control
-        .spawn_agent_handle(config.clone(), Some(spawn_source))
+        .spawn_agent(
+            config.clone(),
+            Op::UserInput {
+                items: vec![codex_protocol::user_input::UserInput::Text {
+                    text: prompt.clone(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            },
+            Some(spawn_source),
+        )
         .await?;
     let superseded_before_register = agent_control
         .unregister_watchdogs_for_owner(owner_thread_id)
@@ -299,7 +320,7 @@ async fn spawn_watchdog(
         target_thread_id,
         child_depth,
         interval_s,
-        prompt,
+        prompt: prompt.clone(),
         config,
     };
     let superseded_after_register = match agent_control.register_watchdog(registration).await {
