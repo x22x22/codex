@@ -262,7 +262,7 @@ async fn ingest_turn_prerequisites(
             AnalyticsFact::Request {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
-                request: Box::new(sample_turn_start_request("thread-2", 3)),
+                request: Box::new(sample_turn_start_request("thread-2", /*request_id*/ 3)),
             },
             out,
         )
@@ -271,7 +271,7 @@ async fn ingest_turn_prerequisites(
         .ingest(
             AnalyticsFact::Response {
                 connection_id: 7,
-                response: Box::new(sample_turn_start_response("turn-2", 3)),
+                response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
             },
             out,
         )
@@ -1055,7 +1055,7 @@ async fn turn_lifecycle_emits_turn_event() {
                 "thread-2",
                 "turn-2",
                 AppServerTurnStatus::Completed,
-                None,
+                /*codex_error_info*/ None,
             ))),
             &mut out,
         )
@@ -1173,14 +1173,21 @@ async fn turn_does_not_emit_without_required_prerequisites() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
 
-    ingest_turn_prerequisites(&mut reducer, &mut out, false, true, false).await;
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ false,
+        /*include_resolved_config*/ true,
+        /*include_started*/ false,
+    )
+    .await;
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
                 "thread-2",
                 "turn-2",
                 AppServerTurnStatus::Completed,
-                None,
+                /*codex_error_info*/ None,
             ))),
             &mut out,
         )
@@ -1195,14 +1202,21 @@ async fn turn_does_not_emit_without_required_prerequisites() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
 
-    ingest_turn_prerequisites(&mut reducer, &mut out, true, false, false).await;
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ false,
+        /*include_started*/ false,
+    )
+    .await;
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
                 "thread-2",
                 "turn-2",
                 AppServerTurnStatus::Completed,
-                None,
+                /*codex_error_info*/ None,
             ))),
             &mut out,
         )
@@ -1215,14 +1229,21 @@ async fn turn_completed_without_started_notification_emits_null_created_at() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();
 
-    ingest_turn_prerequisites(&mut reducer, &mut out, true, true, false).await;
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ false,
+    )
+    .await;
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
                 "thread-2",
                 "turn-2",
                 AppServerTurnStatus::Completed,
-                None,
+                /*codex_error_info*/ None,
             ))),
             &mut out,
         )

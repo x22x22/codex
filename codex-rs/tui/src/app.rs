@@ -9078,6 +9078,7 @@ guardian_approval = true
         ServerNotification::TurnStarted(TurnStartedNotification {
             thread_id: thread_id.to_string(),
             turn: test_turn(turn_id, TurnStatus::InProgress, Vec::new()),
+            created_at: 0,
         })
     }
 

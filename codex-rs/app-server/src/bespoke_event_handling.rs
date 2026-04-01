@@ -3331,7 +3331,7 @@ mod tests {
         handle_turn_complete(
             conversation_id,
             event_turn_id.clone(),
-            None,
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3420,7 +3420,7 @@ mod tests {
         handle_turn_complete(
             conversation_id,
             event_turn_id.clone(),
-            None,
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3684,7 +3684,7 @@ mod tests {
         handle_turn_complete(
             conversation_a,
             a_turn1.clone(),
-            None,
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3705,7 +3705,7 @@ mod tests {
         handle_turn_complete(
             conversation_b,
             b_turn1.clone(),
-            None,
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3716,7 +3716,7 @@ mod tests {
         handle_turn_complete(
             conversation_a,
             a_turn2.clone(),
-            None,
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
