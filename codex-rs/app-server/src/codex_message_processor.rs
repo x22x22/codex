@@ -222,8 +222,7 @@ use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::mcp::auth::discover_supported_scopes;
 use codex_core::mcp::auth::resolve_oauth_scopes;
-use codex_core::mcp::collect_mcp_snapshot;
-use codex_core::mcp::group_tools_by_server;
+use codex_core::mcp::collect_mcp_server_status_snapshot;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
@@ -5057,9 +5056,7 @@ impl CodexMessageProcessor {
         params: ListMcpServerStatusParams,
         config: Config,
     ) {
-        let snapshot = collect_mcp_snapshot(&config).await;
-
-        let tools_by_server = group_tools_by_server(&snapshot.tools);
+        let snapshot = collect_mcp_server_status_snapshot(&config).await;
 
         let mut server_names: Vec<String> = config
             .mcp_servers
@@ -5107,7 +5104,7 @@ impl CodexMessageProcessor {
             .iter()
             .map(|name| McpServerStatus {
                 name: name.clone(),
-                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                tools: snapshot.tools_by_server.get(name).cloned().unwrap_or_default(),
                 resources: snapshot.resources.get(name).cloned().unwrap_or_default(),
                 resource_templates: snapshot
                     .resource_templates
