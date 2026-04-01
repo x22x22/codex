@@ -661,6 +661,10 @@ impl ThreadEventStore {
     fn clear_active_turn_id(&mut self) {
         self.active_turn_id = None;
     }
+
+    fn set_active_turn_id(&mut self, turn_id: String) {
+        self.active_turn_id = Some(turn_id);
+    }
 }
 
 #[derive(Debug)]
@@ -1035,6 +1039,8 @@ fn active_turn_missing_steer_error(error: &TypedRequestError) -> bool {
         return false;
     };
     source.message == "no active turn to steer"
+        || (source.message.starts_with("expected active turn id `")
+            && source.message.contains("` but found `"))
 }
 
 impl App {
@@ -1619,6 +1625,14 @@ impl App {
         store.active_turn_id().map(ToOwned::to_owned)
     }
 
+    async fn set_active_turn_id_for_thread(&mut self, thread_id: ThreadId, turn_id: String) {
+        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+            return;
+        };
+        let mut store = channel.store.lock().await;
+        store.set_active_turn_id(turn_id);
+    }
+
     fn thread_label(&self, thread_id: ThreadId) -> String {
         let is_primary = self.primary_thread_id == Some(thread_id);
         let fallback_label = if is_primary {
@@ -2102,7 +2116,7 @@ impl App {
                     }
                 }
                 if should_start_turn {
-                    app_server
+                    let response = app_server
                         .turn_start(
                             thread_id,
                             items.to_vec(),
@@ -2120,6 +2134,8 @@ impl App {
                             final_output_json_schema.clone(),
                         )
                         .await?;
+                    self.set_active_turn_id_for_thread(thread_id, response.turn.id)
+                        .await;
                 }
                 Ok(true)
             }
@@ -2157,9 +2173,11 @@ impl App {
                 Ok(true)
             }
             AppCommandView::Review { review_request } => {
-                app_server
+                let response = app_server
                     .review_start(thread_id, review_request.clone())
                     .await?;
+                self.set_active_turn_id_for_thread(thread_id, response.turn.id)
+                    .await;
                 Ok(true)
             }
             AppCommandView::CleanBackgroundTerminals => {
@@ -8720,6 +8738,17 @@ guardian_approval = true
     }
 
     #[test]
+    fn thread_event_store_set_active_turn_id_overrides_cached_turn() {
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
+        let thread_id = ThreadId::new();
+        store.push_notification(turn_started_notification(thread_id, "turn-1"));
+
+        store.set_active_turn_id("turn-2".to_string());
+
+        assert_eq!(store.active_turn_id(), Some("turn-2"));
+    }
+
+    #[test]
     fn thread_event_store_rebase_preserves_resolved_request_state() {
         let thread_id = ThreadId::new();
         let mut store = ThreadEventStore::new(/*capacity*/ 8);
@@ -8987,6 +9016,23 @@ guardian_approval = true
             source: JSONRPCErrorError {
                 code: -32602,
                 message: "no active turn to steer".to_string(),
+                data: None,
+            },
+        };
+
+        assert!(active_turn_missing_steer_error(&error));
+        assert_eq!(active_turn_not_steerable_turn_error(&error), None);
+    }
+
+    #[test]
+    fn active_turn_missing_steer_error_detects_expected_turn_mismatch_race() {
+        let error = TypedRequestError::Server {
+            method: "turn/steer".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message:
+                    "expected active turn id `019d4469-724e-71b1-8c36-444196cc9849` but found `019d4469-721a-7cd3-b642-ffdcd2898a70`"
+                        .to_string(),
                 data: None,
             },
         };
