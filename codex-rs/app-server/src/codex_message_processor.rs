@@ -224,7 +224,6 @@ use codex_core::mcp::auth::discover_supported_scopes;
 use codex_core::mcp::auth::resolve_oauth_scopes;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
-use codex_core::mcp::read_mcp_resource;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
@@ -5141,8 +5140,8 @@ impl CodexMessageProcessor {
         params: McpResourceReadParams,
     ) {
         let outgoing = Arc::clone(&self.outgoing);
-        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
+        let (_, thread) = match self.load_thread(&params.thread_id).await {
+            Ok(thread) => thread,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
@@ -5150,7 +5149,7 @@ impl CodexMessageProcessor {
         };
 
         tokio::spawn(async move {
-            let result = read_mcp_resource(&config, &params.server, &params.uri).await;
+            let result = thread.read_mcp_resource(&params.server, &params.uri).await;
             match result {
                 Ok(result) => match serde_json::from_value::<McpResourceReadResponse>(result) {
                     Ok(response) => {

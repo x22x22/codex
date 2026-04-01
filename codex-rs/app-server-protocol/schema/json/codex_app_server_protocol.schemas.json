@@ -8785,12 +8785,16 @@
           "server": {
             "type": "string"
           },
+          "threadId": {
+            "type": "string"
+          },
           "uri": {
             "type": "string"
           }
         },
         "required": [
           "server",
+          "threadId",
           "uri"
         ],
         "title": "McpResourceReadParams",

@@ -1972,6 +1972,7 @@ pub struct ListMcpServerStatusResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpResourceReadParams {
+    pub thread_id: String,
     pub server: String,
     pub uri: String,
 }
