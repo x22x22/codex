@@ -24,6 +24,7 @@ use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
+use crate::terminal_wrappers;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
 use crate::wrapping::RtOptions;
@@ -218,7 +219,8 @@ impl StatusIndicatorWidget {
             if let Some(last) = out.last_mut()
                 && let Some(span) = last.spans.last_mut()
             {
-                let trimmed: String = span.content.as_ref().chars().take(max_base_len).collect();
+                let trimmed =
+                    terminal_wrappers::truncate_to_width(span.content.as_ref(), max_base_len);
                 *span = format!("{trimmed}…").dim();
             }
         }
@@ -426,6 +428,35 @@ mod tests {
             last.spans[1].content.as_ref().ends_with("…"),
             "expected ellipsis in last line: {last:?}"
         );
+    }
+
+    // Status details are trimmed after wrapping; this keeps a final emoji grapheme intact before
+    // the overflow ellipsis.
+    #[test]
+    fn details_overflow_preserves_full_grapheme_clusters_before_ellipsis() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(
+            tx,
+            crate::tui::FrameRequester::test_dummy(),
+            /*animations_enabled*/ true,
+        );
+        let family = "👨\u{200d}👩\u{200d}👧\u{200d}👦";
+        w.update_details(
+            Some(format!("{family} docs")),
+            StatusDetailsCapitalization::Preserve,
+            /*max_lines*/ 1,
+        );
+
+        let lines = w.wrapped_details_lines(/*width*/ 7);
+
+        assert_eq!(lines.len(), 1);
+        let rendered = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(rendered, format!("{DETAILS_PREFIX}{family}…"));
     }
 
     #[test]

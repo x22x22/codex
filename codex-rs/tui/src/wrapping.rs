@@ -26,6 +26,7 @@
 //! negatives let a URL get split. The heuristic is intentionally
 //! conservative: file paths like `src/main.rs` are not matched.
 
+use crate::terminal_wrappers;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use std::borrow::Cow;
@@ -180,7 +181,7 @@ pub(crate) fn line_contains_url_like(line: &Line<'_>) -> bool {
     let text: String = line
         .spans
         .iter()
-        .map(|span| span.content.as_ref())
+        .map(|span| terminal_wrappers::strip(span.content.as_ref()))
         .collect();
     text_contains_url_like(&text)
 }
@@ -194,7 +195,7 @@ pub(crate) fn line_has_mixed_url_and_non_url_tokens(line: &Line<'_>) -> bool {
     let text: String = line
         .spans
         .iter()
-        .map(|span| span.content.as_ref())
+        .map(|span| terminal_wrappers::strip(span.content.as_ref()))
         .collect();
     text_has_mixed_url_and_non_url_tokens(&text)
 }
@@ -644,10 +645,10 @@ where
     let mut span_bounds = Vec::new();
     let mut acc = 0usize;
     for s in &line.spans {
-        let text = s.content.as_ref();
+        let visible_text = terminal_wrappers::strip(s.content.as_ref());
         let start = acc;
-        flat.push_str(text);
-        acc += text.len();
+        flat.push_str(&visible_text);
+        acc += visible_text.len();
         span_bounds.push((start..acc, s.style));
     }
 
@@ -862,11 +863,8 @@ fn slice_line_spans<'a>(
             let local_start = seg_start - s;
             let local_end = seg_end - s;
             let content = original.spans[i].content.as_ref();
-            let slice = &content[local_start..local_end];
-            acc.push(Span {
-                style: *style,
-                content: std::borrow::Cow::Borrowed(slice),
-            });
+            let slice = terminal_wrappers::slice_visible_range(content, local_start..local_end);
+            acc.push(Span::styled(slice, *style));
         }
         if e >= end_byte {
             break;
@@ -893,6 +891,34 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect::<String>()
+    }
+
+    fn osc8_bel_hyperlink(destination: &str, text: &str) -> String {
+        format!("\u{1b}]8;;{destination}\u{7}{text}\u{1b}]8;;\u{7}")
+    }
+
+    fn osc8_st_hyperlink(destination: &str, text: &str) -> String {
+        format!("\u{1b}]8;;{destination}\u{1b}\\{text}\u{1b}]8;;\u{1b}\\")
+    }
+
+    fn osc8_bel_hyperlink_with_params(params: &str, destination: &str, text: &str) -> String {
+        format!("\u{1b}]8;{params};{destination}\u{7}{text}\u{1b}]8;;\u{7}")
+    }
+
+    fn osc8_bel_open_with_params(params: &str, destination: &str) -> String {
+        format!("\u{1b}]8;{params};{destination}\u{7}")
+    }
+
+    fn c1_osc8_hyperlink(destination: &str, text: &str) -> String {
+        format!("\u{9d}8;;{destination}\u{9c}{text}\u{9d}8;;\u{9c}")
+    }
+
+    fn csi_green_text(text: &str) -> String {
+        format!("\u{1b}[32m{text}\u{1b}[0m")
+    }
+
+    fn c1_csi_green_text(text: &str) -> String {
+        format!("\u{9b}32m{text}\u{9b}0m")
     }
 
     #[test]
@@ -1403,5 +1429,160 @@ them."#
 
         assert_eq!(rebuilt, text);
         assert!(ranges.len() > 1, "expected wrapped ranges, got: {ranges:?}");
+    }
+
+    // Wrapping must close/reopen each visual fragment so a hyperlink/color run never leaks into
+    // the next line and OSC-8 params survive chunk boundaries.
+    #[test]
+    fn adaptive_wrap_line_preserves_osc8_wrappers_across_wrapped_chunks() {
+        let destination = "https://example.com/docs";
+        let line = Line::from(vec![osc8_bel_hyperlink(destination, "abcdef").into()]);
+
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 4));
+
+        assert_eq!(
+            out.iter().map(concat_line).collect::<Vec<_>>(),
+            vec![
+                osc8_bel_hyperlink(destination, "abcd"),
+                osc8_bel_hyperlink(destination, "ef"),
+            ]
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_preserves_csi_wrappers_across_wrapped_chunks() {
+        let line = Line::from(vec![csi_green_text("abcdef").into()]);
+
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 4));
+
+        assert_eq!(
+            out.iter().map(concat_line).collect::<Vec<_>>(),
+            vec![csi_green_text("abcd"), csi_green_text("ef")]
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_preserves_st_terminated_osc8_wrappers_across_wrapped_chunks() {
+        let destination = "https://example.com/docs";
+        let line = Line::from(vec![osc8_st_hyperlink(destination, "abcdef").into()]);
+
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 4));
+
+        assert_eq!(
+            out.iter().map(concat_line).collect::<Vec<_>>(),
+            vec![
+                osc8_st_hyperlink(destination, "abcd"),
+                osc8_st_hyperlink(destination, "ef"),
+            ]
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_preserves_osc8_id_params_and_nested_csi_wrappers_across_chunks() {
+        let destination = "https://example.com/docs";
+        let line = Line::from(vec![
+            format!(
+                "\u{1b}[32m{}abcdef\u{1b}]8;;\u{7}\u{1b}[0m",
+                osc8_bel_open_with_params("id=docs:target=_blank", destination),
+            )
+            .into(),
+        ]);
+
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 4));
+
+        assert_eq!(
+            out.iter().map(concat_line).collect::<Vec<_>>(),
+            vec![
+                format!(
+                    "\u{1b}[32m{}abcd\u{1b}]8;;\u{7}\u{1b}[0m",
+                    osc8_bel_open_with_params("id=docs:target=_blank", destination),
+                ),
+                format!(
+                    "\u{1b}[32m{}ef\u{1b}]8;;\u{7}\u{1b}[0m",
+                    osc8_bel_open_with_params("id=docs:target=_blank", destination),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_preserves_adjacent_osc8_wrappers_as_distinct_runs() {
+        let docs = "https://example.com/docs";
+        let logs = "https://example.com/logs";
+        let line = Line::from(vec![
+            osc8_bel_hyperlink(docs, "ab").into(),
+            osc8_bel_hyperlink(logs, "cd").into(),
+        ]);
+
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 2));
+
+        assert_eq!(
+            out.iter().map(concat_line).collect::<Vec<_>>(),
+            vec![
+                osc8_bel_hyperlink(docs, "ab"),
+                osc8_bel_hyperlink(logs, "cd"),
+            ]
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_preserves_c1_osc8_and_c1_csi_wrappers_across_chunks() {
+        let destination = "https://example.com/docs";
+        let line = Line::from(vec![
+            c1_osc8_hyperlink(destination, "abcdef").into(),
+            c1_csi_green_text("ghijkl").into(),
+        ]);
+
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 4));
+
+        assert_eq!(
+            out.iter().map(concat_line).collect::<Vec<_>>(),
+            vec![
+                c1_osc8_hyperlink(destination, "abcd"),
+                format!(
+                    "{}{}",
+                    c1_osc8_hyperlink(destination, "ef"),
+                    c1_csi_green_text("gh")
+                ),
+                c1_csi_green_text("ijkl"),
+            ]
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_preserves_osc8_retarget_and_stray_close_state_transitions() {
+        let docs = "https://example.com/docs";
+        let logs = "https://example.com/logs";
+        let line = Line::from(vec![
+            format!(
+                "{}ab{}cd\u{1b}]8;;\u{7}\u{1b}]8;;\u{7}",
+                osc8_bel_open_with_params("id=docs", docs),
+                osc8_bel_open_with_params("id=logs", logs),
+            )
+            .into(),
+        ]);
+
+        let out = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 2));
+
+        assert_eq!(
+            out.iter().map(concat_line).collect::<Vec<_>>(),
+            vec![
+                osc8_bel_hyperlink_with_params("id=docs", docs, "ab"),
+                format!(
+                    "{}cd\u{1b}]8;;\u{7}\u{1b}]8;;\u{7}",
+                    osc8_bel_open_with_params("id=logs", logs),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn adaptive_wrap_line_handles_unterminated_escape_sequences_without_panicking() {
+        let line = Line::from(vec![
+            "\u{1b}]8;;https://example.com/docs\u{7}abcdef".into(),
+            "\u{1b}[32mghij".into(),
+        ]);
+
+        let _ = adaptive_wrap_line(&line, RtOptions::new(/*width*/ 4));
     }
 }

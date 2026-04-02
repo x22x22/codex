@@ -10,7 +10,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 use std::borrow::Cow;
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint::KeyBinding;
@@ -434,32 +434,43 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
 
     if let Some(idxs) = row.match_indices.as_ref() {
         let mut idx_iter = idxs.iter().peekable();
-        for (char_idx, ch) in row.name.chars().enumerate() {
-            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
-            let next_width = used_width.saturating_add(ch_w);
+        let mut char_idx = 0usize;
+        for grapheme in row.name.graphemes(true) {
+            let grapheme_width = UnicodeWidthStr::width(grapheme);
+            let next_width = used_width.saturating_add(grapheme_width);
             if next_width > name_limit {
                 truncated = true;
                 break;
             }
             used_width = next_width;
 
-            if idx_iter.peek().is_some_and(|next| **next == char_idx) {
+            let next_char_idx = char_idx + grapheme.chars().count();
+            let is_match = idx_iter
+                .peek()
+                .is_some_and(|next| (char_idx..next_char_idx).contains(next));
+            while idx_iter
+                .peek()
+                .is_some_and(|next| (char_idx..next_char_idx).contains(next))
+            {
                 idx_iter.next();
-                name_spans.push(ch.to_string().bold());
-            } else {
-                name_spans.push(ch.to_string().into());
             }
+            if is_match {
+                name_spans.push(grapheme.to_string().bold());
+            } else {
+                name_spans.push(grapheme.to_string().into());
+            }
+            char_idx = next_char_idx;
         }
     } else {
-        for ch in row.name.chars() {
-            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
-            let next_width = used_width.saturating_add(ch_w);
+        for grapheme in row.name.graphemes(true) {
+            let grapheme_width = UnicodeWidthStr::width(grapheme);
+            let next_width = used_width.saturating_add(grapheme_width);
             if next_width > name_limit {
                 truncated = true;
                 break;
             }
             used_width = next_width;
-            name_spans.push(ch.to_string().into());
+            name_spans.push(grapheme.to_string().into());
         }
     }
 
@@ -865,5 +876,26 @@ mod tests {
 
         let two_col = wrap_two_column_row(&row, /*desc_col*/ 0, /*width*/ 1);
         assert_eq!(two_col.len(), 0);
+    }
+
+    // Selection rows truncate the name column manually; this catches splitting a ZWJ emoji before
+    // the ellipsis when a description column is present.
+    #[test]
+    fn build_full_line_preserves_full_grapheme_clusters_before_ellipsis() {
+        let family = "👨\u{200d}👩\u{200d}👧\u{200d}👦";
+        let row = GenericDisplayRow {
+            name: format!("{family} docs"),
+            description: Some("description".to_string()),
+            ..Default::default()
+        };
+
+        let line = build_full_line(&row, /*desc_col*/ 4);
+        let rendered = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert_eq!(rendered, format!("{family}… description"));
     }
 }

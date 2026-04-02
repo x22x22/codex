@@ -1,4 +1,5 @@
 use pretty_assertions::assert_eq;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -13,6 +14,22 @@ use insta::assert_snapshot;
 
 fn render_markdown_text_for_cwd(input: &str, cwd: &Path) -> Text<'static> {
     render_markdown_text_with_width_and_cwd(input, /*width*/ None, Some(cwd))
+}
+
+fn osc8_bel_hyperlink(destination: &str, text: &str) -> String {
+    format!("\u{1b}]8;;{destination}\u{7}{text}\u{1b}]8;;\u{7}")
+}
+
+fn rendered_lines(text: &Text<'_>) -> Vec<String> {
+    text.lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect()
 }
 
 #[test]
@@ -651,9 +668,15 @@ fn strong_emphasis() {
 fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
     let expected = Text::from(Line::from_iter([
-        "Link".into(),
+        Span::styled(
+            osc8_bel_hyperlink("https://example.com", "Link"),
+            Style::new().underlined(),
+        ),
         " (".into(),
-        "https://example.com".cyan().underlined(),
+        Span::styled(
+            osc8_bel_hyperlink("https://example.com", "https://example.com"),
+            Style::new().cyan().underlined(),
+        ),
         ")".into(),
     ]));
     assert_eq!(text, expected);
@@ -794,9 +817,18 @@ fn file_link_uses_target_path_for_hash_range() {
 fn url_link_shows_destination() {
     let text = render_markdown_text("[docs](https://example.com/docs)");
     let expected = Text::from(Line::from_iter([
-        "docs".into(),
+        Span::styled(
+            osc8_bel_hyperlink("https://example.com/docs", "docs"),
+            Style::new().underlined(),
+        ),
         " (".into(),
-        "https://example.com/docs".cyan().underlined(),
+        Span::styled(
+            osc8_bel_hyperlink(
+                "https://example.com/docs",
+                "https://example.com/docs",
+            ),
+            Style::new().cyan().underlined(),
+        ),
         ")".into(),
     ]));
     assert_eq!(text, expected);
@@ -1355,4 +1387,56 @@ fn code_block_preserves_trailing_blank_lines() {
         content[code_start + 1], "",
         "trailing blank line inside code fence was lost: {content:?}"
     );
+}
+
+#[test]
+// `pulldown-cmark` is not a transport for raw ESC/CSI bytes: it strips the ESC introducer before
+// our wrapper layer can parse it. Raw escape chunking is covered in `wrapping.rs`; this test starts
+// from normal Markdown link syntax and verifies the renderer's own OSC-8 output is re-sliced into
+// independently closed chunks.
+fn wrapped_markdown_preserves_renderer_emitted_osc8_wrappers_around_visible_chunks() {
+    let destination = "https://example.com/docs";
+
+    let text = render_markdown_text_with_width_and_cwd(
+        "[abcdef](https://example.com/docs)",
+        Some(3),
+        None,
+    );
+
+    assert_eq!(
+        rendered_lines(&text),
+        vec![
+            osc8_bel_hyperlink(destination, "ab"),
+            osc8_bel_hyperlink(destination, "cd"),
+            osc8_bel_hyperlink(destination, "ef"),
+            format!("({})", osc8_bel_hyperlink(destination, destination)),
+        ]
+    );
+}
+
+#[test]
+// Link destinations are wrapped with OSC-8 after any surrounding Markdown style is resolved, so
+// nested emphasis must not drop the hyperlink wrapper or duplicate the visible URL.
+fn markdown_link_destination_remains_clickable_inside_nested_styles() {
+    let destination = "https://example.com/docs";
+
+    let text = render_markdown_text_with_width_and_cwd(
+        "*[abcdef](https://example.com/docs)*",
+        /*width*/ None,
+        None,
+    );
+
+    let mut lines = text.lines.iter();
+    let line = lines.next().expect("expected one rendered line");
+    assert!(lines.next().is_none(), "expected one rendered line: {text:#?}");
+    assert_eq!(
+        rendered_lines(&text),
+        vec![format!(
+            "{} ({})",
+            osc8_bel_hyperlink(destination, "abcdef"),
+            osc8_bel_hyperlink(destination, destination),
+        )],
+    );
+    assert_eq!(line.spans[0].style, Style::new().italic().underlined());
+    assert_eq!(line.spans[2].style, Style::new().italic().cyan().underlined());
 }

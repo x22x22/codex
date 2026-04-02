@@ -27,6 +27,7 @@ use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
+use crate::terminal_wrappers;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 use crate::text_formatting::format_and_truncate_tool_result;
@@ -1033,7 +1034,7 @@ fn with_border_internal(
         .iter()
         .map(|line| {
             line.iter()
-                .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                .map(|span| terminal_wrappers::display_width(span.content.as_ref()))
                 .sum::<usize>()
         })
         .max()
@@ -1049,7 +1050,7 @@ fn with_border_internal(
     for line in lines.into_iter() {
         let used_width: usize = line
             .iter()
-            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .map(|span| terminal_wrappers::display_width(span.content.as_ref()))
             .sum();
         let span_count = line.spans.len();
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(span_count + 4);
@@ -2933,6 +2934,29 @@ mod tests {
             meta: None,
         }))
         .expect("resource link content should serialize")
+    }
+
+    // Borders are padded from rendered cell width, not source byte length, so OSC-8 params and
+    // SGR escapes must not widen the box.
+    #[test]
+    fn with_border_sizes_padding_from_visible_text_not_escape_bytes() {
+        let docs = "\u{1b}]8;id=docs;https://example.com/docs\u{7}docs\u{1b}]8;;\u{7}";
+        let red = "\u{1b}[31mred\u{1b}[0m";
+
+        let lines = with_border(vec![Line::from(vec![
+            docs.to_string().into(),
+            " ".into(),
+            red.to_string().into(),
+        ])]);
+
+        assert_eq!(
+            render_lines(&lines),
+            vec![
+                "╭──────────╮".to_string(),
+                format!("│ {docs} {red} │"),
+                "╰──────────╯".to_string(),
+            ]
+        );
     }
 
     #[test]

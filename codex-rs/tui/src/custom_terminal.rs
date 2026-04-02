@@ -24,6 +24,7 @@
 use std::io;
 use std::io::Write;
 
+use crate::terminal_wrappers;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
 use crossterm::style::Colors;
@@ -43,39 +44,10 @@ use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::widgets::WidgetRef;
-use unicode_width::UnicodeWidthStr;
 
-/// Returns the display width of a cell symbol, ignoring OSC escape sequences.
-///
-/// OSC sequences (e.g. OSC 8 hyperlinks: `\x1B]8;;URL\x07`) are terminal
-/// control sequences that don't consume display columns.  The standard
-/// `UnicodeWidthStr::width()` method incorrectly counts the printable
-/// characters inside OSC payloads (like `]`, `8`, `;`, and URL characters).
-/// This function strips them first so that only visible characters contribute
-/// to the width.
+/// Returns the display width of a cell symbol, ignoring zero-width terminal wrappers.
 fn display_width(s: &str) -> usize {
-    // Fast path: no escape sequences present.
-    if !s.contains('\x1B') {
-        return s.width();
-    }
-
-    // Strip OSC sequences: ESC ] ... BEL
-    let mut visible = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1B' && chars.clone().next() == Some(']') {
-            // Consume the ']' and everything up to and including BEL.
-            chars.next(); // skip ']'
-            for c in chars.by_ref() {
-                if c == '\x07' {
-                    break;
-                }
-            }
-            continue;
-        }
-        visible.push(ch);
-    }
-    visible.width()
+    terminal_wrappers::display_width(s)
 }
 
 #[derive(Debug, Hash)]
@@ -703,6 +675,18 @@ mod tests {
     use ratatui::layout::Rect;
     use ratatui::style::Style;
 
+    fn osc8_st_hyperlink(destination: &str, text: &str) -> String {
+        format!("\u{1b}]8;;{destination}\u{1b}\\{text}\u{1b}]8;;\u{1b}\\")
+    }
+
+    fn osc8_bel_hyperlink_with_params(params: &str, destination: &str, text: &str) -> String {
+        format!("\u{1b}]8;{params};{destination}\u{7}{text}\u{1b}]8;;\u{7}")
+    }
+
+    fn c1_osc8_hyperlink(destination: &str, text: &str) -> String {
+        format!("\u{9d}8;;{destination}\u{9c}{text}\u{9d}8;;\u{9c}")
+    }
+
     #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
         let area = Rect::new(0, 0, 3, 2);
@@ -747,5 +731,67 @@ mod tests {
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
         );
+    }
+
+    // Ratatui diffing uses this width helper to size terminal writes, so all escape bytes must
+    // be zero-width regardless of whether OSC is terminated by BEL or ST.
+    #[test]
+    fn display_width_ignores_st_terminated_osc8_wrapper() {
+        assert_eq!(
+            display_width(&osc8_st_hyperlink("https://example.com/docs", "docs")),
+            4
+        );
+    }
+
+    #[test]
+    fn display_width_ignores_csi_sgr_escape_sequences() {
+        assert_eq!(display_width("\u{1b}[31mdocs\u{1b}[0m"), 4);
+    }
+
+    #[test]
+    fn display_width_ignores_osc8_params_and_replacement_open() {
+        let sample = format!(
+            "{}{}",
+            osc8_bel_hyperlink_with_params(
+                "id=docs:target=_blank",
+                "https://example.com/docs",
+                "ab"
+            ),
+            osc8_bel_hyperlink_with_params("id=logs", "https://example.com/logs", "cd"),
+        );
+
+        assert_eq!(display_width(&sample), 4);
+    }
+
+    #[test]
+    fn display_width_ignores_c1_osc8_and_c1_csi_wrappers() {
+        let sample = format!(
+            "{} {}",
+            c1_osc8_hyperlink("https://example.com/docs", "docs"),
+            "\u{9b}31mtail\u{9b}0m",
+        );
+
+        assert_eq!(display_width(&sample), 9);
+    }
+
+    #[test]
+    fn display_width_ignores_unterminated_c1_osc8_payload_bytes() {
+        assert_eq!(display_width("\u{9d}8;;https://example.com/docs docs"), 0);
+    }
+
+    #[test]
+    fn display_width_handles_unterminated_escape_sequences_without_panicking() {
+        let samples = [
+            "\u{1b}]8;;https://example.com/docs\u{7}docs",
+            "\u{1b}]8;;https://example.com/docs",
+            "\u{1b}[31mdocs",
+            "docs\u{1b}[0",
+            "\u{9d}8;;https://example.com/docs\u{9c}docs",
+            "\u{9b}31mdocs",
+        ];
+
+        for sample in samples {
+            let _ = display_width(sample);
+        }
     }
 }

@@ -1,13 +1,14 @@
 ---
 source: tui/src/markdown_render_tests.rs
+assertion_line: 1219
 expression: rendered
 ---
 # H1: Markdown Streaming Test
 
 Intro paragraph with bold text, italic text, and inline code x=1.
 Combined bold-italic both and escaped asterisks *literal*.
-Auto-link: https://example.com (https://example.com) and reference link [ref][r1].
-Link with title: hover me (https://example.com) and mailto mailto:test@example.com (mailto:test@example.com).
+Auto-link: ]8;;https://example.comhttps://example.com]8;; (]8;;https://example.comhttps://example.com]8;;) and reference link [ref][r1].
+Link with title: ]8;;https://example.comhover me]8;; (]8;;https://example.comhttps://example.com]8;;) and mailto ]8;;mailto:test@example.commailto:test@example.com]8;; (]8;;mailto:test@example.commailto:test@example.com]8;;).
 Image: alt text
 
 > Blockquote level 1
@@ -23,7 +24,7 @@ Image: alt text
     1. Alt-numbered subitem
 
 - [ ] Task: unchecked
-- [x] Task: checked with link home (https://example.org)
+- [x] Task: checked with link ]8;;https://example.orghome]8;; (]8;;https://example.orghttps://example.org]8;;)
 
 ———
 

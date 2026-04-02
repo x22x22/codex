@@ -1,4 +1,4 @@
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// A single visual row produced by RowBuilder.
@@ -190,13 +190,13 @@ pub fn take_prefix_by_width(text: &str, max_cols: usize) -> (String, &str, usize
     }
     let mut cols = 0usize;
     let mut end_idx = 0usize;
-    for (i, ch) in text.char_indices() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if cols.saturating_add(ch_width) > max_cols {
+    for (i, grapheme) in text.grapheme_indices(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if cols.saturating_add(grapheme_width) > max_cols {
             break;
         }
-        cols += ch_width;
-        end_idx = i + ch.len_utf8();
+        cols += grapheme_width;
+        end_idx = i + grapheme.len();
         if cols == max_cols {
             break;
         }
@@ -247,6 +247,20 @@ mod tests {
                 explicit_break: false
             }]
         );
+    }
+
+    // Live streaming wraps incrementally, so prefix extraction must never split a ZWJ emoji and
+    // leave an invalid suffix for the next fragment.
+    #[test]
+    fn take_prefix_by_width_preserves_full_grapheme_clusters() {
+        let family = "👨\u{200d}👩\u{200d}👧\u{200d}👦";
+        let text = format!("{family} docs");
+
+        let (prefix, suffix, width) = take_prefix_by_width(&text, /*max_cols*/ 2);
+
+        assert_eq!(prefix, family);
+        assert_eq!(suffix, " docs");
+        assert_eq!(width, 2);
     }
 
     #[test]

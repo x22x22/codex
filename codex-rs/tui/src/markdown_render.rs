@@ -42,7 +42,8 @@ struct MarkdownStyles {
     strikethrough: Style,
     ordered_list_marker: Style,
     unordered_list_marker: Style,
-    link: Style,
+    link_label: Style,
+    link_destination: Style,
     blockquote: Style,
 }
 
@@ -63,7 +64,8 @@ impl Default for MarkdownStyles {
             strikethrough: Style::new().crossed_out(),
             ordered_list_marker: Style::new().light_blue(),
             unordered_list_marker: Style::new(),
-            link: Style::new().cyan().underlined(),
+            link_label: Style::new().underlined(),
+            link_destination: Style::new().cyan().underlined(),
             blockquote: Style::new().green(),
         }
     }
@@ -127,6 +129,24 @@ struct LinkState {
 
 fn should_render_link_destination(dest_url: &str) -> bool {
     !is_local_path_like_link(dest_url)
+}
+
+fn osc8_hyperlink(destination: &str, text: &str) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+
+    let destination = sanitize_osc8_text(destination);
+    let text = sanitize_osc8_text(text);
+    if destination.is_empty() || text.is_empty() {
+        return text;
+    }
+
+    format!("\u{1b}]8;;{destination}\u{7}{text}\u{1b}]8;;\u{7}")
+}
+
+fn sanitize_osc8_text(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_control()).collect()
 }
 
 static COLON_LOCATION_SUFFIX_RE: LazyLock<Regex> =
@@ -570,6 +590,10 @@ where
         self.indent_stack.pop();
     }
 
+    fn current_inline_style(&self) -> Style {
+        self.inline_styles.last().copied().unwrap_or_default()
+    }
+
     fn push_inline_style(&mut self, style: Style) {
         let current = self.inline_styles.last().copied().unwrap_or_default();
         let merged = current.patch(style);
@@ -582,13 +606,17 @@ where
 
     fn push_link(&mut self, dest_url: String) {
         let show_destination = should_render_link_destination(&dest_url);
+        let local_target_display = if is_local_path_like_link(&dest_url) {
+            render_local_link_target(&dest_url, self.cwd.as_deref())
+        } else {
+            None
+        };
+        if show_destination && local_target_display.is_none() {
+            self.push_inline_style(self.styles.link_label);
+        }
         self.link = Some(LinkState {
             show_destination,
-            local_target_display: if is_local_path_like_link(&dest_url) {
-                render_local_link_target(&dest_url, self.cwd.as_deref())
-            } else {
-                None
-            },
+            local_target_display,
             destination: dest_url,
         });
     }
@@ -596,21 +624,25 @@ where
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             if link.show_destination {
-                self.push_span(" (".into());
-                self.push_span(Span::styled(link.destination, self.styles.link));
-                self.push_span(")".into());
+                if link.local_target_display.is_none() {
+                    self.pop_inline_style();
+                }
+                let destination_style = self
+                    .current_inline_style()
+                    .patch(self.styles.link_destination);
+                self.push_span(Span::styled(" (", self.current_inline_style()));
+                self.push_span(Span::styled(
+                    osc8_hyperlink(&link.destination, &link.destination),
+                    destination_style,
+                ));
+                self.push_span(Span::styled(")", self.current_inline_style()));
             } else if let Some(local_target_display) = link.local_target_display {
                 if self.pending_marker_line {
                     self.push_line(Line::default());
                 }
                 // Local file links are rendered as code-like path text so the transcript shows the
                 // resolved target instead of arbitrary caller-provided label text.
-                let style = self
-                    .inline_styles
-                    .last()
-                    .copied()
-                    .unwrap_or_default()
-                    .patch(self.styles.code);
+                let style = self.current_inline_style().patch(self.styles.code);
                 self.push_span(Span::styled(local_target_display, style));
                 self.line_ends_with_local_link_target = true;
             }
@@ -674,7 +706,19 @@ where
         self.pending_marker_line = false;
     }
 
-    fn push_span(&mut self, span: Span<'static>) {
+    fn push_span(&mut self, mut span: Span<'static>) {
+        if let Some(link) = self
+            .link
+            .as_ref()
+            .filter(|link| link.show_destination && link.local_target_display.is_none())
+            && !span.content.is_empty()
+        {
+            span = Span::styled(
+                osc8_hyperlink(&link.destination, span.content.as_ref()),
+                span.style,
+            );
+        }
+
         if let Some(line) = self.current_line_content.as_mut() {
             line.push_span(span);
         } else {

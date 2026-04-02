@@ -1,12 +1,14 @@
+use crate::terminal_wrappers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use std::borrow::Cow;
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -427,7 +429,7 @@ impl RequestUserInputOverlay {
 
 fn line_width(line: &Line<'_>) -> usize {
     line.iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .map(|span| terminal_wrappers::display_width(span.content.as_ref()))
         .sum()
 }
 
@@ -497,77 +499,68 @@ fn truncate_line_word_boundary_with_ellipsis(
     if ellipsis_width >= max_width {
         return Line::from(ellipsis);
     }
-    let limit = max_width.saturating_sub(ellipsis_width);
 
-    #[derive(Clone, Copy)]
-    struct BreakPoint {
-        span_idx: usize,
-        byte_end: usize,
+    let limit = max_width.saturating_sub(ellipsis_width);
+    let mut visible_text = String::new();
+    let mut span_bounds: Vec<(std::ops::Range<usize>, Style)> =
+        Vec::with_capacity(line.spans.len());
+    let mut cursor = 0usize;
+    for span in &line.spans {
+        let span_visible_text = terminal_wrappers::strip(span.content.as_ref());
+        let start = cursor;
+        visible_text.push_str(&span_visible_text);
+        cursor += span_visible_text.len();
+        span_bounds.push((start..cursor, span.style));
     }
 
-    // Track display width as we scan, along with the best "cut here" positions.
     let mut used = 0usize;
-    let mut last_fit: Option<BreakPoint> = None;
-    let mut last_word_break: Option<BreakPoint> = None;
-    let mut overflowed = false;
-
-    'outer: for (span_idx, span) in line.spans.iter().enumerate() {
-        let text = span.content.as_ref();
-        for (byte_idx, ch) in text.char_indices() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used.saturating_add(ch_width) > limit {
-                overflowed = true;
-                break 'outer;
-            }
-            used = used.saturating_add(ch_width);
-            let bp = BreakPoint {
-                span_idx,
-                byte_end: byte_idx + ch.len_utf8(),
-            };
-            last_fit = Some(bp);
-            if ch.is_whitespace() {
-                last_word_break = Some(bp);
-            }
+    let mut last_fit_end = 0usize;
+    let mut last_word_break_end = None;
+    for (byte_idx, grapheme) in visible_text.grapheme_indices(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if used.saturating_add(grapheme_width) > limit {
+            break;
+        }
+        used = used.saturating_add(grapheme_width);
+        last_fit_end = byte_idx + grapheme.len();
+        if grapheme.chars().all(char::is_whitespace) {
+            last_word_break_end = Some(last_fit_end);
         }
     }
 
-    // If we never overflowed, the original line already fits.
-    if !overflowed {
-        return line;
+    let mut chosen_end = last_word_break_end.unwrap_or(last_fit_end);
+    while chosen_end > 0 {
+        let Some((byte_idx, grapheme)) = visible_text[..chosen_end]
+            .grapheme_indices(true)
+            .next_back()
+        else {
+            break;
+        };
+        if !grapheme.chars().all(char::is_whitespace) {
+            break;
+        }
+        chosen_end = byte_idx;
     }
 
-    // Prefer breaking on whitespace; otherwise fall back to the last fitting character.
-    let chosen_break = last_word_break.or(last_fit);
-    let Some(chosen_break) = chosen_break else {
+    if chosen_end == 0 {
         return Line::from(ellipsis);
-    };
+    }
 
     let line_style = line.style;
     let mut spans_out: Vec<Span<'static>> = Vec::new();
-    for (idx, span) in line.spans.into_iter().enumerate() {
-        if idx < chosen_break.span_idx {
-            spans_out.push(span);
-            continue;
+    for (span, (visible_range, style)) in line.spans.into_iter().zip(span_bounds) {
+        if visible_range.start >= chosen_end {
+            break;
         }
-        if idx == chosen_break.span_idx {
-            let text = span.content.into_owned();
-            let truncated = text[..chosen_break.byte_end].to_string();
-            if !truncated.is_empty() {
-                spans_out.push(Span::styled(truncated, span.style));
+        let local_end = chosen_end.min(visible_range.end) - visible_range.start;
+        if local_end > 0 {
+            let content =
+                terminal_wrappers::slice_visible_range(span.content.as_ref(), 0..local_end);
+            if !content.is_empty() {
+                spans_out.push(Span::styled(content, style));
             }
         }
-        break;
-    }
-
-    while let Some(last) = spans_out.last_mut() {
-        let trimmed = last
-            .content
-            .trim_end_matches(char::is_whitespace)
-            .to_string();
-        if trimmed.is_empty() {
-            spans_out.pop();
-        } else {
-            last.content = trimmed.into();
+        if visible_range.end >= chosen_end {
             break;
         }
     }
@@ -579,4 +572,96 @@ fn truncate_line_word_boundary_with_ellipsis(
     spans_out.push(Span::styled(ellipsis, ellipsis_style));
 
     Line::from(spans_out).style(line_style)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn concat_line(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    fn osc8_bel_hyperlink(destination: &str, text: &str) -> String {
+        format!("\u{1b}]8;;{destination}\u{7}{text}\u{1b}]8;;\u{7}")
+    }
+
+    fn osc8_bel_hyperlink_with_params(params: &str, destination: &str, text: &str) -> String {
+        format!("\u{1b}]8;{params};{destination}\u{7}{text}\u{1b}]8;;\u{7}")
+    }
+
+    fn c1_osc8_hyperlink(destination: &str, text: &str) -> String {
+        format!("\u{9d}8;;{destination}\u{9c}{text}\u{9d}8;;\u{9c}")
+    }
+
+    fn csi_blue_text(text: &str) -> String {
+        format!("\u{1b}[34m{text}\u{1b}[0m")
+    }
+
+    fn c1_csi_blue_text(text: &str) -> String {
+        format!("\u{9b}34m{text}\u{9b}0m")
+    }
+
+    // Footer hints are ellipsized at word boundaries; this guards against counting invisible
+    // wrapper bytes or splitting a multi-codepoint emoji before appending the ellipsis.
+    #[test]
+    fn truncate_line_word_boundary_with_ellipsis_counts_only_visible_text_for_osc8_wrappers() {
+        let destination = "https://example.com/docs";
+        let line = Line::from(vec![osc8_bel_hyperlink(destination, "abcdef ghij").into()]);
+
+        let truncated = truncate_line_word_boundary_with_ellipsis(line, 7);
+
+        assert_eq!(
+            concat_line(&truncated),
+            format!("{}…", osc8_bel_hyperlink(destination, "abcdef"))
+        );
+    }
+
+    #[test]
+    fn truncate_line_word_boundary_with_ellipsis_counts_only_visible_text_for_csi_wrappers() {
+        let line = Line::from(vec![csi_blue_text("abcdef ghij").into()]);
+
+        let truncated = truncate_line_word_boundary_with_ellipsis(line, 7);
+
+        assert_eq!(
+            concat_line(&truncated),
+            format!("{}…", csi_blue_text("abcdef"))
+        );
+    }
+
+    #[test]
+    fn truncate_line_word_boundary_with_ellipsis_preserves_osc8_params_and_c1_wrappers() {
+        let docs = "https://example.com/docs";
+        let line = Line::from(vec![
+            osc8_bel_hyperlink_with_params("id=docs:target=_blank", docs, "abcdef ghij").into(),
+            " ".into(),
+            c1_osc8_hyperlink("https://example.com/logs", "tail").into(),
+            " ".into(),
+            c1_csi_blue_text("done").into(),
+        ]);
+
+        let truncated = truncate_line_word_boundary_with_ellipsis(line, 7);
+
+        assert_eq!(
+            concat_line(&truncated),
+            format!(
+                "{}…",
+                osc8_bel_hyperlink_with_params("id=docs:target=_blank", docs, "abcdef"),
+            )
+        );
+    }
+
+    #[test]
+    fn truncate_line_word_boundary_with_ellipsis_preserves_full_grapheme_clusters() {
+        let family = "👨\u{200d}👩\u{200d}👧\u{200d}👦";
+        let line = Line::from(format!("{family} docs"));
+
+        let truncated = truncate_line_word_boundary_with_ellipsis(line, 3);
+
+        assert_eq!(concat_line(&truncated), format!("{family}…"));
+    }
 }
