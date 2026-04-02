@@ -155,10 +155,10 @@ mod updates;
 mod version;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod voice;
-mod vt100_backend;
-mod vt100_render;
 #[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
 mod voice;
+mod vt100_backend;
+mod vt100_render;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod voice {

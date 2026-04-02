@@ -104,7 +104,7 @@ mod tests {
         };
 
         assert_eq!(
-            overlay_mouse_action(area, &popups, None, mouse_event),
+            overlay_mouse_action(area, &popups, /*drag_state*/ None, mouse_event),
             OverlayMouseAction::FocusBackground
         );
     }
@@ -121,7 +121,7 @@ mod tests {
         };
 
         assert_eq!(
-            overlay_mouse_action(area, &popups, None, mouse_event),
+            overlay_mouse_action(area, &popups, /*drag_state*/ None, mouse_event),
             OverlayMouseAction::FocusPopup {
                 popup_index: 0,
                 drag_state: PopupDragState {
@@ -165,7 +165,7 @@ mod tests {
         };
 
         assert_eq!(
-            overlay_mouse_action(area, &popups, None, mouse_event),
+            overlay_mouse_action(area, &popups, /*drag_state*/ None, mouse_event),
             OverlayMouseAction::EndDrag
         );
     }
@@ -182,7 +182,7 @@ mod tests {
         };
 
         assert_eq!(
-            overlay_mouse_action(area, &popups, None, mouse_event),
+            overlay_mouse_action(area, &popups, /*drag_state*/ None, mouse_event),
             OverlayMouseAction::FocusPopup {
                 popup_index: 1,
                 drag_state: PopupDragState {

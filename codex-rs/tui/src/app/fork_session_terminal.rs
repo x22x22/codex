@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(
             encode_key_event(
                 KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-                false
+                /*application_cursor*/ false
             ),
             Some(vec![0x03])
         );
@@ -432,7 +432,10 @@ mod tests {
     #[test]
     fn alt_left_uses_word_motion_fallback() {
         assert_eq!(
-            encode_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT), false),
+            encode_key_event(
+                KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+                /*application_cursor*/ false,
+            ),
             Some(b"\x1bb".to_vec())
         );
     }
@@ -440,7 +443,7 @@ mod tests {
     #[test]
     fn bracketed_paste_wraps_contents() {
         assert_eq!(
-            encode_paste(true, "hello"),
+            encode_paste(/*bracketed_paste*/ true, "hello"),
             b"\x1b[200~hello\x1b[201~".to_vec()
         );
     }

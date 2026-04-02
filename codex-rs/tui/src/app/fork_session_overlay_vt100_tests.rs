@@ -10,8 +10,9 @@ use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::PlainHistoryCell;
 use crate::test_backend::VT100Backend;
-use codex_core::CodexAuth;
+use codex_config::types::ApprovalsReviewer;
 use codex_core::config::ConfigOverrides;
+use codex_login::CodexAuth;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -35,41 +36,37 @@ use tempfile::NamedTempFile;
 async fn make_test_app() -> App {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
-    let server = Arc::new(
+    let _server = Arc::new(
         codex_core::test_support::thread_manager_with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
         ),
     );
-    let auth_manager =
+    let _auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
-    let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+    let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = codex_core::test_support::get_model_offline(config.model.as_deref());
     let session_telemetry = SessionTelemetry::new(
         ThreadId::new(),
         model.as_str(),
         model.as_str(),
-        None,
-        None,
-        None,
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
         "test_originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "test".to_string(),
         SessionSource::Cli,
     );
 
     App {
-        server,
+        model_catalog: chat_widget.model_catalog(),
         session_telemetry,
         app_event_tx,
         chat_widget,
-        auth_manager,
         config,
         active_profile: None,
         cli_kv_overrides: Vec::new(),
-        arg0_paths: codex_arg0::Arg0DispatchPaths::default(),
-        loader_overrides: codex_core::config_loader::LoaderOverrides::default(),
-        cloud_requirements: codex_core::config_loader::CloudRequirementsLoader::default(),
         harness_overrides: ConfigOverrides::default(),
         runtime_approval_policy_override: None,
         runtime_sandbox_policy_override: None,
@@ -87,8 +84,9 @@ async fn make_test_app() -> App {
         backtrack_render_pending: false,
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
+        remote_app_server_url: None,
+        remote_app_server_auth_token: None,
         pending_update_action: None,
-        suppress_shutdown_complete: false,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
         thread_event_channels: HashMap::new(),
@@ -97,14 +95,16 @@ async fn make_test_app() -> App {
         active_thread_id: None,
         active_thread_rx: None,
         primary_thread_id: None,
+        last_subagent_backfill_attempt: None,
         primary_session_configured: None,
         pending_primary_events: VecDeque::new(),
+        pending_app_server_requests: Default::default(),
     }
 }
 
 fn configure_chat_widget(app: &mut App) {
     let rollout_file = NamedTempFile::new().expect("rollout file");
-    app.handle_codex_event_now(Event {
+    app.chat_widget.handle_codex_event(Event {
         id: "configured".to_string(),
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: ThreadId::new(),
@@ -114,7 +114,7 @@ fn configure_chat_widget(app: &mut App) {
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::Never,
-            approvals_reviewer: codex_core::config::types::ApprovalsReviewer::User,
+            approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/tmp/worktree"),
             reasoning_effort: Some(ReasoningEffortConfig::XHigh),
@@ -216,7 +216,7 @@ async fn fork_session_overlay_open_from_inline_viewport_snapshot() {
     terminal.set_viewport_area(Rect::new(0, height - 7, width, 7));
 
     app.fork_session_overlay = Some(ForkSessionOverlayStack::new(ForkSessionOverlayState {
-        terminal: ForkSessionTerminal::for_test(child, None),
+        terminal: ForkSessionTerminal::for_test(child, /*exit_code*/ None),
         popup: default_popup_rect(Rect::new(0, 0, width, height)),
         command_state: OverlayCommandState::PassThrough,
         drag_state: None,

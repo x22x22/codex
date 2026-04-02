@@ -6,7 +6,7 @@ expression: snapshot_buffer(&buf)
 │ >_ OpenAI Codex (v0.0.0)                    │
 │                                             │
 │ model:     gpt-5.3-codex   /model to change │
-│ directory: ~/code/codex/codex-rs/tui        │
+│ directory: /tmp/project                     │
 ╰─────────────────────────────────────────────╯
                   ╭ fork session running ctrl+] prefix───────────────────────────╮
                   │Independent Codex session                                     │
@@ -16,7 +16,7 @@ expression: snapshot_buffer(&buf)
                   │ready for a fresh turn                                        │
 › Ask Codex to do │                                                              │
                   │                                                              │
-  ? for shortcuts │                                                              │00% context left
+  gpt-5.3-codex de│                                                              │
                   │                                                              │
                   │                                                              │
                   │                                                              │

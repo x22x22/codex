@@ -18,6 +18,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 
 use crate::app::App;
+use crate::app_server_session::AppServerSession;
 use crate::chatwidget::ExternalEditorState;
 use crate::custom_terminal::Frame;
 use crate::insert_history::insert_history_lines;
@@ -281,7 +282,7 @@ fn popup_block(
 
 fn popup_terminal_size(popup: Rect) -> codex_utils_pty::TerminalSize {
     let inner = popup_block(
-        None,
+        /*exit_code*/ None,
         OverlayCommandState::PassThrough,
         OverlayFocusedPane::Popup,
     )
@@ -382,7 +383,7 @@ impl App {
             stack.push_popup(popup_state);
         } else {
             self.fork_session_overlay = Some(ForkSessionOverlayStack::new(popup_state));
-            tui.set_mouse_capture_enabled(true)?;
+            tui.set_mouse_capture_enabled(/*enabled*/ true)?;
         }
         tui.frame_requester().schedule_frame();
         Ok(())
@@ -393,7 +394,7 @@ impl App {
             let _ = stack.close_active_popup();
             if stack.is_empty() {
                 self.fork_session_overlay = None;
-                tui.set_mouse_capture_enabled(false)?;
+                tui.set_mouse_capture_enabled(/*enabled*/ false)?;
                 self.restore_inline_view_after_fork_overlay_close(tui)?;
             }
         }
@@ -404,6 +405,7 @@ impl App {
     pub(crate) async fn handle_fork_session_overlay_tui_event(
         &mut self,
         tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<()> {
         match event {
@@ -438,7 +440,7 @@ impl App {
                             } else {
                                 match stack.focused_pane() {
                                     OverlayFocusedPane::Background => {
-                                        self.handle_key_event(tui, key_event).await;
+                                        self.handle_key_event(tui, app_server, key_event).await;
                                     }
                                     OverlayFocusedPane::Popup => {
                                         forward_key = Some(key_event);
@@ -637,61 +639,92 @@ impl App {
                                         }
                                         KeyCode::Char('h') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup =
-                                                    resize_left_edge(area, popup.popup, -1);
+                                                popup.popup = resize_left_edge(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ -1,
+                                                );
                                             }
                                         }
                                         KeyCode::Char('H') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup =
-                                                    resize_left_edge(area, popup.popup, 1);
+                                                popup.popup = resize_left_edge(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ 1,
+                                                );
                                             }
                                         }
                                         KeyCode::Char('j') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup =
-                                                    resize_bottom_edge(area, popup.popup, 1);
+                                                popup.popup = resize_bottom_edge(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ 1,
+                                                );
                                             }
                                         }
                                         KeyCode::Char('J') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup =
-                                                    resize_bottom_edge(area, popup.popup, -1);
+                                                popup.popup = resize_bottom_edge(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ -1,
+                                                );
                                             }
                                         }
                                         KeyCode::Char('k') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup =
-                                                    resize_top_edge(area, popup.popup, -1);
+                                                popup.popup = resize_top_edge(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ -1,
+                                                );
                                             }
                                         }
                                         KeyCode::Char('K') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup = resize_top_edge(area, popup.popup, 1);
+                                                popup.popup = resize_top_edge(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ 1,
+                                                );
                                             }
                                         }
                                         KeyCode::Char('l') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup =
-                                                    resize_right_edge(area, popup.popup, 1);
+                                                popup.popup = resize_right_edge(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ 1,
+                                                );
                                             }
                                         }
                                         KeyCode::Char('L') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup =
-                                                    resize_right_edge(area, popup.popup, -1);
+                                                popup.popup = resize_right_edge(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ -1,
+                                                );
                                             }
                                         }
                                         KeyCode::Char('=') | KeyCode::Char('+') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup =
-                                                    resize_all_edges(area, popup.popup, 1);
+                                                popup.popup = resize_all_edges(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ 1,
+                                                );
                                             }
                                         }
                                         KeyCode::Char('-') => {
                                             if let Some(popup) = stack.active_popup_mut() {
-                                                popup.popup =
-                                                    resize_all_edges(area, popup.popup, -1);
+                                                popup.popup = resize_all_edges(
+                                                    area,
+                                                    popup.popup,
+                                                    /*delta*/ -1,
+                                                );
                                             }
                                         }
                                         KeyCode::Esc | KeyCode::Enter => {
@@ -778,7 +811,7 @@ impl App {
                 };
                 if close_all_overlays {
                     self.fork_session_overlay = None;
-                    tui.set_mouse_capture_enabled(false)?;
+                    tui.set_mouse_capture_enabled(/*enabled*/ false)?;
                     self.restore_inline_view_after_fork_overlay_close(tui)?;
                     return Ok(());
                 }
@@ -987,8 +1020,9 @@ mod tests {
     use crate::app_backtrack::BacktrackState;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::file_search::FileSearchManager;
-    use codex_core::CodexAuth;
+
     use codex_core::config::ConfigOverrides;
+    use codex_login::CodexAuth;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
@@ -1022,42 +1056,38 @@ mod tests {
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let server = Arc::new(
+        let _server = Arc::new(
             codex_core::test_support::thread_manager_with_models_provider(
                 CodexAuth::from_api_key("Test API Key"),
                 config.model_provider.clone(),
             ),
         );
-        let auth_manager = codex_core::test_support::auth_manager_from_auth(
+        let _auth_manager = codex_core::test_support::auth_manager_from_auth(
             CodexAuth::from_api_key("Test API Key"),
         );
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = SessionTelemetry::new(
             ThreadId::new(),
             model.as_str(),
             model.as_str(),
-            None,
-            None,
-            None,
+            /*account_id*/ None,
+            /*account_email*/ None,
+            /*auth_mode*/ None,
             "test_originator".to_string(),
-            false,
+            /*log_user_prompts*/ false,
             "test".to_string(),
             SessionSource::Cli,
         );
 
         App {
-            server,
+            model_catalog: chat_widget.model_catalog(),
             session_telemetry,
             app_event_tx,
             chat_widget,
-            auth_manager,
             config,
             active_profile: None,
             cli_kv_overrides: Vec::new(),
-            arg0_paths: codex_arg0::Arg0DispatchPaths::default(),
-            loader_overrides: codex_core::config_loader::LoaderOverrides::default(),
-            cloud_requirements: codex_core::config_loader::CloudRequirementsLoader::default(),
             harness_overrides: ConfigOverrides::default(),
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
@@ -1075,8 +1105,9 @@ mod tests {
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
+            remote_app_server_url: None,
+            remote_app_server_auth_token: None,
             pending_update_action: None,
-            suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -1085,8 +1116,10 @@ mod tests {
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
+            last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_app_server_requests: Default::default(),
         }
     }
 
@@ -1095,7 +1128,10 @@ mod tests {
         let temp_dir = tempdir().expect("tempdir");
         let mut app = make_test_app().await;
         app.active_profile = Some("dev".to_string());
-        app.config.cwd = temp_dir.path().join("project");
+        app.config.cwd = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+            temp_dir.path().join("project"),
+        )
+        .unwrap();
         app.chat_widget.set_model("gpt-5.4");
         app.on_update_reasoning_effort(Some(codex_protocol::openai_models::ReasoningEffort::High));
         app.runtime_approval_policy_override =
@@ -1157,7 +1193,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 28);
         let popup = default_popup_rect(area);
 
-        let moved = move_popup_rect(area, popup, -100, 100);
+        let moved = move_popup_rect(area, popup, /*dx*/ -100, /*dy*/ 100);
 
         assert_eq!(moved, Rect::new(0, 13, 64, 15));
     }
@@ -1207,7 +1243,7 @@ mod tests {
         ];
 
         assert_eq!(
-            app.transcript_history_lines(80),
+            app.transcript_history_lines(/*width*/ 80),
             vec![Line::from("first"), Line::from(""), Line::from("second")]
         );
     }
@@ -1217,8 +1253,8 @@ mod tests {
         let area = Rect::new(0, 0, 100, 28);
         let popup = default_popup_rect(area);
 
-        let shrunk = resize_all_edges(area, popup, -100);
-        let grown = resize_all_edges(area, popup, 100);
+        let shrunk = resize_all_edges(area, popup, /*delta*/ -100);
+        let grown = resize_all_edges(area, popup, /*delta*/ 100);
 
         assert_eq!(shrunk, Rect::new(38, 11, 44, 10));
         assert_eq!(grown, Rect::new(0, 0, 96, 26));
@@ -1229,7 +1265,7 @@ mod tests {
         let area = Rect::new(0, 0, 140, 40);
         let popup = default_popup_rect(area);
 
-        let grown = resize_all_edges(area, popup, 100);
+        let grown = resize_all_edges(area, popup, /*delta*/ 100);
 
         assert_eq!(grown, Rect::new(0, 0, 136, 38));
     }
@@ -1260,7 +1296,7 @@ mod tests {
 ready for a fresh turn\r\n",
         );
         app.fork_session_overlay = Some(ForkSessionOverlayStack::new(ForkSessionOverlayState {
-            terminal: ForkSessionTerminal::for_test(parser, None),
+            terminal: ForkSessionTerminal::for_test(parser, /*exit_code*/ None),
             popup: default_popup_rect(Rect::new(0, 0, 100, 28)),
             command_state: OverlayCommandState::PassThrough,
             drag_state: None,
@@ -1305,13 +1341,13 @@ ready for a fresh turn\r\n",
         );
 
         let mut stack = ForkSessionOverlayStack::new(ForkSessionOverlayState {
-            terminal: ForkSessionTerminal::for_test(first_popup, None),
+            terminal: ForkSessionTerminal::for_test(first_popup, /*exit_code*/ None),
             popup: Rect::new(14, 7, 52, 12),
             command_state: OverlayCommandState::PassThrough,
             drag_state: None,
         });
         stack.push_popup(ForkSessionOverlayState {
-            terminal: ForkSessionTerminal::for_test(second_popup, None),
+            terminal: ForkSessionTerminal::for_test(second_popup, /*exit_code*/ None),
             popup: Rect::new(28, 11, 52, 12),
             command_state: OverlayCommandState::PassThrough,
             drag_state: None,
@@ -1354,7 +1390,7 @@ ready for a fresh turn\r\n",
 ready for a fresh turn\r\n",
         );
         let mut stack = ForkSessionOverlayStack::new(ForkSessionOverlayState {
-            terminal: ForkSessionTerminal::for_test(parser, None),
+            terminal: ForkSessionTerminal::for_test(parser, /*exit_code*/ None),
             popup: default_popup_rect(Rect::new(0, 0, 100, 28)),
             command_state: OverlayCommandState::PassThrough,
             drag_state: None,
@@ -1399,7 +1435,10 @@ ready for a fresh turn\r\n",
             Vec::new(),
         );
         let mut stack = ForkSessionOverlayStack::new(ForkSessionOverlayState {
-            terminal: ForkSessionTerminal::for_test(vt100::Parser::new(1, 1, 0), None),
+            terminal: ForkSessionTerminal::for_test(
+                vt100::Parser::new(1, 1, 0),
+                /*exit_code*/ None,
+            ),
             popup: default_popup_rect(Rect::new(0, 0, 80, 18)),
             command_state: OverlayCommandState::PassThrough,
             drag_state: None,

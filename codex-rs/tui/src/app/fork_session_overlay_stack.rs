@@ -128,8 +128,11 @@ mod tests {
 
     fn popup(x: u16, y: u16) -> ForkSessionOverlayState {
         ForkSessionOverlayState {
-            terminal: ForkSessionTerminal::for_test(vt100::Parser::new(1, 1, 0), None),
-            popup: Rect::new(x, y, 40, 16),
+            terminal: ForkSessionTerminal::for_test(
+                vt100::Parser::new(1, 1, 0),
+                /*exit_code*/ None,
+            ),
+            popup: Rect::new(/*x*/ x, /*y*/ y, 40, 16),
             command_state: OverlayCommandState::PassThrough,
             drag_state: None,
         }
@@ -142,7 +145,7 @@ mod tests {
         stack.push_popup(popup(30, 30));
 
         let active = stack
-            .bring_popup_to_front(0)
+            .bring_popup_to_front(/*index*/ 0)
             .expect("bring first popup to front");
 
         assert_eq!(active.popup, Rect::new(10, 10, 40, 16));

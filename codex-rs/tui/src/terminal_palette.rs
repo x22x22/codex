@@ -497,18 +497,18 @@ pub const XTERM_COLORS: [(u8, u8, u8); 256] = [
 
 #[cfg(test)]
 mod tests {
-    use super::parse_bg_rgb_env;
+    use super::parse_rgb_env;
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn parse_bg_rgb_env_accepts_rgb_triplet() {
-        assert_eq!(parse_bg_rgb_env("12,34,56"), Some((12, 34, 56)));
+    fn parse_rgb_env_accepts_rgb_triplet() {
+        assert_eq!(parse_rgb_env("12,34,56"), Some((12, 34, 56)));
     }
 
     #[test]
-    fn parse_bg_rgb_env_rejects_invalid_values() {
-        assert_eq!(parse_bg_rgb_env("12,34"), None);
-        assert_eq!(parse_bg_rgb_env("12,34,56,78"), None);
-        assert_eq!(parse_bg_rgb_env("12,nope,56"), None);
+    fn parse_rgb_env_rejects_invalid_values() {
+        assert_eq!(parse_rgb_env("12,34"), None);
+        assert_eq!(parse_rgb_env("12,34,56,78"), None);
+        assert_eq!(parse_rgb_env("12,nope,56"), None);
     }
 }

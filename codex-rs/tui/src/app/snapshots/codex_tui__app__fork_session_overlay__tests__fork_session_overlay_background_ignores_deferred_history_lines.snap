@@ -5,7 +5,7 @@ expression: snapshot_buffer(&buf)
 │ >_ OpenAI Codex (v0.0.0)                    │
 │                                             │
 │ model:     gpt-5.3-codex   /model to change │
-│ directory: ~/code/codex/codex-rs/tui        │
+│ directory: /tmp/project                     │
 ╰─────────────────────────────────────────────╯
 
 
@@ -15,4 +15,4 @@ expression: snapshot_buffer(&buf)
 
 › Ask Codex to do anything
 
-  ? for shortcuts                                            100% context left
+  gpt-5.3-codex default · 100% left · /tmp/project

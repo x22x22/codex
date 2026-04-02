@@ -153,19 +153,18 @@ use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
-mod loaded_threads;
 mod fork_session_overlay;
 mod fork_session_overlay_mouse;
 mod fork_session_overlay_stack;
 mod fork_session_terminal;
+mod loaded_threads;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
-use self::loaded_threads::find_loaded_subagent_threads_for_primary;
-use self::fork_session_overlay::ForkSessionOverlayState;
 use self::fork_session_overlay_stack::ForkSessionOverlayStack;
+use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -3905,7 +3904,7 @@ impl App {
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else if self.fork_session_overlay.is_some() {
-            self.handle_fork_session_overlay_tui_event(tui, event)
+            self.handle_fork_session_overlay_tui_event(tui, app_server, event)
                 .await?;
         } else {
             match event {
@@ -3974,7 +3973,7 @@ impl App {
                     .await;
             }
             AppEvent::ClearUi => {
-                self.clear_terminal_ui(tui, false)?;
+                self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
                 self.start_fresh_session_with_summary_hint(tui, app_server)
@@ -4125,7 +4124,12 @@ impl App {
                     // Fresh threads expose a precomputed path, but the file is
                     // materialized lazily on first user message.
                     if path.exists() {
-                        match crate::resolve_session_thread_id(path.as_path(), None).await {
+                        match crate::resolve_session_thread_id(
+                            path.as_path(),
+                            /*id_str_if_uuid*/ None,
+                        )
+                        .await
+                        {
                             Some(thread_id) => {
                                 if let Err(err) =
                                     self.open_fork_session_overlay(tui, thread_id).await
