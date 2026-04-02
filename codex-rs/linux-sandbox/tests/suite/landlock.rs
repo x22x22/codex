@@ -105,41 +105,6 @@ async fn run_cmd_result_with_writable_roots(
     .await
 }
 
-async fn run_cmd_result_with_writable_roots_and_cwd(
-    cmd: &[&str],
-    writable_roots: &[PathBuf],
-    sandbox_cwd: PathBuf,
-    timeout_ms: u64,
-    use_legacy_landlock: bool,
-    network_access: bool,
-) -> Result<codex_core::exec::ExecToolCallOutput> {
-    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: writable_roots
-            .iter()
-            .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
-            .collect(),
-        read_only_access: Default::default(),
-        network_access,
-        // Exclude tmp-related folders from writable roots because we need a
-        // folder that is writable by tests but that we intentionally disallow
-        // writing to in the sandbox.
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
-    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
-    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    run_cmd_result_with_policies_and_cwd(
-        cmd,
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-        sandbox_cwd,
-        timeout_ms,
-        use_legacy_landlock,
-    )
-    .await
-}
-
 async fn run_cmd_result_with_policies_and_cwd(
     cmd: &[&str],
     sandbox_policy: SandboxPolicy,
@@ -474,7 +439,7 @@ async fn bwrap_root_cwd_masks_missing_dot_codex_at_runtime() {
         NetworkSandboxPolicy::Enabled,
         PathBuf::from("/"),
         LONG_TIMEOUT_MS,
-        /* use_legacy_landlock */ false,
+        /*use_legacy_landlock*/ false,
     )
     .await
     .expect("sandboxed command should execute");
