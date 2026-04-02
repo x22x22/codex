@@ -91,8 +91,8 @@ async fn run_cmd_result_with_writable_roots(
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    let sandbox_cwd = std::env::current_dir()
-        .unwrap_or_else(|error| panic!("cwd should exist: {error}"));
+    let sandbox_cwd =
+        std::env::current_dir().unwrap_or_else(|error| panic!("cwd should exist: {error}"));
     run_cmd_result_with_policies_and_cwd(
         cmd,
         sandbox_policy,
@@ -420,10 +420,9 @@ async fn bwrap_root_cwd_masks_missing_dot_codex_at_runtime() {
     // This complements the argv-shape unit test in `bwrap.rs` by exercising
     // the runtime `cwd="/"` path with a missing `/.codex`. The precise `/dev`
     // mount ordering is still asserted at the unit level.
-    let sandbox_program = std::fs::canonicalize(PathBuf::from(env!(
-        "CARGO_BIN_EXE_codex-linux-sandbox"
-    )))
-    .expect("canonicalize sandbox helper path");
+    let sandbox_program =
+        std::fs::canonicalize(PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox")))
+            .expect("canonicalize sandbox helper path");
     let sandbox_helper_dir = sandbox_program
         .parent()
         .expect("sandbox helper should have a parent")
