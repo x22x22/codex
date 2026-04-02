@@ -9,6 +9,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
+use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
@@ -20,8 +21,17 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_exec_server::AttachedExecutor;
 
-pub struct ViewImageHandler;
+pub struct ViewImageHandler {
+    attached_executor: Arc<AttachedExecutor>,
+}
+
+impl ViewImageHandler {
+    pub fn new(attached_executor: Arc<AttachedExecutor>) -> Self {
+        Self { attached_executor }
+    }
+}
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
@@ -94,8 +104,8 @@ impl ToolHandler for ViewImageHandler {
                 FunctionCallError::RespondToModel(format!("unable to resolve image path: {error}"))
             })?;
 
-        let metadata = turn
-            .environment
+        let metadata = self
+            .attached_executor
             .get_filesystem()
             .get_metadata(&abs_path)
             .await
@@ -112,8 +122,8 @@ impl ToolHandler for ViewImageHandler {
                 abs_path.display()
             )));
         }
-        let file_bytes = turn
-            .environment
+        let file_bytes = self
+            .attached_executor
             .get_filesystem()
             .read_file(&abs_path)
             .await

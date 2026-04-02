@@ -31,6 +31,7 @@ use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_exec_server::AttachedExecutor;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -40,7 +41,17 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-pub struct ApplyPatchHandler;
+pub struct ApplyPatchHandler {
+    _attached_executor: Arc<AttachedExecutor>,
+}
+
+impl ApplyPatchHandler {
+    pub fn new(attached_executor: Arc<AttachedExecutor>) -> Self {
+        Self {
+            _attached_executor: attached_executor,
+        }
+    }
+}
 
 const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("tool_apply_patch.lark");
 

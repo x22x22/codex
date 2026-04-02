@@ -98,12 +98,21 @@ async fn exec_command_with_tty(
                 &request,
                 tty,
                 Box::new(NoopSpawnLifecycle),
-                turn.environment.as_ref(),
+                turn.environment
+                    .attached_executor()
+                    .expect("test turn has attached executor")
+                    .as_ref(),
             )
             .await?,
     );
-    let context =
-        UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
+    let context = UnifiedExecContext::new(
+        Arc::clone(session),
+        Arc::clone(turn),
+        "call".to_string(),
+        turn.environment
+            .attached_executor()
+            .expect("test turn has attached executor"),
+    );
     let started_at = Instant::now();
     let process_started_alive = !process.has_exited() && process.exit_code().is_none();
     if process_started_alive {

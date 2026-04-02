@@ -216,20 +216,6 @@ impl Environment {
     pub fn attached_executor(&self) -> Option<Arc<AttachedExecutor>> {
         self.attached_executor.clone()
     }
-
-    pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
-        self.attached_executor
-            .as_ref()
-            .expect("environment does not have an attached executor")
-            .get_exec_backend()
-    }
-
-    pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
-        self.attached_executor
-            .as_ref()
-            .expect("environment does not have an attached executor")
-            .get_filesystem()
-    }
 }
 
 fn parse_executor_mode(exec_server_url: Option<String>) -> ExecutorMode {
@@ -239,12 +225,6 @@ fn parse_executor_mode(exec_server_url: Option<String>) -> ExecutorMode {
         Some(url) => ExecutorMode::RemoteExecutor {
             url: url.to_string(),
         },
-    }
-}
-
-impl ExecutorEnvironment for Environment {
-    fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
-        self.get_exec_backend()
     }
 }
 
@@ -323,6 +303,8 @@ mod tests {
         let environment = Environment::default();
 
         let response = environment
+            .attached_executor()
+            .expect("default environment has attached executor")
             .get_exec_backend()
             .start(crate::ExecParams {
                 process_id: ProcessId::from("default-env-proc"),

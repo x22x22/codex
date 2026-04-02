@@ -3,8 +3,10 @@ use std::ffi::OsStr;
 use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_exec_server::AttachedExecutor;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
@@ -17,7 +19,17 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
-pub struct ListDirHandler;
+pub struct ListDirHandler {
+    _attached_executor: Arc<AttachedExecutor>,
+}
+
+impl ListDirHandler {
+    pub fn new(attached_executor: Arc<AttachedExecutor>) -> Self {
+        Self {
+            _attached_executor: attached_executor,
+        }
+    }
+}
 
 const MAX_ENTRY_LENGTH: usize = 500;
 const INDENTATION_SPACES: usize = 2;
