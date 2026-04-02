@@ -1865,8 +1865,10 @@ dependencies = [
  "codex-rollout",
  "codex-sandboxing",
  "codex-secrets",
+ "codex-shell",
  "codex-shell-command",
  "codex-shell-escalation",
+ "codex-shell-snapshot",
  "codex-state",
  "codex-terminal-detection",
  "codex-tools",
@@ -2569,12 +2571,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-shell"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "serde",
+ "which 8.0.0",
+]
+
+[[package]]
 name = "codex-shell-command"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "codex-protocol",
+ "codex-shell",
  "codex-utils-absolute-path",
  "once_cell",
  "pretty_assertions",
@@ -2607,6 +2619,22 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "codex-shell-snapshot"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-otel",
+ "codex-protocol",
+ "codex-shell",
+ "codex-utils-pty",
+ "libc",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2668,6 +2696,7 @@ dependencies = [
  "codex-code-mode",
  "codex-features",
  "codex-protocol",
+ "codex-shell",
  "codex-utils-absolute-path",
  "codex-utils-pty",
  "pretty_assertions",

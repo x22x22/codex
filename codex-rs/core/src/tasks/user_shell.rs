@@ -124,10 +124,12 @@ pub(crate) async fn execute_user_shell_command(
     // We do not source rc files or otherwise reformat the script.
     let use_login_shell = true;
     let session_shell = session.user_shell();
+    let session_shell_snapshot = session.shell_snapshot();
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
         session_shell.as_ref(),
+        session_shell_snapshot.as_deref(),
         turn_context.cwd.as_path(),
         &turn_context.shell_environment_policy.r#set,
     );
