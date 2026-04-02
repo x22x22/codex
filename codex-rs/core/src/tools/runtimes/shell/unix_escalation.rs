@@ -23,11 +23,11 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GuardianCommandSource;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -154,12 +154,6 @@ pub(super) async fn try_run_zsh_fork(
         windows_sandbox_level,
         arg0,
         sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
-        macos_seatbelt_profile_extensions: ctx
-            .turn
-            .config
-            .permissions
-            .macos_seatbelt_profile_extensions
-            .clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -194,7 +188,7 @@ pub(super) async fn try_run_zsh_fork(
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
-        tool_name: "shell",
+        tool_name: GuardianCommandSource::Shell,
         approval_policy: ctx.turn.approval_policy.value(),
         sandbox_policy: command_executor.sandbox_policy.clone(),
         file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
@@ -258,12 +252,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
         sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
-        macos_seatbelt_profile_extensions: ctx
-            .turn
-            .config
-            .permissions
-            .macos_seatbelt_profile_extensions
-            .clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -272,7 +260,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
-        tool_name: "exec_command",
+        tool_name: GuardianCommandSource::UnifiedExec,
         approval_policy: ctx.turn.approval_policy.value(),
         sandbox_policy: exec_request.sandbox_policy.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
@@ -307,7 +295,7 @@ struct CoreShellActionProvider {
     session: Arc<crate::codex::Session>,
     turn: Arc<crate::codex::TurnContext>,
     call_id: String,
-    tool_name: &'static str,
+    tool_name: GuardianCommandSource,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
@@ -359,7 +347,6 @@ impl CoreShellActionProvider {
         file_system_sandbox_policy: &FileSystemSandboxPolicy,
         network_sandbox_policy: NetworkSandboxPolicy,
         additional_permissions: Option<&PermissionProfile>,
-        macos_seatbelt_profile_extensions: Option<&MacOsSeatbeltProfileExtensions>,
     ) -> EscalationExecution {
         match sandbox_permissions {
             SandboxPermissions::UseDefault => EscalationExecution::TurnDefault,
@@ -373,8 +360,6 @@ impl CoreShellActionProvider {
                             sandbox_policy: sandbox_policy.clone(),
                             file_system_sandbox_policy: file_system_sandbox_policy.clone(),
                             network_sandbox_policy,
-                            macos_seatbelt_profile_extensions: macos_seatbelt_profile_extensions
-                                .cloned(),
                         },
                     ))
                 })
@@ -396,7 +381,7 @@ impl CoreShellActionProvider {
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
-        let tool_name = self.tool_name;
+        let source = self.tool_name;
         Ok(stopwatch
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
@@ -405,7 +390,7 @@ impl CoreShellActionProvider {
                         &turn,
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
-                            tool_name: tool_name.to_string(),
+                            source,
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),
                             cwd: workdir,
@@ -426,7 +411,6 @@ impl CoreShellActionProvider {
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,
                         additional_permissions,
-                        /*skill_metadata*/ None,
                         Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
                     )
                     .await
@@ -561,11 +545,6 @@ impl EscalationPolicy for CoreShellActionProvider {
                 &self.file_system_sandbox_policy,
                 self.network_sandbox_policy,
                 self.prompt_permissions.as_ref(),
-                self.turn
-                    .config
-                    .permissions
-                    .macos_seatbelt_profile_extensions
-                    .as_ref(),
             ),
         };
         self.process_decision(
@@ -688,8 +667,6 @@ struct CoreShellCommandExecutor {
     windows_sandbox_level: WindowsSandboxLevel,
     arg0: Option<String>,
     sandbox_policy_cwd: PathBuf,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
 }
@@ -702,8 +679,6 @@ struct PrepareSandboxedExecParams<'a> {
     file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     additional_permissions: Option<PermissionProfile>,
-    #[cfg(target_os = "macos")]
-    macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
 }
 
 #[async_trait::async_trait]
@@ -788,17 +763,12 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     file_system_sandbox_policy: &self.file_system_sandbox_policy,
                     network_sandbox_policy: self.network_sandbox_policy,
                     additional_permissions: None,
-                    #[cfg(target_os = "macos")]
-                    macos_seatbelt_profile_extensions: self
-                        .macos_seatbelt_profile_extensions
-                        .as_ref(),
                 })?
             }
             EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
                 permission_profile,
             )) => {
                 // Merge additive permissions into the existing turn/request sandbox policy.
-                // On macOS, additional profile extensions are unioned with the turn defaults.
                 self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
                     command,
                     workdir,
@@ -807,10 +777,6 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     file_system_sandbox_policy: &self.file_system_sandbox_policy,
                     network_sandbox_policy: self.network_sandbox_policy,
                     additional_permissions: Some(permission_profile),
-                    #[cfg(target_os = "macos")]
-                    macos_seatbelt_profile_extensions: self
-                        .macos_seatbelt_profile_extensions
-                        .as_ref(),
                 })?
             }
             EscalationExecution::Permissions(EscalationPermissions::Permissions(permissions)) => {
@@ -823,10 +789,6 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     file_system_sandbox_policy: &permissions.file_system_sandbox_policy,
                     network_sandbox_policy: permissions.network_sandbox_policy,
                     additional_permissions: None,
-                    #[cfg(target_os = "macos")]
-                    macos_seatbelt_profile_extensions: permissions
-                        .macos_seatbelt_profile_extensions
-                        .as_ref(),
                 })?
             }
         };
@@ -849,8 +811,6 @@ impl CoreShellCommandExecutor {
             file_system_sandbox_policy,
             network_sandbox_policy,
             additional_permissions,
-            #[cfg(target_os = "macos")]
-            macos_seatbelt_profile_extensions,
         } = params;
         let (program, args) = command
             .split_first()
@@ -864,7 +824,7 @@ impl CoreShellCommandExecutor {
             self.network.is_some(),
         );
         let command = SandboxCommand {
-            program: program.clone(),
+            program: program.clone().into(),
             args: args.to_vec(),
             cwd: workdir.to_path_buf(),
             env,
@@ -883,8 +843,6 @@ impl CoreShellCommandExecutor {
             enforce_managed_network: self.network.is_some(),
             network: self.network.as_ref(),
             sandbox_policy_cwd: &self.sandbox_policy_cwd,
-            #[cfg(target_os = "macos")]
-            macos_seatbelt_profile_extensions,
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock: self.use_legacy_landlock,
             windows_sandbox_level: self.windows_sandbox_level,

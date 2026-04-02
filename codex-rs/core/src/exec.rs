@@ -20,11 +20,6 @@ use tokio_util::sync::CancellationToken;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
-use crate::protocol::Event;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandOutputDeltaEvent;
-use crate::protocol::ExecOutputStream;
-use crate::protocol::SandboxPolicy;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
@@ -37,6 +32,11 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecOutputStream;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
@@ -272,7 +272,7 @@ pub fn build_exec_request(
 
     let manager = SandboxManager::new();
     let command = SandboxCommand {
-        program: program.clone(),
+        program: program.clone().into(),
         args: args.to_vec(),
         cwd,
         env,
@@ -292,8 +292,6 @@ pub fn build_exec_request(
             enforce_managed_network,
             network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
-            #[cfg(target_os = "macos")]
-            macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
             windows_sandbox_level,
@@ -316,7 +314,6 @@ pub fn build_exec_request(
 
 pub(crate) async fn execute_exec_request(
     exec_request: ExecRequest,
-    sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
@@ -330,13 +327,12 @@ pub(crate) async fn execute_exec_request(
         sandbox,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        sandbox_policy: _sandbox_policy_from_env,
+        sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
         windows_restricted_token_filesystem_overlay,
         arg0,
     } = exec_request;
-    let _ = _sandbox_policy_from_env;
 
     let params = ExecParams {
         command,
@@ -356,7 +352,7 @@ pub(crate) async fn execute_exec_request(
     let raw_output_result = exec(
         params,
         sandbox,
-        sandbox_policy,
+        &sandbox_policy,
         &file_system_sandbox_policy,
         windows_restricted_token_filesystem_overlay.as_ref(),
         network_sandbox_policy,
@@ -480,7 +476,11 @@ async fn exec_windows_sandbox(
     })?;
     let command_path = command.first().cloned();
     let sandbox_level = windows_sandbox_level;
-    let use_elevated = matches!(sandbox_level, WindowsSandboxLevel::Elevated);
+    let proxy_enforced = network.is_some();
+    // Windows firewall enforcement is tied to the logon-user sandbox identities, so
+    // proxy-enforced sessions must use that backend even when the configured mode is
+    // the default restricted-token sandbox.
+    let use_elevated = proxy_enforced || matches!(sandbox_level, WindowsSandboxLevel::Elevated);
     let additional_deny_write_paths = windows_restricted_token_filesystem_overlay
         .map(|overlay| {
             overlay
@@ -493,14 +493,17 @@ async fn exec_windows_sandbox(
     let spawn_res = tokio::task::spawn_blocking(move || {
         if use_elevated {
             run_windows_sandbox_capture_elevated(
-                policy_str.as_str(),
-                &sandbox_cwd,
-                codex_home.as_ref(),
-                command,
-                &cwd,
-                env,
-                timeout_ms,
-                windows_sandbox_private_desktop,
+                codex_windows_sandbox::ElevatedSandboxCaptureRequest {
+                    policy_json_or_preset: policy_str.as_str(),
+                    sandbox_policy_cwd: &sandbox_cwd,
+                    codex_home: codex_home.as_ref(),
+                    command,
+                    cwd: &cwd,
+                    env_map: env,
+                    timeout_ms,
+                    use_private_desktop: windows_sandbox_private_desktop,
+                    proxy_enforced,
+                },
             )
         } else {
             run_windows_sandbox_capture_with_extra_deny_write_paths(

@@ -60,7 +60,6 @@ impl ApplyPatchRuntime {
             id: call_id.to_string(),
             cwd: req.action.cwd.clone(),
             files: req.file_paths.clone(),
-            change_count: req.changes.len(),
             patch: req.action.patch.clone(),
         }
     }
@@ -97,7 +96,7 @@ impl ApplyPatchRuntime {
 
     fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
         SandboxCommand {
-            program: exe.to_string_lossy().to_string(),
+            program: exe.into_os_string(),
             args: vec![
                 CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
                 req.action.patch.clone(),

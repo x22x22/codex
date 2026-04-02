@@ -6,17 +6,17 @@ use codex_api::TransportError;
 use codex_api::error::ApiError;
 use codex_api::rate_limits::parse_promo_message;
 use codex_api::rate_limits::parse_rate_limit_for_limit;
+use codex_login::token_data::PlanType;
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::auth::CodexAuth;
 use crate::error::CodexErr;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::token_data::PlanType;
+use codex_login::CodexAuth;
 
 pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
     match err {
