@@ -1364,8 +1364,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::TokenCount(token_count_event) => {
-            handle_token_count_event(conversation_id, event_turn_id, token_count_event, &outgoing)
-                .await;
+            handle_token_count_event(
+                conversation_id,
+                event_turn_id,
+                token_count_event,
+                Some(&analytics_events_client),
+                &outgoing,
+            )
+            .await;
         }
         EventMsg::Error(ev) => {
             thread_watch_manager
@@ -2209,6 +2215,7 @@ async fn handle_token_count_event(
     conversation_id: ThreadId,
     turn_id: String,
     token_count_event: TokenCountEvent,
+    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let TokenCountEvent { info, rate_limits } = token_count_event;
@@ -2218,6 +2225,11 @@ async fn handle_token_count_event(
             turn_id,
             token_usage,
         };
+        if let Some(analytics_events_client) = analytics_events_client {
+            analytics_events_client.track_notification(
+                ServerNotification::ThreadTokenUsageUpdated(notification.clone()),
+            );
+        }
         outgoing
             .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
             .await;
@@ -3555,6 +3567,7 @@ mod tests {
                 info: Some(info),
                 rate_limits: Some(rate_limits),
             },
+            /*analytics_events_client*/ None,
             &outgoing,
         )
         .await;
@@ -3609,6 +3622,7 @@ mod tests {
                 info: None,
                 rate_limits: None,
             },
+            /*analytics_events_client*/ None,
             &outgoing,
         )
         .await;
