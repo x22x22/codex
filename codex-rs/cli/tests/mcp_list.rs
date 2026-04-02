@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::load_global_mcp_servers;
-use codex_core::config::types::McpServerTransportConfig;
+use codex_config::types::McpServerTransportConfig;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;

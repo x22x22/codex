@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
-use crate::config::types::McpServerTransportConfig;
+use codex_config::types::McpServerTransportConfig;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;

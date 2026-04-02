@@ -19,7 +19,7 @@ use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::load_global_mcp_servers;
-use crate::config::types::AppToolApproval;
+use codex_config::types::AppToolApproval;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
@@ -583,7 +583,7 @@ fn custom_mcp_tool_approval_mode(
         .and_then(|table| table.get("mcp_servers"))
         .cloned()
         .and_then(|value| {
-            HashMap::<String, crate::config::types::McpServerConfig>::deserialize(value).ok()
+            HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
         })
         .and_then(|servers| servers.get(server).cloned())
         .and_then(|server| server.tools.get(tool_name).cloned())
@@ -1541,7 +1541,7 @@ fn project_mcp_tool_approval_config_folder(config: &Config, server: &str) -> Opt
                 .and_then(|table| table.get("mcp_servers"))
                 .cloned()
                 .and_then(|value| {
-                    HashMap::<String, crate::config::types::McpServerConfig>::deserialize(value)
+                    HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value)
                         .ok()
                 })?;
             if servers.contains_key(server) {

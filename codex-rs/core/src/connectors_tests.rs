@@ -1,10 +1,10 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
-use crate::config::types::AppConfig;
-use crate::config::types::AppToolConfig;
-use crate::config::types::AppToolsConfig;
-use crate::config::types::AppsDefaultConfig;
+use codex_config::types::AppConfig;
+use codex_config::types::AppToolConfig;
+use codex_config::types::AppToolsConfig;
+use codex_config::types::AppsDefaultConfig;
 use crate::config_loader::AppRequirementToml;
 use crate::config_loader::AppsRequirementsToml;
 use crate::config_loader::CloudRequirementsLoader;

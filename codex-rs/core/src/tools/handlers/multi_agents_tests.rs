@@ -3,7 +3,7 @@ use crate::ThreadManager;
 use crate::built_in_model_providers;
 use crate::codex::make_session_and_context;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
-use crate::config::types::ShellEnvironmentPolicy;
+use codex_config::types::ShellEnvironmentPolicy;
 use crate::function_tool::FunctionCallError;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::state::TaskKind;

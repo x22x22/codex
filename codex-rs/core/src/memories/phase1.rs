@@ -3,7 +3,7 @@ use crate::RolloutRecorder;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::config::types::MemoriesConfig;
+use codex_config::types::MemoriesConfig;
 use crate::contextual_user_message::is_memory_excluded_contextual_user_fragment;
 use crate::error::CodexErr;
 use crate::memories::metrics;

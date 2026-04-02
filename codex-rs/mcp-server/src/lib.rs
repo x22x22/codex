@@ -182,7 +182,7 @@ pub async fn run_main(
 mod tests {
     use super::*;
     use codex_core::config::ConfigBuilder;
-    use codex_core::config::types::OtelExporterKind;
+    use codex_config::types::OtelExporterKind;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use tempfile::TempDir;

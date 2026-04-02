@@ -1,4 +1,4 @@
-use crate::config::types::Personality;
+use codex_config::types::Personality;
 use crate::error::Result;
 pub use codex_api::common::ResponseEvent;
 use codex_protocol::models::BaseInstructions;
