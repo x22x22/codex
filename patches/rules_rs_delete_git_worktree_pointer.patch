@@ -1,0 +1,23 @@
+# What: delete .git worktree pointer from crate git checkouts.
+# Why: the .git file contains an absolute path to the bazel output base,
+#   which differs across machines. This pollutes compile_data and causes
+#   action cache misses when builds run on different CI runners.
+
+diff --git a/rs/private/crate_git_repository.bzl b/rs/private/crate_git_repository.bzl
+index 1234567..abcdefg 100644
+--- a/rs/private/crate_git_repository.bzl
++++ b/rs/private/crate_git_repository.bzl
+@@ -35,6 +35,11 @@ def _crate_git_repository_implementation(rctx):
+         "HEAD"
+     ])
+     if result.return_code != 0:
+         fail(result.stderr)
+
++    # Remove .git worktree pointer file. It contains an absolute path to
++    # the bazel output base which is machine-specific and non-deterministic.
++    # Leaving it in pollutes compile_data globs and causes AC misses.
++    rctx.delete(root.get_child(".git"))
++
+     if strip_prefix:
+         dest_link = dest_dir.get_child(strip_prefix)
+         if not dest_link.exists:
