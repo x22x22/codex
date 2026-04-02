@@ -1,13 +1,13 @@
 use super::*;
-use crate::AuthManager;
-use crate::CodexAuth;
-use crate::ModelProviderAuthInfo;
-use crate::auth::AuthCredentialsStoreMode;
 use crate::config::ConfigBuilder;
 use crate::model_provider_info::WireApi;
 use base64::Engine as _;
 use chrono::Utc;
 use codex_api::TransportError;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
+use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::responses::mount_models_once;
 use http::HeaderMap;
@@ -174,20 +174,13 @@ $lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
         ModelProviderAuthInfo {
             command: self.command.clone(),
             args: self.args.clone(),
-            timeout_ms: non_zero_u64(/*value*/ 1_000),
-            refresh_interval_ms: non_zero_u64(/*value*/ 60_000),
+            timeout_ms: NonZeroU64::new(/*value*/ 1_000).unwrap(),
+            refresh_interval_ms: 60_000,
             cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
                 Ok(cwd) => cwd,
                 Err(err) => panic!("tempdir should be absolute: {err}"),
             },
         }
-    }
-}
-
-fn non_zero_u64(value: u64) -> NonZeroU64 {
-    match NonZeroU64::new(value) {
-        Some(value) => value,
-        None => panic!("expected non-zero value: {value}"),
     }
 }
 
