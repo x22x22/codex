@@ -153,16 +153,16 @@ use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
-mod loaded_threads;
 mod fork_terminal;
+mod loaded_threads;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
-use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 #[cfg(target_os = "macos")]
 use self::fork_terminal::spawn_fork_in_terminal;
+use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -4092,13 +4092,23 @@ impl App {
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(thread_id) = self.chat_widget.thread_id() {
+                    let summary = session_summary(
+                        self.chat_widget.token_usage(),
+                        self.chat_widget.thread_id(),
+                        self.chat_widget.thread_name(),
+                    );
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
                     #[cfg(target_os = "macos")]
                     if let Some(path) = self.chat_widget.rollout_path()
                         && path.exists()
                     {
-                        match crate::resolve_session_thread_id(path.as_path(), None).await {
+                        match crate::resolve_session_thread_id(
+                            path.as_path(),
+                            /*id_str_if_uuid*/ None,
+                        )
+                        .await
+                        {
                             Some(fork_thread_id) => {
                                 match spawn_fork_in_terminal(self, tui, fork_thread_id).await {
                                     Ok(()) => {
