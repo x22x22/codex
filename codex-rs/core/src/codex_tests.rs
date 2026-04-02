@@ -2654,11 +2654,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(
-            McpConnectionManager::new_mcp_connection_manager_for_tests(
-                &config.permissions.approval_policy,
-            ),
-        )),
+        mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+            &config.permissions.approval_policy,
+        ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -2737,6 +2735,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         skills_outcome,
     );
 
+    let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
     let session = Session {
         conversation_id,
         tx_event,
@@ -2747,6 +2746,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        mailbox,
+        mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
@@ -3494,11 +3495,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
 
     let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(
-            McpConnectionManager::new_mcp_connection_manager_for_tests(
-                &config.permissions.approval_policy,
-            ),
-        )),
+        mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+            &config.permissions.approval_policy,
+        ))),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -3577,6 +3576,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         skills_outcome,
     ));
 
+    let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
     let session = Arc::new(Session {
         conversation_id,
         tx_event,
@@ -3587,6 +3587,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        mailbox,
+        mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,

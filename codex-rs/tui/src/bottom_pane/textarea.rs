@@ -529,10 +529,7 @@ impl TextArea {
             } => {
                 self.move_cursor_to_end_of_line(/*move_down_at_eol*/ true);
             }
-            _o => {
-                #[cfg(feature = "debug-logs")]
-                tracing::debug!("Unhandled key event in TextArea: {:?}", _o);
-            }
+            _ => {}
         }
     }
 
@@ -945,6 +942,7 @@ impl TextArea {
         self.set_cursor(end);
     }
 
+    #[cfg(not(target_os = "linux"))]
     pub fn replace_element_by_id(&mut self, id: &str, text: &str) -> bool {
         if let Some(idx) = self
             .elements
