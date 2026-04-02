@@ -4,8 +4,8 @@ use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
 
-use async_trait::async_trait;
 use codex_utils_string::take_bytes_at_char_boundary;
+use futures::future::BoxFuture;
 use serde::Deserialize;
 use tokio::fs;
 
@@ -14,6 +14,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -45,65 +46,74 @@ struct ListDirArgs {
     depth: usize,
 }
 
-#[async_trait]
 impl ToolHandler for ListDirHandler {
-    type Output = FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                call_id, payload, ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
+            let payload_for_result = payload.clone();
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "list_dir handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
+
+            let args: ListDirArgs = parse_arguments(&arguments)?;
+
+            let ListDirArgs {
+                dir_path,
+                offset,
+                limit,
+                depth,
+            } = args;
+
+            if offset == 0 {
                 return Err(FunctionCallError::RespondToModel(
-                    "list_dir handler received unsupported payload".to_string(),
+                    "offset must be a 1-indexed entry number".to_string(),
                 ));
             }
-        };
 
-        let args: ListDirArgs = parse_arguments(&arguments)?;
+            if limit == 0 {
+                return Err(FunctionCallError::RespondToModel(
+                    "limit must be greater than zero".to_string(),
+                ));
+            }
 
-        let ListDirArgs {
-            dir_path,
-            offset,
-            limit,
-            depth,
-        } = args;
+            if depth == 0 {
+                return Err(FunctionCallError::RespondToModel(
+                    "depth must be greater than zero".to_string(),
+                ));
+            }
 
-        if offset == 0 {
-            return Err(FunctionCallError::RespondToModel(
-                "offset must be a 1-indexed entry number".to_string(),
-            ));
-        }
+            let path = PathBuf::from(&dir_path);
+            if !path.is_absolute() {
+                return Err(FunctionCallError::RespondToModel(
+                    "dir_path must be an absolute path".to_string(),
+                ));
+            }
 
-        if limit == 0 {
-            return Err(FunctionCallError::RespondToModel(
-                "limit must be greater than zero".to_string(),
-            ));
-        }
-
-        if depth == 0 {
-            return Err(FunctionCallError::RespondToModel(
-                "depth must be greater than zero".to_string(),
-            ));
-        }
-
-        let path = PathBuf::from(&dir_path);
-        if !path.is_absolute() {
-            return Err(FunctionCallError::RespondToModel(
-                "dir_path must be an absolute path".to_string(),
-            ));
-        }
-
-        let entries = list_dir_slice(&path, offset, limit, depth).await?;
-        let mut output = Vec::with_capacity(entries.len() + 1);
-        output.push(format!("Absolute path: {}", path.display()));
-        output.extend(entries);
-        Ok(FunctionToolOutput::from_text(output.join("\n"), Some(true)))
+            let entries = list_dir_slice(&path, offset, limit, depth).await?;
+            let mut output = Vec::with_capacity(entries.len() + 1);
+            output.push(format!("Absolute path: {}", path.display()));
+            output.extend(entries);
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(FunctionToolOutput::from_text(output.join("\n"), Some(true))),
+            })
+        })
     }
 }
 

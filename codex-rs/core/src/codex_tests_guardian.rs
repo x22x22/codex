@@ -8,7 +8,7 @@ use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::sandboxing::SandboxPermissions;
-use crate::tools::context::FunctionToolOutput;
+use crate::tools::registry::AnyToolResult;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_exec_server::EnvironmentManager;
@@ -20,7 +20,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -40,8 +39,14 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
 
-fn expect_text_output(output: &FunctionToolOutput) -> String {
-    function_call_output_content_items_to_text(&output.body).unwrap_or_default()
+fn expect_text_output(output: &AnyToolResult) -> String {
+    let ResponseInputItem::FunctionCallOutput { output, .. } = output
+        .result
+        .to_response_item(&output.call_id, &output.payload)
+    else {
+        panic!("expected function call output");
+    };
+    output.body.to_text().unwrap_or_default()
 }
 
 #[tokio::test]

@@ -59,8 +59,7 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
             ToolCallSource::Direct,
         )
         .await
-        .err()
-        .expect("direct tool calls should be blocked");
+        .expect_err("direct tool calls should be blocked");
     let FunctionCallError::RespondToModel(message) = err else {
         panic!("expected RespondToModel, got {err:?}");
     };
@@ -117,8 +116,7 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
             ToolCallSource::JsRepl,
         )
         .await
-        .err()
-        .expect("shell call with empty args should fail");
+        .expect_err("shell call with empty args should fail");
     let message = err.to_string();
     assert!(
         !message.contains("direct tool calls are disabled"),

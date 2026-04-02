@@ -6,10 +6,7 @@ use tokio::time::timeout_at;
 
 pub(crate) struct Handler;
 
-#[async_trait]
 impl ToolHandler for Handler {
-    type Output = WaitAgentResult;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -18,59 +15,69 @@ impl ToolHandler for Handler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            call_id,
-            ..
-        } = invocation;
-        let arguments = function_arguments(payload)?;
-        let args: WaitArgs = parse_arguments(&arguments)?;
-        let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
-        let timeout_ms = match timeout_ms {
-            ms if ms <= 0 => {
-                return Err(FunctionCallError::RespondToModel(
-                    "timeout_ms must be greater than zero".to_owned(),
-                ));
-            }
-            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
-        };
-
-        let mut mailbox_seq_rx = session.subscribe_mailbox_seq();
-
-        session
-            .send_event(
-                &turn,
-                CollabWaitingBeginEvent {
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_ids: Vec::new(),
-                    receiver_agents: Vec::new(),
-                    call_id: call_id.clone(),
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                call_id,
+                ..
+            } = invocation;
+            let payload_for_result = payload.clone();
+            let arguments = function_arguments(payload)?;
+            let args: WaitArgs = parse_arguments(&arguments)?;
+            let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
+            let timeout_ms = match timeout_ms {
+                ms if ms <= 0 => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "timeout_ms must be greater than zero".to_owned(),
+                    ));
                 }
-                .into(),
-            )
-            .await;
+                ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
+            };
 
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        let timed_out = !wait_for_mailbox_change(&mut mailbox_seq_rx, deadline).await;
-        let result = WaitAgentResult::from_timed_out(timed_out);
+            let mut mailbox_seq_rx = session.subscribe_mailbox_seq();
 
-        session
-            .send_event(
-                &turn,
-                CollabWaitingEndEvent {
-                    sender_thread_id: session.conversation_id,
-                    call_id,
-                    agent_statuses: Vec::new(),
-                    statuses: HashMap::new(),
-                }
-                .into(),
-            )
-            .await;
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingBeginEvent {
+                        sender_thread_id: session.conversation_id,
+                        receiver_thread_ids: Vec::new(),
+                        receiver_agents: Vec::new(),
+                        call_id: call_id.clone(),
+                    }
+                    .into(),
+                )
+                .await;
 
-        Ok(result)
+            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+            let timed_out = !wait_for_mailbox_change(&mut mailbox_seq_rx, deadline).await;
+            let result = WaitAgentResult::from_timed_out(timed_out);
+
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingEndEvent {
+                        sender_thread_id: session.conversation_id,
+                        call_id: call_id.clone(),
+                        agent_statuses: Vec::new(),
+                        statuses: HashMap::new(),
+                    }
+                    .into(),
+                )
+                .await;
+
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(result),
+            })
+        })
     }
 }
 

@@ -1,11 +1,11 @@
-use async_trait::async_trait;
-
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use futures::future::BoxFuture;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
@@ -53,10 +53,7 @@ impl CodeModeExecuteHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for CodeModeExecuteHandler {
-    type Output = FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -65,23 +62,35 @@ impl ToolHandler for CodeModeExecuteHandler {
         matches!(payload, ToolPayload::Custom { .. })
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            tool_name,
-            payload,
-            ..
-        } = invocation;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                call_id,
+                tool_name,
+                payload,
+                ..
+            } = invocation;
+            let payload_for_result = payload.clone();
 
-        match payload {
-            ToolPayload::Custom { input } if tool_name == PUBLIC_TOOL_NAME => {
-                self.execute(session, turn, call_id, input).await
-            }
-            _ => Err(FunctionCallError::RespondToModel(format!(
-                "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
-            ))),
-        }
+            let result = match payload {
+                ToolPayload::Custom { input } if tool_name == PUBLIC_TOOL_NAME => {
+                    self.execute(session, turn, call_id.clone(), input).await
+                }
+                _ => Err(FunctionCallError::RespondToModel(format!(
+                    "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
+                ))),
+            }?;
+
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(result),
+            })
+        })
     }
 }

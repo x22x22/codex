@@ -3,10 +3,7 @@ use crate::agent::control::ListedAgent;
 
 pub(crate) struct Handler;
 
-#[async_trait]
 impl ToolHandler for Handler {
-    type Output = ListAgentsResult;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -15,27 +12,38 @@ impl ToolHandler for Handler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            payload,
-            ..
-        } = invocation;
-        let arguments = function_arguments(payload)?;
-        let args: ListAgentsArgs = parse_arguments(&arguments)?;
-        session
-            .services
-            .agent_control
-            .register_session_root(session.conversation_id, &turn.session_source);
-        let agents = session
-            .services
-            .agent_control
-            .list_agents(&turn.session_source, args.path_prefix.as_deref())
-            .await
-            .map_err(collab_spawn_error)?;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                call_id,
+                ..
+            } = invocation;
+            let payload_for_result = payload.clone();
+            let arguments = function_arguments(payload)?;
+            let args: ListAgentsArgs = parse_arguments(&arguments)?;
+            session
+                .services
+                .agent_control
+                .register_session_root(session.conversation_id, &turn.session_source);
+            let agents = session
+                .services
+                .agent_control
+                .list_agents(&turn.session_source, args.path_prefix.as_deref())
+                .await
+                .map_err(collab_spawn_error)?;
 
-        Ok(ListAgentsResult { agents })
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(ListAgentsResult { agents }),
+            })
+        })
     }
 }
 

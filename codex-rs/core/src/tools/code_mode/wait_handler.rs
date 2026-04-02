@@ -1,10 +1,10 @@
-use async_trait::async_trait;
+use futures::future::BoxFuture;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -39,46 +39,56 @@ where
     })
 }
 
-#[async_trait]
 impl ToolHandler for CodeModeWaitHandler {
-    type Output = FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            tool_name,
-            payload,
-            ..
-        } = invocation;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                call_id,
+                tool_name,
+                payload,
+                ..
+            } = invocation;
+            let payload_for_result = payload.clone();
 
-        match payload {
-            ToolPayload::Function { arguments } if tool_name == WAIT_TOOL_NAME => {
-                let args: ExecWaitArgs = parse_arguments(&arguments)?;
-                let exec = ExecContext { session, turn };
-                let started_at = std::time::Instant::now();
-                let response = exec
-                    .session
-                    .services
-                    .code_mode_service
-                    .wait(codex_code_mode::WaitRequest {
-                        cell_id: args.cell_id,
-                        yield_time_ms: args.yield_time_ms,
-                        terminate: args.terminate,
-                    })
-                    .await
-                    .map_err(FunctionCallError::RespondToModel)?;
-                handle_runtime_response(&exec, response, args.max_tokens, started_at)
-                    .await
-                    .map_err(FunctionCallError::RespondToModel)
-            }
-            _ => Err(FunctionCallError::RespondToModel(format!(
-                "{WAIT_TOOL_NAME} expects JSON arguments"
-            ))),
-        }
+            let result = match payload {
+                ToolPayload::Function { arguments } if tool_name == WAIT_TOOL_NAME => {
+                    let args: ExecWaitArgs = parse_arguments(&arguments)?;
+                    let exec = ExecContext { session, turn };
+                    let started_at = std::time::Instant::now();
+                    let response = exec
+                        .session
+                        .services
+                        .code_mode_service
+                        .wait(codex_code_mode::WaitRequest {
+                            cell_id: args.cell_id,
+                            yield_time_ms: args.yield_time_ms,
+                            terminate: args.terminate,
+                        })
+                        .await
+                        .map_err(FunctionCallError::RespondToModel)?;
+                    handle_runtime_response(&exec, response, args.max_tokens, started_at)
+                        .await
+                        .map_err(FunctionCallError::RespondToModel)
+                }
+                _ => Err(FunctionCallError::RespondToModel(format!(
+                    "{WAIT_TOOL_NAME} expects JSON arguments"
+                ))),
+            }?;
+
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(result),
+            })
+        })
     }
 }

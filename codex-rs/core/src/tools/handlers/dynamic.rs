@@ -5,14 +5,15 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::EventMsg;
+use futures::future::BoxFuture;
 use serde_json::Value;
 use std::time::Instant;
 use tokio::sync::oneshot;
@@ -20,55 +21,64 @@ use tracing::warn;
 
 pub struct DynamicToolHandler;
 
-#[async_trait]
 impl ToolHandler for DynamicToolHandler {
-    type Output = FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            tool_name,
-            payload,
-            ..
-        } = invocation;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                call_id,
+                tool_name,
+                payload,
+                ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "dynamic tool handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+            let payload_for_result = payload.clone();
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "dynamic tool handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
 
-        let args: Value = parse_arguments(&arguments)?;
-        let response = request_dynamic_tool(&session, turn.as_ref(), call_id, tool_name, args)
-            .await
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(
-                    "dynamic tool call was cancelled before receiving a response".to_string(),
-                )
-            })?;
+            let args: Value = parse_arguments(&arguments)?;
+            let response =
+                request_dynamic_tool(&session, turn.as_ref(), call_id.clone(), tool_name, args)
+                    .await
+                    .ok_or_else(|| {
+                        FunctionCallError::RespondToModel(
+                            "dynamic tool call was cancelled before receiving a response"
+                                .to_string(),
+                        )
+                    })?;
 
-        let DynamicToolResponse {
-            content_items,
-            success,
-        } = response;
-        let body = content_items
-            .into_iter()
-            .map(FunctionCallOutputContentItem::from)
-            .collect::<Vec<_>>();
-        Ok(FunctionToolOutput::from_content(body, Some(success)))
+            let DynamicToolResponse {
+                content_items,
+                success,
+            } = response;
+            let body = content_items
+                .into_iter()
+                .map(FunctionCallOutputContentItem::from)
+                .collect::<Vec<_>>();
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(FunctionToolOutput::from_content(body, Some(success))),
+            })
+        })
     }
 }
 

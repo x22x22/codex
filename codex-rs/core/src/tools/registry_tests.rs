@@ -1,26 +1,26 @@
 use super::*;
-use async_trait::async_trait;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 
 struct TestHandler;
 
-#[async_trait]
 impl ToolHandler for TestHandler {
-    type Output = crate::tools::context::FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        unreachable!("test handler should not be invoked")
+    fn handle(
+        &self,
+        _invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move { unreachable!("test handler should not be invoked") })
     }
 }
 
 #[test]
 fn handler_looks_up_namespaced_aliases_explicitly() {
-    let plain_handler = Arc::new(TestHandler) as Arc<dyn AnyToolHandler>;
-    let namespaced_handler = Arc::new(TestHandler) as Arc<dyn AnyToolHandler>;
+    let plain_handler = Arc::new(TestHandler) as Arc<dyn ToolHandler>;
+    let namespaced_handler = Arc::new(TestHandler) as Arc<dyn ToolHandler>;
     let namespace = "mcp__codex_apps__gmail";
     let tool_name = "gmail_get_recent_emails";
     let namespaced_name = tool_handler_key(tool_name, Some(namespace));
