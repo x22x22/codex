@@ -290,6 +290,7 @@ use crate::rollout::policy::EventPersistenceMode;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::shell_snapshot::spawn_stale_snapshot_cleanup;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
@@ -1400,7 +1401,7 @@ impl Session {
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
         .with_unified_exec_shell_mode_for_session(
-            crate::tools::spec::tool_user_shell_type(user_shell),
+            user_shell.shell_type,
             shell_zsh_path,
             main_execve_wrapper_exe,
         )
@@ -1729,7 +1730,7 @@ impl Session {
         );
 
         let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
-        let mut default_shell = if let Some(user_shell_override) =
+        let default_shell = if let Some(user_shell_override) =
             session_configuration.user_shell_override.clone()
         {
             user_shell_override
@@ -1750,25 +1751,24 @@ impl Session {
             shell::default_user_shell()
         };
         // Create the mutable state for the Session.
-        let shell_snapshot_tx = if config.features.enabled(Feature::ShellSnapshot) {
-            if let Some(snapshot) = session_configuration.inherited_shell_snapshot.clone() {
-                let (tx, rx) = watch::channel(Some(snapshot));
-                default_shell.shell_snapshot = rx;
-                tx
+        let (shell_snapshot_tx, shell_snapshot_rx) =
+            if config.features.enabled(Feature::ShellSnapshot) {
+                if let Some(snapshot) = session_configuration.inherited_shell_snapshot.clone() {
+                    watch::channel(Some(snapshot))
+                } else {
+                    let (shell_snapshot_tx, shell_snapshot_rx) = ShellSnapshot::start_snapshotting(
+                        config.codex_home.clone(),
+                        conversation_id,
+                        session_configuration.cwd.to_path_buf(),
+                        default_shell.clone(),
+                        session_telemetry.clone(),
+                    );
+                    spawn_stale_snapshot_cleanup(config.codex_home.clone(), conversation_id);
+                    (shell_snapshot_tx, shell_snapshot_rx)
+                }
             } else {
-                ShellSnapshot::start_snapshotting(
-                    config.codex_home.clone(),
-                    conversation_id,
-                    session_configuration.cwd.to_path_buf(),
-                    &mut default_shell,
-                    session_telemetry.clone(),
-                )
-            }
-        } else {
-            let (tx, rx) = watch::channel(None);
-            default_shell.shell_snapshot = rx;
-            tx
-        };
+                watch::channel(None)
+            };
         let thread_name =
             match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id)
                 .instrument(info_span!(
@@ -1885,6 +1885,7 @@ impl Session {
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
+            shell_snapshot_rx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
@@ -2333,6 +2334,7 @@ impl Session {
             self.services.shell_snapshot_tx.clone(),
             self.services.session_telemetry.clone(),
         );
+        spawn_stale_snapshot_cleanup(codex_home.to_path_buf(), self.conversation_id);
     }
 
     pub(crate) async fn update_settings(
@@ -4225,6 +4227,10 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
+    pub(crate) fn shell_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
+        self.services.shell_snapshot_rx.borrow().clone()
+    }
+
     pub(crate) async fn current_rollout_path(&self) -> Option<PathBuf> {
         let recorder = {
             let guard = self.services.rollout.lock().await;
@@ -5472,7 +5478,7 @@ async fn spawn_review_thread(
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
     .with_unified_exec_shell_mode_for_session(
-        crate::tools::spec::tool_user_shell_type(sess.services.user_shell.as_ref()),
+        sess.services.user_shell.shell_type,
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
     )

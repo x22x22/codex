@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::RolloutRecorder;
 use crate::SkillsManager;
 use crate::agent::AgentControl;
@@ -9,6 +7,8 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::mcp::McpManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
+use crate::shell_snapshot::ShellSnapshotReceiver;
+use crate::shell_snapshot::ShellSnapshotSender;
 use crate::skills_watcher::SkillsWatcher;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -22,9 +22,9 @@ use codex_mcp::mcp_connection_manager::McpConnectionManager;
 use codex_otel::SessionTelemetry;
 use codex_rollout::state_db::StateDbHandle;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
@@ -39,7 +39,8 @@ pub(crate) struct SessionServices {
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
-    pub(crate) shell_snapshot_tx: watch::Sender<Option<Arc<crate::shell_snapshot::ShellSnapshot>>>,
+    pub(crate) shell_snapshot_tx: ShellSnapshotSender,
+    pub(crate) shell_snapshot_rx: ShellSnapshotReceiver,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) exec_policy: Arc<ExecPolicyManager>,
     pub(crate) auth_manager: Arc<AuthManager>,

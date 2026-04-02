@@ -2654,6 +2654,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let skills_watcher = Arc::new(SkillsWatcher::noop());
+    let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
@@ -2675,7 +2676,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
-        shell_snapshot_tx: watch::channel(None).0,
+        shell_snapshot_tx,
+        shell_snapshot_rx,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: auth_manager.clone(),
@@ -3491,6 +3493,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     );
 
     let skills_watcher = Arc::new(SkillsWatcher::noop());
+    let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
             &config.permissions.approval_policy,
@@ -3512,7 +3515,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
-        shell_snapshot_tx: watch::channel(None).0,
+        shell_snapshot_tx,
+        shell_snapshot_rx,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: Arc::clone(&auth_manager),
