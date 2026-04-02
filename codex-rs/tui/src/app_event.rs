@@ -33,7 +33,7 @@ use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::SubagentStatusCell;
 
-use codex_core::config::types::ApprovalsReviewer;
+use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;

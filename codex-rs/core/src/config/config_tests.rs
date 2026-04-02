@@ -1,23 +1,23 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
-use crate::config::types::AppToolApproval;
-use crate::config::types::ApprovalsReviewer;
-use crate::config::types::BundledSkillsConfig;
-use crate::config::types::FeedbackConfigToml;
-use crate::config::types::HistoryPersistence;
-use crate::config::types::McpServerToolConfig;
-use crate::config::types::McpServerTransportConfig;
-use crate::config::types::MemoriesConfig;
-use crate::config::types::MemoriesToml;
-use crate::config::types::ModelAvailabilityNuxConfig;
-use crate::config::types::NotificationMethod;
-use crate::config::types::Notifications;
-use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::RequirementSource;
 use crate::plugins::PluginsManager;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
+use codex_config::types::BundledSkillsConfig;
+use codex_config::types::FeedbackConfigToml;
+use codex_config::types::HistoryPersistence;
+use codex_config::types::McpServerToolConfig;
+use codex_config::types::McpServerTransportConfig;
+use codex_config::types::MemoriesConfig;
+use codex_config::types::MemoriesToml;
+use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_config::types::NotificationMethod;
+use codex_config::types::Notifications;
+use codex_config::types::ToolSuggestDiscoverableType;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -241,6 +241,48 @@ web_search = false
             web_search: None,
             view_image: None,
         })
+    );
+}
+
+#[test]
+fn config_toml_deserializes_custom_models() {
+    let custom_models = r#"
+[[custom_models]]
+name = "gpt-5.4 1m"
+model = "gpt-5.4"
+model_context_window = 1000000
+model_auto_compact_token_limit = 900000
+"#;
+    let custom_models_cfg = toml::from_str::<ConfigToml>(custom_models)
+        .expect("TOML deserialization should succeed for custom models");
+
+    assert_eq!(
+        custom_models_cfg.custom_models,
+        vec![CustomModelToml {
+            name: "gpt-5.4 1m".to_string(),
+            model: "gpt-5.4".to_string(),
+            model_context_window: Some(1_000_000),
+            model_auto_compact_token_limit: Some(900_000),
+        }]
+    );
+
+    let config = Config::load_from_base_config_with_overrides(
+        custom_models_cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").path().to_path_buf(),
+    )
+    .expect("load config from custom models settings");
+
+    assert_eq!(
+        config.custom_models,
+        HashMap::from([(
+            "gpt-5.4 1m".to_string(),
+            CustomModelConfig {
+                model: "gpt-5.4".to_string(),
+                model_context_window: Some(1_000_000),
+                model_auto_compact_token_limit: Some(900_000),
+            },
+        )])
     );
 }
 
