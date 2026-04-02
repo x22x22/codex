@@ -51,8 +51,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
-use codex_core::auth::AuthConfig;
-use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -67,6 +65,10 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
+use codex_login::AuthConfig;
+use codex_login::default_client::set_default_client_residency_requirement;
+use codex_login::default_client::set_default_originator;
+use codex_login::enforce_login_restrictions;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::config_types::SandboxMode;
@@ -105,8 +107,6 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use codex_core::default_client::set_default_client_residency_requirement;
-use codex_core::default_client::set_default_originator;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 
@@ -440,7 +440,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,
-        client_name: "codex-exec".to_string(),
+        client_name: "codex_exec".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
@@ -1975,10 +1975,14 @@ mod tests {
         let cwd = tempdir().expect("create temp cwd");
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                ..Default::default()
+            })
             .fallback_cwd(Some(cwd.path().to_path_buf()))
             .build()
             .await
-            .expect("build default config");
+            .expect("build config with manual-only review policy");
 
         let params = thread_start_params_from_config(&config);
 
@@ -1992,17 +1996,16 @@ mod tests {
     async fn thread_start_params_include_review_policy_when_auto_review_is_enabled() {
         let codex_home = tempdir().expect("create temp codex home");
         let cwd = tempdir().expect("create temp cwd");
-        std::fs::write(
-            codex_home.path().join("config.toml"),
-            "approvals_reviewer = \"guardian_subagent\"\n",
-        )
-        .expect("write auto-review config");
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                ..Default::default()
+            })
             .fallback_cwd(Some(cwd.path().to_path_buf()))
             .build()
             .await
-            .expect("build auto-review config");
+            .expect("build config with guardian review policy");
 
         let params = thread_start_params_from_config(&config);
 

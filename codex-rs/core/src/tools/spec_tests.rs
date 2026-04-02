@@ -1,20 +1,66 @@
-use crate::client_common::tools::FreeformTool;
 use crate::config::test_config;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::model_info::with_config_overrides;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::ToolRouter;
-use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
+use codex_features::Feature;
+use codex_features::Features;
+use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_protocol::config_types::WebSearchConfig;
+use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_tools::AdditionalProperties;
+use codex_tools::CommandToolOptions;
+use codex_tools::ConfiguredToolSpec;
+use codex_tools::DiscoverablePluginInfo;
+use codex_tools::DiscoverableTool;
+use codex_tools::FreeformTool;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ResponsesApiWebSearchFilters;
+use codex_tools::ResponsesApiWebSearchUserLocation;
+use codex_tools::ShellCommandBackendConfig;
+use codex_tools::SpawnAgentToolOptions;
+use codex_tools::ToolsConfig;
+use codex_tools::ToolsConfigParams;
+use codex_tools::UnifiedExecShellMode;
+use codex_tools::ViewImageToolOptions;
+use codex_tools::WaitAgentTimeoutOptions;
+use codex_tools::ZshForkConfig;
+use codex_tools::create_apply_patch_freeform_tool;
+use codex_tools::create_close_agent_tool_v1;
+use codex_tools::create_close_agent_tool_v2;
+use codex_tools::create_exec_command_tool;
+use codex_tools::create_request_permissions_tool;
+use codex_tools::create_request_user_input_tool;
+use codex_tools::create_resume_agent_tool;
+use codex_tools::create_send_input_tool_v1;
+use codex_tools::create_send_message_tool;
+use codex_tools::create_spawn_agent_tool_v1;
+use codex_tools::create_spawn_agent_tool_v2;
+use codex_tools::create_update_plan_tool;
+use codex_tools::create_view_image_tool;
+use codex_tools::create_wait_agent_tool_v1;
+use codex_tools::create_wait_agent_tool_v2;
+use codex_tools::create_write_stdin_tool;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
+use codex_tools::request_permissions_tool_description;
+use codex_tools::request_user_input_tool_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::*;
@@ -50,10 +96,6 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
         is_enabled: true,
         plugin_display_names: Vec::new(),
     }))
-}
-
-fn windows_shell_safety_description() -> String {
-    format!("\n\n{}", super::windows_destructive_filesystem_guidance())
 }
 
 fn search_capable_model_info() -> ModelInfo {
@@ -105,23 +147,12 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
     );
 }
 
-fn tool_name(tool: &ToolSpec) -> &str {
-    match tool {
-        ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
-        ToolSpec::ToolSearch { .. } => "tool_search",
-        ToolSpec::LocalShell {} => "local_shell",
-        ToolSpec::ImageGeneration { .. } => "image_generation",
-        ToolSpec::WebSearch { .. } => "web_search",
-        ToolSpec::Freeform(FreeformTool { name, .. }) => name,
-    }
-}
-
 // Avoid order-based assertions; compare via set containment instead.
 fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&str]) {
     use std::collections::HashSet;
     let mut names = HashSet::new();
     let mut duplicates = Vec::new();
-    for name in tools.iter().map(|t| tool_name(&t.spec)) {
+    for name in tools.iter().map(ConfiguredToolSpec::name) {
         if !names.insert(name) {
             duplicates.push(name);
         }
@@ -141,7 +172,7 @@ fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&
 fn assert_lacks_tool_name(tools: &[ConfiguredToolSpec], expected_absent: &str) {
     let names = tools
         .iter()
-        .map(|tool| tool_name(&tool.spec))
+        .map(ConfiguredToolSpec::name)
         .collect::<Vec<_>>();
     assert!(
         !names.contains(&expected_absent),
@@ -159,10 +190,31 @@ fn shell_tool_name(config: &ToolsConfig) -> Option<&'static str> {
     }
 }
 
+fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSpec {
+    create_request_user_input_tool(request_user_input_tool_description(
+        default_mode_request_user_input,
+    ))
+}
+
+fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
+    SpawnAgentToolOptions {
+        available_models: &config.available_models,
+        agent_type_description: agent_type_description(config),
+    }
+}
+
+fn wait_agent_timeout_options() -> WaitAgentTimeoutOptions {
+    WaitAgentTimeoutOptions {
+        default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+        min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
+        max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
+    }
+}
+
 fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a ConfiguredToolSpec {
     tools
         .iter()
-        .find(|tool| tool_name(&tool.spec) == expected_name)
+        .find(|tool| tool.name() == expected_name)
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
 }
 
@@ -218,30 +270,6 @@ fn model_info_from_models_json(slug: &str) -> ModelInfo {
 }
 
 #[test]
-fn unified_exec_is_blocked_for_windows_sandboxed_policies_only() {
-    assert!(!unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::new_read_only_policy(),
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(!unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::new_workspace_write_policy(),
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::DangerFullAccess,
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::DangerFullAccess,
-        WindowsSandboxLevel::Disabled,
-    ));
-}
-
-#[test]
 fn model_provided_unified_exec_is_blocked_for_windows_sandboxed_policies() {
     let mut model_info = model_info_from_models_json("gpt-5-codex");
     model_info.shell_type = ConfigShellToolType::UnifiedExec;
@@ -294,7 +322,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     let mut actual: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
     let mut duplicate_names = Vec::new();
     for t in &tools {
-        let name = tool_name(&t.spec).to_string();
+        let name = t.name().to_string();
         if actual.insert(name.clone(), t.spec.clone()).is_some() {
             duplicate_names.push(name);
         }
@@ -307,12 +335,13 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     // Build expected from the same helpers used by the builder.
     let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
     for spec in [
-        create_exec_command_tool(
-            /*allow_login_shell*/ true, /*exec_permission_approvals_enabled*/ false,
-        ),
+        create_exec_command_tool(CommandToolOptions {
+            allow_login_shell: true,
+            exec_permission_approvals_enabled: false,
+        }),
         create_write_stdin_tool(),
-        PLAN_TOOL.clone(),
-        create_request_user_input_tool(CollaborationModesConfig::default()),
+        create_update_plan_tool(),
+        request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
@@ -321,36 +350,38 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_context_size: None,
             search_content_types: None,
         },
-        create_view_image_tool(config.can_request_original_image_detail),
+        create_view_image_tool(ViewImageToolOptions {
+            can_request_original_image_detail: config.can_request_original_image_detail,
+        }),
     ] {
-        expected.insert(tool_name(&spec).to_string(), spec);
+        expected.insert(spec.name().to_string(), spec);
     }
     let collab_specs = if config.multi_agent_v2 {
         vec![
-            create_spawn_agent_tool_v2(&config),
+            create_spawn_agent_tool_v2(spawn_agent_tool_options(&config)),
             create_send_message_tool(),
-            create_wait_agent_tool_v2(),
+            create_wait_agent_tool_v2(wait_agent_timeout_options()),
             create_close_agent_tool_v2(),
         ]
     } else {
         vec![
-            create_spawn_agent_tool_v1(&config),
+            create_spawn_agent_tool_v1(spawn_agent_tool_options(&config)),
             create_send_input_tool_v1(),
-            create_wait_agent_tool_v1(),
+            create_wait_agent_tool_v1(wait_agent_timeout_options()),
             create_close_agent_tool_v1(),
         ]
     };
     for spec in collab_specs {
-        expected.insert(tool_name(&spec).to_string(), spec);
+        expected.insert(spec.name().to_string(), spec);
     }
     if !config.multi_agent_v2 {
         let spec = create_resume_agent_tool();
-        expected.insert(tool_name(&spec).to_string(), spec);
+        expected.insert(spec.name().to_string(), spec);
     }
 
     if config.exec_permission_approvals_enabled {
-        let spec = create_request_permissions_tool();
-        expected.insert(tool_name(&spec).to_string(), spec);
+        let spec = create_request_permissions_tool(request_permissions_tool_description());
+        expected.insert(spec.name().to_string(), spec);
     }
 
     // Exact name set match — this is the only test allowed to fail when tools change.
@@ -397,6 +428,16 @@ fn test_build_specs_collab_tools_enabled() {
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
     assert_lacks_tool_name(&tools, "list_agents");
+
+    let spawn_agent = find_tool(&tools, "spawn_agent");
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &spawn_agent.spec else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let JsonSchema::Object { properties, .. } = parameters else {
+        panic!("spawn_agent should use object params");
+    };
+    assert!(properties.contains_key("fork_context"));
+    assert!(!properties.contains_key("fork_turns"));
 }
 
 #[test]
@@ -453,7 +494,14 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("spawn_agent should use object params");
     };
     assert!(properties.contains_key("task_name"));
-    assert_eq!(required.as_ref(), Some(&vec!["task_name".to_string()]));
+    assert!(properties.contains_key("message"));
+    assert!(properties.contains_key("fork_turns"));
+    assert!(!properties.contains_key("items"));
+    assert!(!properties.contains_key("fork_context"));
+    assert_eq!(
+        required.as_ref(),
+        Some(&vec!["task_name".to_string(), "message".to_string()])
+    );
     let output_schema = output_schema
         .as_ref()
         .expect("spawn_agent should define output schema");
@@ -475,10 +523,12 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("send_message should use object params");
     };
     assert!(properties.contains_key("target"));
-    assert!(!properties.contains_key("message"));
+    assert!(!properties.contains_key("interrupt"));
+    assert!(properties.contains_key("message"));
+    assert!(!properties.contains_key("items"));
     assert_eq!(
         required.as_ref(),
-        Some(&vec!["target".to_string(), "items".to_string()])
+        Some(&vec!["target".to_string(), "message".to_string()])
     );
 
     let assign_task = find_tool(&tools, "assign_task");
@@ -494,10 +544,11 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("assign_task should use object params");
     };
     assert!(properties.contains_key("target"));
-    assert!(!properties.contains_key("message"));
+    assert!(properties.contains_key("message"));
+    assert!(!properties.contains_key("items"));
     assert_eq!(
         required.as_ref(),
-        Some(&vec!["target".to_string(), "items".to_string()])
+        Some(&vec!["target".to_string(), "message".to_string()])
     );
 
     let wait_agent = find_tool(&tools, "wait_agent");
@@ -517,8 +568,9 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     else {
         panic!("wait_agent should use object params");
     };
-    assert!(properties.contains_key("targets"));
-    assert_eq!(required.as_ref(), Some(&vec!["targets".to_string()]));
+    assert!(!properties.contains_key("targets"));
+    assert!(properties.contains_key("timeout_ms"));
+    assert_eq!(required, &None);
     let output_schema = output_schema
         .as_ref()
         .expect("wait_agent should define output schema");
@@ -737,7 +789,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let request_user_input_tool = find_tool(&tools, "request_user_input");
     assert_eq!(
         request_user_input_tool.spec,
-        create_request_user_input_tool(CollaborationModesConfig::default())
+        request_user_input_tool_spec(/*default_mode_request_user_input*/ false)
     );
 
     features.enable(Feature::DefaultModeRequestUserInput);
@@ -761,9 +813,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let request_user_input_tool = find_tool(&tools, "request_user_input");
     assert_eq!(
         request_user_input_tool.spec,
-        create_request_user_input_tool(CollaborationModesConfig {
-            default_mode_request_user_input: true,
-        })
+        request_user_input_tool_spec(/*default_mode_request_user_input*/ true)
     );
 }
 
@@ -813,7 +863,7 @@ fn request_permissions_requires_feature_flag() {
     let request_permissions_tool = find_tool(&tools, "request_permissions");
     assert_eq!(
         request_permissions_tool.spec,
-        create_request_permissions_tool()
+        create_request_permissions_tool(request_permissions_tool_description())
     );
 }
 
@@ -1020,21 +1070,6 @@ fn image_generation_tools_require_feature_and_supported_model() {
     );
 }
 
-#[test]
-fn js_repl_freeform_grammar_blocks_common_non_js_prefixes() {
-    let ToolSpec::Freeform(FreeformTool { format, .. }) = create_js_repl_tool() else {
-        panic!("js_repl should use a freeform tool spec");
-    };
-
-    assert_eq!(format.syntax, "lark");
-    assert!(format.definition.contains("PRAGMA_LINE"));
-    assert!(format.definition.contains("`[^`]"));
-    assert!(format.definition.contains("``[^`]"));
-    assert!(format.definition.contains("PLAIN_JS_SOURCE"));
-    assert!(format.definition.contains("codex-js-repl:"));
-    assert!(!format.definition.contains("(?!"));
-}
-
 fn assert_model_tools(
     model_slug: &str,
     features: &Features,
@@ -1205,10 +1240,10 @@ fn web_search_config_is_forwarded_to_tool_spec() {
             external_web_access: Some(true),
             filters: web_search_config
                 .filters
-                .map(crate::client_common::tools::ResponsesApiWebSearchFilters::from),
+                .map(ResponsesApiWebSearchFilters::from),
             user_location: web_search_config
                 .user_location
-                .map(crate::client_common::tools::ResponsesApiWebSearchUserLocation::from),
+                .map(ResponsesApiWebSearchUserLocation::from),
             search_context_size: web_search_config.search_context_size,
             search_content_types: None,
         }
@@ -1249,12 +1284,7 @@ fn web_search_tool_type_text_and_image_sets_search_content_types() {
             filters: None,
             user_location: None,
             search_context_size: None,
-            search_content_types: Some(
-                WEB_SEARCH_CONTENT_TYPES
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect()
-            ),
+            search_content_types: Some(vec!["text".to_string(), "image".to_string()]),
         }
     );
 }
@@ -1604,7 +1634,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
     assert_eq!(
         tools_config
             .with_unified_exec_shell_mode_for_session(
-                &user_shell,
+                tool_user_shell_type(&user_shell),
                 Some(&PathBuf::from(if cfg!(windows) {
                     r"C:\opt\codex\zsh"
                 } else {
@@ -1684,11 +1714,7 @@ fn test_test_model_info_includes_sync_tool() {
     )
     .build();
 
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool_name(&tool.spec) == "test_sync_tool")
-    );
+    assert!(tools.iter().any(|tool| tool.name() == "test_sync_tool"));
 }
 
 #[test]
@@ -1822,7 +1848,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
     // Only assert that the MCP tools themselves are sorted by fully-qualified name.
     let mcp_names: Vec<_> = tools
         .iter()
-        .map(|t| tool_name(&t.spec).to_string())
+        .map(|t| t.name().to_string())
         .filter(|n| n.starts_with("test_server/"))
         .collect();
     let expected = vec![
@@ -1870,7 +1896,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
             (
                 "mcp__codex_apps__calendar_create_event".to_string(),
                 ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "_create_event".to_string(),
                     tool_namespace: "mcp__codex_apps__calendar".to_string(),
                     tool: mcp_tool(
@@ -1889,7 +1915,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
             (
                 "mcp__codex_apps__calendar_list_events".to_string(),
                 ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "_list_events".to_string(),
                     tool_namespace: "mcp__codex_apps__calendar".to_string(),
                     tool: mcp_tool(
@@ -1908,7 +1934,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
             (
                 "mcp__codex_apps__gmail_search_threads".to_string(),
                 ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "_search_threads".to_string(),
                     tool_namespace: "mcp__codex_apps__gmail".to_string(),
                     tool: mcp_tool(
@@ -1962,7 +1988,7 @@ fn search_tool_requires_model_capability_and_feature_flag() {
     let app_tools = Some(HashMap::from([(
         "mcp__codex_apps__calendar_create_event".to_string(),
         ToolInfo {
-            server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             tool_name: "calendar_create_event".to_string(),
             tool_namespace: "mcp__codex_apps__calendar".to_string(),
             tool: mcp_tool(
@@ -2069,7 +2095,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
     assert!(
         !tools
             .iter()
-            .any(|tool| tool_name(&tool.spec) == TOOL_SUGGEST_TOOL_NAME)
+            .any(|tool| tool.name() == TOOL_SUGGEST_TOOL_NAME)
     );
 }
 
@@ -2160,7 +2186,7 @@ fn tool_suggest_requires_apps_and_plugins_features() {
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool_name(&tool.spec) == TOOL_SUGGEST_TOOL_NAME),
+                .any(|tool| tool.name() == TOOL_SUGGEST_TOOL_NAME),
             "tool_suggest should be absent when {disabled_feature:?} is disabled"
         );
     }
@@ -2222,7 +2248,7 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
         Some(HashMap::from([(
             "mcp__codex_apps__calendar_create_event".to_string(),
             ToolInfo {
-                server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 tool_name: "_create_event".to_string(),
                 tool_namespace: "mcp__codex_apps__calendar".to_string(),
                 tool: mcp_tool(
@@ -2272,7 +2298,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
             (
                 "mcp__codex_apps__calendar_create_event".to_string(),
                 ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "_create_event".to_string(),
                     tool_namespace: "mcp__codex_apps__calendar".to_string(),
                     tool: mcp_tool(
@@ -2289,7 +2315,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
             (
                 "mcp__codex_apps__calendar_list_events".to_string(),
                 ToolInfo {
-                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "_list_events".to_string(),
                     tool_namespace: "mcp__codex_apps__calendar".to_string(),
                     tool: mcp_tool(
@@ -2654,177 +2680,6 @@ fn test_mcp_tool_anyof_defaults_to_string() {
 }
 
 #[test]
-fn test_shell_tool() {
-    let tool = super::create_shell_tool(/*exec_permission_approvals_enabled*/ false);
-    let ToolSpec::Function(ResponsesApiTool {
-        description, name, ..
-    }) = &tool
-    else {
-        panic!("expected function tool");
-    };
-    assert_eq!(name, "shell");
-
-    let expected = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
-
-Examples of valid command strings:
-
-- ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
-- recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
-- recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
-- setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
-                .to_string()
-                + &windows_shell_safety_description()
-    } else {
-        r#"Runs a shell command and returns its output.
-- The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
-- Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-                .to_string()
-    };
-    assert_eq!(description, &expected);
-}
-
-#[test]
-fn test_exec_command_tool_windows_description_includes_shell_safety_guidance() {
-    let tool = super::create_exec_command_tool(
-        /*allow_login_shell*/ true, /*exec_permission_approvals_enabled*/ false,
-    );
-    let ToolSpec::Function(ResponsesApiTool {
-        description, name, ..
-    }) = &tool
-    else {
-        panic!("expected function tool");
-    };
-    assert_eq!(name, "exec_command");
-
-    let expected = if cfg!(windows) {
-        format!(
-            "Runs a command in a PTY, returning output or a session ID for ongoing interaction.{}",
-            windows_shell_safety_description()
-        )
-    } else {
-        "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
-            .to_string()
-    };
-    assert_eq!(description, &expected);
-}
-
-#[test]
-fn shell_tool_with_request_permission_includes_additional_permissions() {
-    let tool = super::create_shell_tool(/*exec_permission_approvals_enabled*/ true);
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
-        panic!("expected function tool");
-    };
-    let JsonSchema::Object { properties, .. } = parameters else {
-        panic!("expected object parameters");
-    };
-
-    assert!(properties.contains_key("additional_permissions"));
-
-    let Some(JsonSchema::String {
-        description: Some(description),
-    }) = properties.get("sandbox_permissions")
-    else {
-        panic!("expected sandbox_permissions description");
-    };
-    assert!(description.contains("with_additional_permissions"));
-    assert!(description.contains("filesystem or network permissions"));
-
-    let Some(JsonSchema::Object {
-        properties: additional_properties,
-        ..
-    }) = properties.get("additional_permissions")
-    else {
-        panic!("expected additional_permissions schema");
-    };
-    assert!(additional_properties.contains_key("network"));
-    assert!(additional_properties.contains_key("file_system"));
-    assert!(!additional_properties.contains_key("macos"));
-}
-
-#[test]
-fn request_permissions_tool_includes_full_permission_schema() {
-    let tool = super::create_request_permissions_tool();
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
-        panic!("expected function tool");
-    };
-    let JsonSchema::Object { properties, .. } = parameters else {
-        panic!("expected object parameters");
-    };
-    let Some(JsonSchema::Object {
-        properties: permission_properties,
-        additional_properties,
-        ..
-    }) = properties.get("permissions")
-    else {
-        panic!("expected permissions object");
-    };
-
-    assert_eq!(additional_properties, &Some(false.into()));
-    assert!(permission_properties.contains_key("network"));
-    assert!(permission_properties.contains_key("file_system"));
-    assert!(!permission_properties.contains_key("macos"));
-
-    let Some(JsonSchema::Object {
-        properties: network_properties,
-        additional_properties,
-        ..
-    }) = permission_properties.get("network")
-    else {
-        panic!("expected network object");
-    };
-    assert_eq!(additional_properties, &Some(false.into()));
-    assert!(network_properties.contains_key("enabled"));
-
-    let Some(JsonSchema::Object {
-        properties: file_system_properties,
-        additional_properties,
-        ..
-    }) = permission_properties.get("file_system")
-    else {
-        panic!("expected file_system object");
-    };
-    assert_eq!(additional_properties, &Some(false.into()));
-    assert!(file_system_properties.contains_key("read"));
-    assert!(file_system_properties.contains_key("write"));
-}
-
-#[test]
-fn test_shell_command_tool() {
-    let tool = super::create_shell_command_tool(
-        /*allow_login_shell*/ true, /*exec_permission_approvals_enabled*/ false,
-    );
-    let ToolSpec::Function(ResponsesApiTool {
-        description, name, ..
-    }) = &tool
-    else {
-        panic!("expected function tool");
-    };
-    assert_eq!(name, "shell_command");
-
-    let expected = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output.
-
-Examples of valid command strings:
-
-- ls -a (show hidden): "Get-ChildItem -Force"
-- recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
-- recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
-- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
-- setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -""#
-            .to_string()
-            + &windows_shell_safety_description()
-    } else {
-        r#"Runs a shell command and returns its output.
-- Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#.to_string()
-    };
-    assert_eq!(description, &expected);
-}
-
-#[test]
 fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
@@ -3110,39 +2965,4 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     ));
     assert!(!description.contains("### `update_plan` (`update_plan`)"));
     assert!(!description.contains("### `view_image` (`view_image`)"));
-}
-
-#[test]
-fn chat_tools_include_top_level_name() {
-    let properties =
-        BTreeMap::from([("foo".to_string(), JsonSchema::String { description: None })]);
-    let tools = vec![ToolSpec::Function(ResponsesApiTool {
-        name: "demo".to_string(),
-        description: "A demo tool".to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: None,
-            additional_properties: None,
-        },
-        output_schema: None,
-    })];
-
-    let responses_json = create_tools_json_for_responses_api(&tools).unwrap();
-    assert_eq!(
-        responses_json,
-        vec![json!({
-            "type": "function",
-            "name": "demo",
-            "description": "A demo tool",
-            "strict": false,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "foo": { "type": "string" }
-                },
-            },
-        })]
-    );
 }
