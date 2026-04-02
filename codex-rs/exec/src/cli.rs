@@ -63,6 +63,10 @@ pub struct Cli {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
+    /// Create a new local git worktree and start the session from that checkout.
+    #[arg(long = "worktree", default_value_t = false, global = true)]
+    pub worktree: bool,
+
     /// Allow running Codex outside a Git repository.
     #[arg(long = "skip-git-repo-check", global = true, default_value_t = false)]
     pub skip_git_repo_check: bool,
@@ -311,5 +315,14 @@ mod tests {
         };
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn parse_worktree_flag() {
+        let cli = Cli::parse_from(["codex-exec", "--worktree", "--cd", "/tmp/repo", "hello"]);
+
+        assert!(cli.worktree);
+        assert_eq!(cli.cwd, Some(PathBuf::from("/tmp/repo")));
+        assert_eq!(cli.prompt.as_deref(), Some("hello"));
     }
 }

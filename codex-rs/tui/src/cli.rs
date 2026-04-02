@@ -98,6 +98,10 @@ pub struct Cli {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
+    /// Create a new local git worktree and start the session from that checkout.
+    #[arg(long = "worktree", default_value_t = false)]
+    pub worktree: bool,
+
     /// Enable live web search. When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
@@ -116,4 +120,19 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parse_worktree_flag() {
+        let cli = Cli::parse_from(["codex-tui", "--worktree", "--cd", "/tmp/repo", "hello"]);
+
+        assert!(cli.worktree);
+        assert_eq!(cli.cwd, Some(PathBuf::from("/tmp/repo")));
+        assert_eq!(cli.prompt.as_deref(), Some("hello"));
+    }
 }
