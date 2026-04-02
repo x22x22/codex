@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use async_trait::async_trait;
+use futures::future::BoxFuture;
 use serde::Deserialize;
 use tokio::sync::Barrier;
 use tokio::time::sleep;
@@ -14,6 +14,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -54,45 +55,54 @@ fn barrier_map() -> &'static tokio::sync::Mutex<HashMap<String, BarrierState>> {
     BARRIERS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
-#[async_trait]
 impl ToolHandler for TestSyncHandler {
-    type Output = FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                call_id, payload, ..
+            } = invocation;
+            let payload_for_result = payload.clone();
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "test_sync_tool handler received unsupported payload".to_string(),
-                ));
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "test_sync_tool handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
+
+            let args: TestSyncArgs = parse_arguments(&arguments)?;
+
+            if let Some(delay) = args.sleep_before_ms
+                && delay > 0
+            {
+                sleep(Duration::from_millis(delay)).await;
             }
-        };
 
-        let args: TestSyncArgs = parse_arguments(&arguments)?;
+            if let Some(barrier) = args.barrier {
+                wait_on_barrier(barrier).await?;
+            }
 
-        if let Some(delay) = args.sleep_before_ms
-            && delay > 0
-        {
-            sleep(Duration::from_millis(delay)).await;
-        }
+            if let Some(delay) = args.sleep_after_ms
+                && delay > 0
+            {
+                sleep(Duration::from_millis(delay)).await;
+            }
 
-        if let Some(barrier) = args.barrier {
-            wait_on_barrier(barrier).await?;
-        }
-
-        if let Some(delay) = args.sleep_after_ms
-            && delay > 0
-        {
-            sleep(Duration::from_millis(delay)).await;
-        }
-
-        Ok(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true))),
+            })
+        })
     }
 }
 

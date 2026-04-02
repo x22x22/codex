@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use async_trait::async_trait;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use rmcp::model::ListResourceTemplatesResult;
@@ -24,12 +23,14 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
+use futures::future::BoxFuture;
 
 pub struct McpResourceHandler;
 
@@ -178,67 +179,76 @@ struct ReadResourcePayload {
     result: ReadResourceResult,
 }
 
-#[async_trait]
 impl ToolHandler for McpResourceHandler {
-    type Output = FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            tool_name,
-            payload,
-            ..
-        } = invocation;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                call_id,
+                tool_name,
+                payload,
+                ..
+            } = invocation;
+            let payload_for_result = payload.clone();
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "mcp_resource handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "mcp_resource handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
 
-        let arguments_value = parse_arguments(arguments.as_str())?;
+            let arguments_value = parse_arguments(arguments.as_str())?;
 
-        match tool_name.as_str() {
-            "list_mcp_resources" => {
-                handle_list_resources(
-                    Arc::clone(&session),
-                    Arc::clone(&turn),
-                    call_id.clone(),
-                    arguments_value.clone(),
-                )
-                .await
-            }
-            "list_mcp_resource_templates" => {
-                handle_list_resource_templates(
-                    Arc::clone(&session),
-                    Arc::clone(&turn),
-                    call_id.clone(),
-                    arguments_value.clone(),
-                )
-                .await
-            }
-            "read_mcp_resource" => {
-                handle_read_resource(
-                    Arc::clone(&session),
-                    Arc::clone(&turn),
-                    call_id,
-                    arguments_value,
-                )
-                .await
-            }
-            other => Err(FunctionCallError::RespondToModel(format!(
-                "unsupported MCP resource tool: {other}"
-            ))),
-        }
+            let result = match tool_name.as_str() {
+                "list_mcp_resources" => {
+                    handle_list_resources(
+                        Arc::clone(&session),
+                        Arc::clone(&turn),
+                        call_id.clone(),
+                        arguments_value.clone(),
+                    )
+                    .await
+                }
+                "list_mcp_resource_templates" => {
+                    handle_list_resource_templates(
+                        Arc::clone(&session),
+                        Arc::clone(&turn),
+                        call_id.clone(),
+                        arguments_value.clone(),
+                    )
+                    .await
+                }
+                "read_mcp_resource" => {
+                    handle_read_resource(
+                        Arc::clone(&session),
+                        Arc::clone(&turn),
+                        call_id.clone(),
+                        arguments_value,
+                    )
+                    .await
+                }
+                other => Err(FunctionCallError::RespondToModel(format!(
+                    "unsupported MCP resource tool: {other}"
+                ))),
+            }?;
+
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(result),
+            })
+        })
     }
 }
 

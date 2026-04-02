@@ -41,11 +41,11 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::UnifiedExecHandler;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -119,10 +119,14 @@ use std::time::Duration as StdDuration;
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
 
-use codex_protocol::models::function_call_output_content_items_to_text;
-
-fn expect_text_tool_output(output: &FunctionToolOutput) -> String {
-    function_call_output_content_items_to_text(&output.body).unwrap_or_default()
+fn expect_text_tool_output(output: &AnyToolResult) -> String {
+    let ResponseInputItem::FunctionCallOutput { output, .. } = output
+        .result
+        .to_response_item(&output.call_id, &output.payload)
+    else {
+        panic!("expected function call output");
+    };
+    output.body.to_text().unwrap_or_default()
 }
 
 struct InstructionsTestCase {
@@ -5115,8 +5119,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             ToolCallSource::Direct,
         )
         .await
-        .err()
-        .expect("expected fatal error");
+        .expect_err("expected fatal error");
 
     match err {
         FunctionCallError::Fatal(message) => {

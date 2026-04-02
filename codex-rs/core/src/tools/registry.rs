@@ -13,7 +13,6 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use async_trait::async_trait;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
@@ -26,6 +25,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolSpec;
 use codex_utils_readiness::Readiness;
+use futures::future::BoxFuture;
 use serde_json::Value;
 use tracing::warn;
 
@@ -35,10 +35,7 @@ pub enum ToolKind {
     Mcp,
 }
 
-#[async_trait]
 pub trait ToolHandler: Send + Sync {
-    type Output: ToolOutput + 'static;
-
     fn kind(&self) -> ToolKind;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -54,7 +51,7 @@ pub trait ToolHandler: Send + Sync {
     /// user (through file system, OS operations, ...).
     /// This function must remains defensive and return `true` if a doubt exist on the
     /// exact effect of a ToolInvocation.
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         false
     }
 
@@ -73,7 +70,10 @@ pub trait ToolHandler: Send + Sync {
 
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
     /// the final output to return to the model.
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError>;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>>;
 }
 
 pub(crate) struct AnyToolResult {
@@ -82,7 +82,26 @@ pub(crate) struct AnyToolResult {
     pub(crate) result: Box<dyn ToolOutput>,
 }
 
+impl std::fmt::Debug for AnyToolResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnyToolResult")
+            .field("call_id", &self.call_id)
+            .field("payload", &self.payload)
+            .field("log_preview", &self.result.log_preview())
+            .field("success", &self.result.success_for_logging())
+            .finish()
+    }
+}
+
 impl AnyToolResult {
+    pub(crate) fn new(invocation: &ToolInvocation, result: impl ToolOutput + 'static) -> Self {
+        Self {
+            call_id: invocation.call_id.clone(),
+            payload: invocation.payload.clone(),
+            result: Box::new(result),
+        }
+    }
+
     pub(crate) fn into_response(self) -> ResponseInputItem {
         let Self {
             call_id,
@@ -101,6 +120,28 @@ impl AnyToolResult {
     }
 }
 
+impl ToolOutput for AnyToolResult {
+    fn log_preview(&self) -> String {
+        self.result.log_preview()
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.result.success_for_logging()
+    }
+
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        self.result.to_response_item(call_id, payload)
+    }
+
+    fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<Value> {
+        self.result.post_tool_use_response(call_id, payload)
+    }
+
+    fn code_mode_result(&self, payload: &ToolPayload) -> serde_json::Value {
+        self.result.code_mode_result(payload)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreToolUsePayload {
     pub(crate) command: String,
@@ -112,68 +153,6 @@ pub(crate) struct PostToolUsePayload {
     pub(crate) tool_response: Value,
 }
 
-#[async_trait]
-trait AnyToolHandler: Send + Sync {
-    fn matches_kind(&self, payload: &ToolPayload) -> bool;
-
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool;
-
-    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
-
-    fn post_tool_use_payload(
-        &self,
-        call_id: &str,
-        payload: &ToolPayload,
-        result: &dyn ToolOutput,
-    ) -> Option<PostToolUsePayload>;
-
-    async fn handle_any(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<AnyToolResult, FunctionCallError>;
-}
-
-#[async_trait]
-impl<T> AnyToolHandler for T
-where
-    T: ToolHandler,
-{
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        ToolHandler::matches_kind(self, payload)
-    }
-
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        ToolHandler::is_mutating(self, invocation).await
-    }
-
-    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        ToolHandler::pre_tool_use_payload(self, invocation)
-    }
-
-    fn post_tool_use_payload(
-        &self,
-        call_id: &str,
-        payload: &ToolPayload,
-        result: &dyn ToolOutput,
-    ) -> Option<PostToolUsePayload> {
-        ToolHandler::post_tool_use_payload(self, call_id, payload, result)
-    }
-
-    async fn handle_any(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<AnyToolResult, FunctionCallError> {
-        let call_id = invocation.call_id.clone();
-        let payload = invocation.payload.clone();
-        let output = self.handle(invocation).await?;
-        Ok(AnyToolResult {
-            call_id,
-            payload,
-            result: Box::new(output),
-        })
-    }
-}
-
 pub(crate) fn tool_handler_key(tool_name: &str, namespace: Option<&str>) -> String {
     if let Some(namespace) = namespace {
         format!("{namespace}:{tool_name}")
@@ -183,15 +162,15 @@ pub(crate) fn tool_handler_key(tool_name: &str, namespace: Option<&str>) -> Stri
 }
 
 pub struct ToolRegistry {
-    handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+    handlers: HashMap<String, Arc<dyn ToolHandler>>,
 }
 
 impl ToolRegistry {
-    fn new(handlers: HashMap<String, Arc<dyn AnyToolHandler>>) -> Self {
+    fn new(handlers: HashMap<String, Arc<dyn ToolHandler>>) -> Self {
         Self { handlers }
     }
 
-    fn handler(&self, name: &str, namespace: Option<&str>) -> Option<Arc<dyn AnyToolHandler>> {
+    fn handler(&self, name: &str, namespace: Option<&str>) -> Option<Arc<dyn ToolHandler>> {
         self.handlers
             .get(&tool_handler_key(name, namespace))
             .map(Arc::clone)
@@ -311,7 +290,7 @@ impl ToolRegistry {
             )));
         }
 
-        let is_mutating = handler.is_mutating(&invocation).await;
+        let is_mutating = handler.is_mutating(&invocation);
         let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
 
@@ -333,7 +312,7 @@ impl ToolRegistry {
                             invocation_for_tool.turn.tool_call_gate.wait_ready().await;
                             tracing::trace!("tool gate released");
                         }
-                        match handler.handle_any(invocation_for_tool).await {
+                        match handler.handle(invocation_for_tool).await {
                             Ok(result) => {
                                 let preview = result.result.log_preview();
                                 let success = result.result.success_for_logging();
@@ -438,7 +417,7 @@ impl ToolRegistry {
 }
 
 pub struct ToolRegistryBuilder {
-    handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+    handlers: HashMap<String, Arc<dyn ToolHandler>>,
     specs: Vec<ConfiguredToolSpec>,
 }
 
@@ -468,7 +447,7 @@ impl ToolRegistryBuilder {
         H: ToolHandler + 'static,
     {
         let name = name.into();
-        let handler: Arc<dyn AnyToolHandler> = handler;
+        let handler: Arc<dyn ToolHandler> = handler;
         if self
             .handlers
             .insert(name.clone(), handler.clone())

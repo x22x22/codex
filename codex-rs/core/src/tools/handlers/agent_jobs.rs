@@ -11,15 +11,16 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use serde::Deserialize;
 use serde::Serialize;
@@ -178,10 +179,7 @@ impl JobProgressEmitter {
     }
 }
 
-#[async_trait]
 impl ToolHandler for BatchJobHandler {
-    type Output = FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -190,31 +188,48 @@ impl ToolHandler for BatchJobHandler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            tool_name,
-            payload,
-            ..
-        } = invocation;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                call_id,
+                tool_name,
+                payload,
+                ..
+            } = invocation;
+            let payload_for_result = payload.clone();
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "agent jobs handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "agent jobs handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
 
-        match tool_name.as_str() {
-            "spawn_agents_on_csv" => spawn_agents_on_csv::handle(session, turn, arguments).await,
-            "report_agent_job_result" => report_agent_job_result::handle(session, arguments).await,
-            other => Err(FunctionCallError::RespondToModel(format!(
-                "unsupported agent job tool {other}"
-            ))),
-        }
+            let result = match tool_name.as_str() {
+                "spawn_agents_on_csv" => {
+                    spawn_agents_on_csv::handle(session, turn, arguments).await
+                }
+                "report_agent_job_result" => {
+                    report_agent_job_result::handle(session, arguments).await
+                }
+                other => Err(FunctionCallError::RespondToModel(format!(
+                    "unsupported agent job tool {other}"
+                ))),
+            }?;
+
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(result),
+            })
+        })
     }
 }
 

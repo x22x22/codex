@@ -2,9 +2,9 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngineBuilder;
@@ -13,6 +13,7 @@ use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSearchResultSource;
 use codex_tools::collect_tool_search_output_tools;
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 
 pub struct ToolSearchHandler {
@@ -25,78 +26,85 @@ impl ToolSearchHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for ToolSearchHandler {
-    type Output = ToolSearchOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(
+    fn handle(
         &self,
         invocation: ToolInvocation,
-    ) -> Result<ToolSearchOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                call_id, payload, ..
+            } = invocation;
 
-        let args = match payload {
-            ToolPayload::ToolSearch { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::Fatal(format!(
-                    "{TOOL_SEARCH_TOOL_NAME} handler received unsupported payload"
-                )));
+            let payload_for_result = payload.clone();
+            let args = match payload {
+                ToolPayload::ToolSearch { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::Fatal(format!(
+                        "{TOOL_SEARCH_TOOL_NAME} handler received unsupported payload"
+                    )));
+                }
+            };
+
+            let query = args.query.trim();
+            if query.is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "query must not be empty".to_string(),
+                ));
             }
-        };
+            let limit = args.limit.unwrap_or(TOOL_SEARCH_DEFAULT_LIMIT);
 
-        let query = args.query.trim();
-        if query.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "query must not be empty".to_string(),
-            ));
-        }
-        let limit = args.limit.unwrap_or(TOOL_SEARCH_DEFAULT_LIMIT);
+            if limit == 0 {
+                return Err(FunctionCallError::RespondToModel(
+                    "limit must be greater than zero".to_string(),
+                ));
+            }
 
-        if limit == 0 {
-            return Err(FunctionCallError::RespondToModel(
-                "limit must be greater than zero".to_string(),
-            ));
-        }
+            let mut entries: Vec<(String, ToolInfo)> = self.tools.clone().into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut entries: Vec<(String, ToolInfo)> = self.tools.clone().into_iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let tools = if entries.is_empty() {
+                Vec::new()
+            } else {
+                let documents: Vec<Document<usize>> = entries
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, (name, info))| Document::new(idx, build_search_text(name, info)))
+                    .collect();
+                let search_engine =
+                    SearchEngineBuilder::<usize>::with_documents(Language::English, documents)
+                        .build();
+                let results = search_engine.search(query, limit);
 
-        if entries.is_empty() {
-            return Ok(ToolSearchOutput { tools: Vec::new() });
-        }
+                collect_tool_search_output_tools(
+                    results
+                        .into_iter()
+                        .filter_map(|result| entries.get(result.document.id))
+                        .map(|(_name, tool)| ToolSearchResultSource {
+                            tool_namespace: tool.tool_namespace.as_str(),
+                            tool_name: tool.tool_name.as_str(),
+                            tool: &tool.tool,
+                            connector_name: tool.connector_name.as_deref(),
+                            connector_description: tool.connector_description.as_deref(),
+                        }),
+                )
+                .map_err(|err| {
+                    FunctionCallError::Fatal(format!(
+                        "failed to encode {TOOL_SEARCH_TOOL_NAME} output: {err}"
+                    ))
+                })?
+            };
 
-        let documents: Vec<Document<usize>> = entries
-            .iter()
-            .enumerate()
-            .map(|(idx, (name, info))| Document::new(idx, build_search_text(name, info)))
-            .collect();
-        let search_engine =
-            SearchEngineBuilder::<usize>::with_documents(Language::English, documents).build();
-        let results = search_engine.search(query, limit);
-
-        let tools = collect_tool_search_output_tools(
-            results
-                .into_iter()
-                .filter_map(|result| entries.get(result.document.id))
-                .map(|(_name, tool)| ToolSearchResultSource {
-                    tool_namespace: tool.tool_namespace.as_str(),
-                    tool_name: tool.tool_name.as_str(),
-                    tool: &tool.tool,
-                    connector_name: tool.connector_name.as_deref(),
-                    connector_description: tool.connector_description.as_deref(),
-                }),
-        )
-        .map_err(|err| {
-            FunctionCallError::Fatal(format!(
-                "failed to encode {TOOL_SEARCH_TOOL_NAME} output: {err}"
-            ))
-        })?;
-
-        Ok(ToolSearchOutput { tools })
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(ToolSearchOutput { tools }),
+            })
+        })
     }
 }
 

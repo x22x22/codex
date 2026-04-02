@@ -4,14 +4,15 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use async_trait::async_trait;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
+use futures::future::BoxFuture;
 use serde_json::Value as JsonValue;
 
 pub struct PlanHandler;
@@ -44,35 +45,42 @@ impl ToolOutput for PlanToolOutput {
     }
 }
 
-#[async_trait]
 impl ToolHandler for PlanHandler {
-    type Output = PlanToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            call_id,
-            payload,
-            ..
-        } = invocation;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                call_id,
+                payload,
+                ..
+            } = invocation;
 
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "update_plan handler received unsupported payload".to_string(),
-                ));
-            }
-        };
+            let payload_for_result = payload.clone();
+            let arguments = match payload {
+                ToolPayload::Function { arguments } => arguments,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "update_plan handler received unsupported payload".to_string(),
+                    ));
+                }
+            };
 
-        handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
+            handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id.clone()).await?;
 
-        Ok(PlanToolOutput)
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(PlanToolOutput),
+            })
+        })
     }
 }
 

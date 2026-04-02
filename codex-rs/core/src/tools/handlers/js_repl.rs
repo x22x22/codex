@@ -1,4 +1,4 @@
-use async_trait::async_trait;
+use futures::future::BoxFuture;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +17,7 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::js_repl::JS_REPL_PRAGMA_PREFIX;
 use crate::tools::js_repl::JsReplArgs;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_features::Feature;
@@ -92,10 +93,7 @@ async fn emit_js_repl_exec_end(
     };
     emitter.emit(ctx, stage).await;
 }
-#[async_trait]
 impl ToolHandler for JsReplHandler {
-    type Output = FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -107,101 +105,114 @@ impl ToolHandler for JsReplHandler {
         )
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            tracker,
-            payload,
-            call_id,
-            ..
-        } = invocation;
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            let ToolInvocation {
+                session,
+                turn,
+                tracker,
+                payload,
+                call_id,
+                ..
+            } = invocation;
+            let payload_for_result = payload.clone();
 
-        if !session.features().enabled(Feature::JsRepl) {
-            return Err(FunctionCallError::RespondToModel(
-                "js_repl is disabled by feature flag".to_string(),
-            ));
-        }
-
-        let args = match payload {
-            ToolPayload::Function { arguments } => parse_arguments(&arguments)?,
-            ToolPayload::Custom { input } => parse_freeform_args(&input)?,
-            _ => {
+            if !session.features().enabled(Feature::JsRepl) {
                 return Err(FunctionCallError::RespondToModel(
-                    "js_repl expects custom or function payload".to_string(),
+                    "js_repl is disabled by feature flag".to_string(),
                 ));
             }
-        };
-        let manager = turn.js_repl.manager().await?;
-        let started_at = Instant::now();
-        emit_js_repl_exec_begin(session.as_ref(), turn.as_ref(), &call_id).await;
-        let result = manager
-            .execute(Arc::clone(&session), Arc::clone(&turn), tracker, args)
-            .await;
-        let result = match result {
-            Ok(result) => result,
-            Err(err) => {
-                let message = err.to_string();
-                emit_js_repl_exec_end(
-                    session.as_ref(),
-                    turn.as_ref(),
-                    &call_id,
-                    "",
-                    Some(&message),
-                    started_at.elapsed(),
-                )
+
+            let args = match payload {
+                ToolPayload::Function { arguments } => parse_arguments(&arguments)?,
+                ToolPayload::Custom { input } => parse_freeform_args(&input)?,
+                _ => {
+                    return Err(FunctionCallError::RespondToModel(
+                        "js_repl expects custom or function payload".to_string(),
+                    ));
+                }
+            };
+            let manager = turn.js_repl.manager().await?;
+            let started_at = Instant::now();
+            emit_js_repl_exec_begin(session.as_ref(), turn.as_ref(), &call_id).await;
+            let result = manager
+                .execute(Arc::clone(&session), Arc::clone(&turn), tracker, args)
                 .await;
-                return Err(err);
+            let result = match result {
+                Ok(result) => result,
+                Err(err) => {
+                    let message = err.to_string();
+                    emit_js_repl_exec_end(
+                        session.as_ref(),
+                        turn.as_ref(),
+                        &call_id,
+                        "",
+                        Some(&message),
+                        started_at.elapsed(),
+                    )
+                    .await;
+                    return Err(err);
+                }
+            };
+
+            let content = result.output;
+            let mut items = Vec::with_capacity(result.content_items.len() + 1);
+            if !content.is_empty() {
+                items.push(FunctionCallOutputContentItem::InputText {
+                    text: content.clone(),
+                });
             }
-        };
+            items.extend(result.content_items);
 
-        let content = result.output;
-        let mut items = Vec::with_capacity(result.content_items.len() + 1);
-        if !content.is_empty() {
-            items.push(FunctionCallOutputContentItem::InputText {
-                text: content.clone(),
-            });
-        }
-        items.extend(result.content_items);
+            emit_js_repl_exec_end(
+                session.as_ref(),
+                turn.as_ref(),
+                &call_id,
+                &content,
+                /*error*/ None,
+                started_at.elapsed(),
+            )
+            .await;
 
-        emit_js_repl_exec_end(
-            session.as_ref(),
-            turn.as_ref(),
-            &call_id,
-            &content,
-            /*error*/ None,
-            started_at.elapsed(),
-        )
-        .await;
-
-        if items.is_empty() {
-            Ok(FunctionToolOutput::from_text(content, Some(true)))
-        } else {
-            Ok(FunctionToolOutput::from_content(items, Some(true)))
-        }
+            let output = if items.is_empty() {
+                FunctionToolOutput::from_text(content, Some(true))
+            } else {
+                FunctionToolOutput::from_content(items, Some(true))
+            };
+            Ok(AnyToolResult {
+                call_id,
+                payload: payload_for_result,
+                result: Box::new(output),
+            })
+        })
     }
 }
 
-#[async_trait]
 impl ToolHandler for JsReplResetHandler {
-    type Output = FunctionToolOutput;
-
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        if !invocation.session.features().enabled(Feature::JsRepl) {
-            return Err(FunctionCallError::RespondToModel(
-                "js_repl is disabled by feature flag".to_string(),
-            ));
-        }
-        let manager = invocation.turn.js_repl.manager().await?;
-        manager.reset().await?;
-        Ok(FunctionToolOutput::from_text(
-            "js_repl kernel reset".to_string(),
-            Some(true),
-        ))
+    fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> BoxFuture<'_, Result<AnyToolResult, FunctionCallError>> {
+        Box::pin(async move {
+            if !invocation.session.features().enabled(Feature::JsRepl) {
+                return Err(FunctionCallError::RespondToModel(
+                    "js_repl is disabled by feature flag".to_string(),
+                ));
+            }
+            let manager = invocation.turn.js_repl.manager().await?;
+            manager.reset().await?;
+            Ok(AnyToolResult::new(
+                &invocation,
+                FunctionToolOutput::from_text("js_repl kernel reset".to_string(), Some(true)),
+            ))
+        })
     }
 }
 
