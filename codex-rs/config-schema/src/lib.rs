@@ -10,8 +10,6 @@ use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
 
-const SCHEMA_PRESENTATION_TEMPLATE_JSON: &str = include_str!("schema_presentation_template.json");
-
 pub use config_toml::mcp_servers_schema;
 pub use features::features_schema;
 
@@ -61,7 +59,9 @@ pub fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
 }
 
 fn preserve_schema_presentation(value: Value) -> anyhow::Result<Value> {
-    let template = serde_json::from_str(SCHEMA_PRESENTATION_TEMPLATE_JSON)?;
+    let template_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/config.schema.json");
+    let template = std::fs::read_to_string(template_path)?;
+    let template = serde_json::from_str(&template)?;
     Ok(preserve_schema_presentation_from_template(value, &template))
 }
 

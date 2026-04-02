@@ -1,14 +1,14 @@
-//! Types used to define the fields of [`crate::config::Config`].
+//! Types used to define loaded and effective Codex configuration values.
 
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
-pub use codex_config::AppToolApproval;
-pub use codex_config::McpServerConfig;
-pub use codex_config::McpServerDisabledReason;
-pub use codex_config::McpServerToolConfig;
-pub use codex_config::McpServerTransportConfig;
-pub use codex_config::RawMcpServerConfig;
+pub use crate::mcp_types::AppToolApproval;
+pub use crate::mcp_types::McpServerConfig;
+pub use crate::mcp_types::McpServerDisabledReason;
+pub use crate::mcp_types::McpServerToolConfig;
+pub use crate::mcp_types::McpServerTransportConfig;
+pub use crate::mcp_types::RawMcpServerConfig;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ApprovalsReviewer;
 pub use codex_protocol::config_types::ModeKind;
@@ -537,14 +537,9 @@ pub struct Notice {
     pub model_migrations: BTreeMap<String, String>,
 }
 
-impl Notice {
-    /// referenced by config_edit helpers when writing notice flags
-    pub(crate) const TABLE_KEY: &'static str = "notice";
-}
-
-pub use codex_config::BundledSkillsConfig;
-pub use codex_config::SkillConfig;
-pub use codex_config::SkillsConfig;
+pub use crate::skills_config::BundledSkillsConfig;
+pub use crate::skills_config::SkillConfig;
+pub use crate::skills_config::SkillsConfig;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
