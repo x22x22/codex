@@ -393,6 +393,39 @@ pub(crate) async fn start_app_server_for_picker(
     Ok(AppServerSession::new(app_server))
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn prepare_app_server_for_final_config(
+    app_server: Option<AppServerSession>,
+    config_was_reloaded: bool,
+    target: &AppServerTarget,
+    arg0_paths: Arg0DispatchPaths,
+    config: Config,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    loader_overrides: LoaderOverrides,
+    cloud_requirements: CloudRequirementsLoader,
+    feedback: codex_feedback::CodexFeedback,
+) -> color_eyre::Result<AppServerSession> {
+    match app_server {
+        Some(app_server) if !config_was_reloaded => Ok(app_server),
+        stale_app_server => {
+            if let Some(stale_app_server) = stale_app_server {
+                shutdown_app_server(stale_app_server).await;
+            }
+            start_app_server(
+                target,
+                arg0_paths,
+                config,
+                cli_kv_overrides,
+                loader_overrides,
+                cloud_requirements,
+                feedback,
+            )
+            .await
+            .map(AppServerSession::new)
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
@@ -444,11 +477,9 @@ where
     Ok(client)
 }
 
-async fn shutdown_app_server_if_present(app_server: Option<AppServerSession>) {
-    if let Some(app_server) = app_server
-        && let Err(err) = app_server.shutdown().await
-    {
-        warn!(%err, "Failed to shut down temporary embedded app server");
+async fn shutdown_app_server(app_server: AppServerSession) {
+    if let Err(err) = app_server.shutdown().await {
+        warn!(%err, "Failed to shut down temporary app server");
     }
 }
 
@@ -1014,6 +1045,7 @@ async fn run_ratatui_app(
     let should_show_onboarding =
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
 
+    let mut config_was_reloaded = false;
     let config = if should_show_onboarding {
         let show_login_screen = should_show_login_screen(login_status, &initial_config);
         let onboarding_result = run_onboarding_app(
@@ -1035,7 +1067,9 @@ async fn run_ratatui_app(
         )
         .await?;
         if onboarding_result.should_exit {
-            shutdown_app_server_if_present(app_server.take()).await;
+            if let Some(app_server) = app_server.take() {
+                shutdown_app_server(app_server).await;
+            }
             terminal_restore_guard.restore_silently();
             session_log::log_session_end();
             let _ = tui.terminal.clear();
@@ -1065,6 +1099,7 @@ async fn run_ratatui_app(
         if onboarding_result.directory_trust_decision.is_some()
             || (show_login_screen && !remote_mode)
         {
+            config_was_reloaded = true;
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
@@ -1103,7 +1138,9 @@ async fn run_ratatui_app(
             match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => {
-                    shutdown_app_server_if_present(app_server.take()).await;
+                    if let Some(app_server) = app_server.take() {
+                        shutdown_app_server(app_server).await;
+                    }
                     return missing_session_exit(id_str, "fork");
                 }
             }
@@ -1155,7 +1192,9 @@ async fn run_ratatui_app(
         match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => {
-                shutdown_app_server_if_present(app_server.take()).await;
+                if let Some(app_server) = app_server.take() {
+                    shutdown_app_server(app_server).await;
+                }
                 return missing_session_exit(id_str, "resume");
             }
         }
@@ -1256,6 +1295,7 @@ async fn run_ratatui_app(
 
     let mut config = match &session_selection {
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
+            config_was_reloaded = true;
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
@@ -1293,26 +1333,25 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let app_server = match app_server {
-        Some(app_server) => app_server,
-        None => match start_app_server(
-            &app_server_target,
-            arg0_paths,
-            config.clone(),
-            cli_kv_overrides.clone(),
-            loader_overrides,
-            cloud_requirements.clone(),
-            feedback.clone(),
-        )
-        .await
-        {
-            Ok(app_server) => AppServerSession::new(app_server),
-            Err(err) => {
-                terminal_restore_guard.restore_silently();
-                session_log::log_session_end();
-                return Err(err);
-            }
-        },
+    let app_server = match prepare_app_server_for_final_config(
+        app_server,
+        config_was_reloaded,
+        &app_server_target,
+        arg0_paths,
+        config.clone(),
+        cli_kv_overrides.clone(),
+        loader_overrides,
+        cloud_requirements.clone(),
+        feedback.clone(),
+    )
+    .await
+    {
+        Ok(app_server) => app_server,
+        Err(err) => {
+            terminal_restore_guard.restore_silently();
+            session_log::log_session_end();
+            return Err(err);
+        }
     };
 
     let app_result = App::run(
@@ -1642,6 +1681,7 @@ mod tests {
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnContextItem;
+    use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -1836,6 +1876,56 @@ mod tests {
             .await
             .expect("thread/start should succeed");
         assert!(!response.thread.id.is_empty());
+
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_app_server_restarts_with_final_config_warnings_after_reload()
+    -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut stale_config = build_config(&temp_dir).await?;
+        stale_config.startup_warnings.push("stale warning".to_string());
+        let stale_app_server =
+            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
+                start_test_embedded_app_server(stale_config).await?,
+            ));
+
+        let mut config = build_config(&temp_dir).await?;
+        config.startup_warnings.push("final warning".to_string());
+        let mut app_server = prepare_app_server_for_final_config(
+            Some(stale_app_server),
+            /*config_was_reloaded*/ true,
+            &AppServerTarget::Embedded,
+            Arg0DispatchPaths::default(),
+            config,
+            Vec::new(),
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+            codex_feedback::CodexFeedback::new(),
+        )
+        .await?;
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), app_server.next_event())
+            .await
+            .expect("config warning notification should arrive")
+            .expect("config warning notification should be emitted");
+        let codex_app_server_client::AppServerEvent::ServerNotification(
+            codex_app_server_protocol::ServerNotification::ConfigWarning(notification),
+        ) = event
+        else {
+            panic!("expected config warning notification");
+        };
+        assert_eq!(
+            notification,
+            ConfigWarningNotification {
+                summary: "final warning".to_string(),
+                details: None,
+                path: None,
+                range: None,
+            }
+        );
 
         app_server.shutdown().await?;
         Ok(())
