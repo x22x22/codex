@@ -1,0 +1,37 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:id="@+id/session_popup_result_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Codex Result"
+        android:textAppearance="@android:style/TextAppearance.DeviceDefault.Large"
+        android:textStyle="bold" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:maxHeight="340dp"
+        android:fadeScrollbars="false"
+        android:overScrollMode="ifContentScrolls"
+        android:scrollbars="vertical">
+
+        <TextView
+            android:id="@+id/session_popup_result_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textIsSelectable="true" />
+    </ScrollView>
+
+    <Button
+        android:id="@+id/session_popup_ok_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="OK" />
+</LinearLayout>

@@ -87,6 +87,17 @@ The current repo now contains these implementation slices:
   (`ATTACHED`, `DETACHED_HIDDEN`, `DETACHED_SHOWN`, or `AGENT_CHOICE`) and
   uses the framework-authoritative `AgentSessionInfo.getTargetPresentation()`
   state to verify whether a completed child actually satisfied it.
+- For HOME-anchored app sessions, Launcher now standardizes badged icon taps as
+  AGENT dispatch for `RUNNING`, `WAITING_FOR_USER`, and `COMPLETED` states. The
+  Agent result popup therefore owns the completion policy explicitly: pressing
+  OK consumes the HOME badge/live-tile presentation through
+  `consumeHomeSessionPresentation(sessionId)` and closes the detached target if
+  one is still present instead of relying on Launcher to consume or open the
+  target app directly.
+- Codex Agent still uses `cancelSession(sessionId)` for user-driven cancellation
+  because it is the AGENT-role app, not a HOME-role surface. The
+  HOME-only `cancelHomeSession(sessionId)` API is reserved for Launcher/HOME
+  callers.
 - Parent roll-up now uses the new presentation state. If a child was required
   to finish `ATTACHED` but completes detached, the Agent requests `attachTarget`
   before rolling the parent up to success. Detached shown/hidden mismatches are
@@ -271,6 +282,11 @@ the Android Agent/Genie flow.
   - Agent session UI, Agent clarification dialogs, and Agent-native auth controls
 - `android/app/src/main/java/com/openai/codex/agent/SessionDetailActivity.kt`
   - HOME/AGENT session inspection and question answering UI
+- `android/app/src/main/java/com/openai/codex/agent/SessionPopupActivity.kt`
+  - dialog-style question/result surfaces for HOME icon and notification
+    entrypoints; question cancel only dismisses the dialog, while final results
+    render in a scrollable text view with an OK button that clears HOME
+    presentation state for top-level HOME sessions
 - `android/app/src/main/java/com/openai/codex/agent/AgentQuestionNotifier.kt`
   - token-aware Agent-side renderer for delegated framework notifications,
     including target-app branding and inline reply actions

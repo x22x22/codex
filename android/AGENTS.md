@@ -118,6 +118,20 @@ stub SDK docs and the local refactor doc:
   - if delegated rendering is unavailable, the framework may post a generic
     fallback notification, so app-side notification code must remain
     token-aware and idempotent
+- HOME icon / notification taps for question or final-result states should route
+  to `SessionPopupActivity`, which shows a dialog-style answer or result surface.
+  Launcher may dispatch HOME-anchored icon taps through either
+  `ACTION_HANDLE_AGENT_SESSION` or `ACTION_HANDLE_HOME_AGENT_SESSION`; both
+  should resolve to the same Agent-owned popup flow.
+  The full `SessionDetailActivity` remains the fallback inspector for non-popup
+  states and Agent-app initiated navigation.
+- HOME completion and cancellation are AGENT-owned policy decisions:
+  - pressing OK in the final result popup should call
+    `consumeHomeSessionPresentation(sessionId)` and close a still-detached
+    target instead of relying on Launcher to consume/open the target directly
+  - Codex Agent is an AGENT-role app, not a HOME-role surface, so its
+    user-driven cancellation flows should still call `cancelSession(sessionId)`;
+    `cancelHomeSession(sessionId)` is for Launcher/HOME callers
 
 ## External reference implementations
 

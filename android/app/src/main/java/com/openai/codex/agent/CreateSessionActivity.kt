@@ -239,10 +239,9 @@ class CreateSessionActivity : Activity() {
                 runOnUiThread {
                     if (draftSession == null) {
                         startActivity(
-                            Intent(this, SessionDetailActivity::class.java)
+                            SessionPopupActivity.intent(this, incomingSessionId)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                .putExtra(SessionDetailActivity.EXTRA_SESSION_ID, incomingSessionId),
+                                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP),
                         )
                         finish()
                         return@runOnUiThread

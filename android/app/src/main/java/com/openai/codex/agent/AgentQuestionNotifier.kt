@@ -130,8 +130,7 @@ object AgentQuestionNotifier {
         val contentIntent = PendingIntent.getActivity(
             context,
             notificationId(sessionId),
-            Intent(context, SessionDetailActivity::class.java).apply {
-                putExtra(SessionDetailActivity.EXTRA_SESSION_ID, sessionId)
+            SessionPopupActivity.intent(context, sessionId).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -157,8 +156,7 @@ object AgentQuestionNotifier {
         val contentIntent = PendingIntent.getActivity(
             context,
             notificationId(session.sessionId),
-            Intent(context, SessionDetailActivity::class.java).apply {
-                putExtra(SessionDetailActivity.EXTRA_SESSION_ID, session.sessionId)
+            SessionPopupActivity.intent(context, session.sessionId).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

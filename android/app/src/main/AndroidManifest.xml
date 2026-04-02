@@ -63,12 +63,23 @@
                 <action android:name="android.app.agent.action.HANDLE_SESSION" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.app.agent.action.HANDLE_HOME_SESSION" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <activity
             android:name=".SessionDetailActivity"
             android:exported="false"
             android:launchMode="singleTop" />
+
+        <activity
+            android:name=".SessionPopupActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:theme="@style/CodexSessionPopupTheme" />
 
         <receiver
             android:name=".DesktopBridgeBootstrapReceiver"

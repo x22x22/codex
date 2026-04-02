@@ -594,11 +594,19 @@ class AgentSessionController(context: Context) {
                     manager.cancelSession(childSession.sessionId)
                 }
         }
-        manager.cancelSession(sessionId)
+        manager.cancelSession(session.sessionId)
     }
 
     fun cancelSession(sessionId: String) {
         requireAgentManager().cancelSession(sessionId)
+    }
+
+    fun consumeHomeSessionPresentation(sessionId: String) {
+        requireAgentManager().consumeHomeSessionPresentation(sessionId)
+    }
+
+    fun closeDetachedTarget(sessionId: String) {
+        requireAgentManager().closeDetachedTarget(sessionId)
     }
 
     fun failDirectSession(
