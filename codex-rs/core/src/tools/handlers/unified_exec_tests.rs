@@ -19,10 +19,6 @@ use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
 
-fn local_exec_handler() -> UnifiedExecHandler {
-    UnifiedExecHandler
-}
-
 #[test]
 fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
     let json = r#"{"cmd": "echo hello"}"#;
@@ -268,7 +264,7 @@ fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_co
     };
 
     assert_eq!(
-        local_exec_handler().post_tool_use_payload("call-43", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload("call-43", &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             command: "echo three".to_string(),
             tool_response: serde_json::json!("three"),
@@ -298,7 +294,7 @@ fn exec_command_post_tool_use_payload_skips_interactive_exec() {
     };
 
     assert_eq!(
-        local_exec_handler().post_tool_use_payload("call-44", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload("call-44", &payload, &output),
         None
     );
 }
@@ -325,7 +321,7 @@ fn exec_command_post_tool_use_payload_skips_running_sessions() {
     };
 
     assert_eq!(
-        local_exec_handler().post_tool_use_payload("call-45", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload("call-45", &payload, &output),
         None
     );
 }

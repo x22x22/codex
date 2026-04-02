@@ -450,6 +450,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
+    let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
@@ -774,7 +775,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     if config.has_attached_executor {
-        let view_image_handler = Arc::new(ViewImageHandler);
         push_tool_spec(
             &mut builder,
             create_view_image_tool(ViewImageToolOptions {
