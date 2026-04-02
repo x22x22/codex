@@ -92,6 +92,9 @@ pub(crate) fn truncate_line_with_ellipsis_if_overflow(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::layout::Alignment;
+    use ratatui::style::Style;
+    use ratatui::style::Stylize;
 
     fn concat_line(line: &Line<'_>) -> String {
         line.spans
@@ -126,6 +129,48 @@ mod tests {
 
     fn c1_csi_red_text(text: &str) -> String {
         format!("\u{9b}31m{text}\u{9b}0m")
+    }
+
+    // Plain rows are still the dominant path; these checks pin the pre-wrapper sizing/truncation
+    // behavior so the escape parser can't regress ordinary styled text.
+    #[test]
+    fn line_width_counts_plain_ascii_and_wide_cells() {
+        let line = Line::from(vec!["ab".into(), " ".into(), "中文".into()]);
+
+        assert_eq!(line_width(&line), 7);
+    }
+
+    #[test]
+    fn truncate_line_to_width_preserves_plain_span_styles_and_line_metadata() {
+        let line = Line {
+            style: Style::new().dim(),
+            alignment: Some(Alignment::Right),
+            spans: vec!["ab".green(), "cdef".magenta()],
+        };
+
+        let truncated = truncate_line_to_width(line, 4);
+
+        assert_eq!(
+            truncated,
+            Line {
+                style: Style::new().dim(),
+                alignment: Some(Alignment::Right),
+                spans: vec!["ab".green(), "cd".magenta()],
+            }
+        );
+    }
+
+    #[test]
+    fn truncate_line_with_ellipsis_if_overflow_returns_original_plain_line_when_it_fits() {
+        let line = Line {
+            style: Style::new().dim(),
+            alignment: Some(Alignment::Center),
+            spans: vec!["ok".green(), " done".magenta()],
+        };
+
+        let truncated = truncate_line_with_ellipsis_if_overflow(line.clone(), 7);
+
+        assert_eq!(truncated, line);
     }
 
     // These rows are sliced for tight status/UI slots, so wrapper payload bytes must not count

@@ -736,6 +736,11 @@ mod tests {
     // Ratatui diffing uses this width helper to size terminal writes, so all escape bytes must
     // be zero-width regardless of whether OSC is terminated by BEL or ST.
     #[test]
+    fn display_width_counts_plain_ascii_and_wide_cells() {
+        assert_eq!(display_width("ab 中文"), 7);
+    }
+
+    #[test]
     fn display_width_ignores_st_terminated_osc8_wrapper() {
         assert_eq!(
             display_width(&osc8_st_hyperlink("https://example.com/docs", "docs")),

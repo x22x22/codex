@@ -578,6 +578,8 @@ fn truncate_line_word_boundary_with_ellipsis(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Style;
+    use ratatui::style::Stylize;
 
     fn concat_line(line: &Line<'_>) -> String {
         line.spans
@@ -604,6 +606,20 @@ mod tests {
 
     fn c1_csi_blue_text(text: &str) -> String {
         format!("\u{9b}34m{text}\u{9b}0m")
+    }
+
+    // The footer truncator predates OSC-8 support and should still prefer ordinary whitespace
+    // boundaries while preserving span style and the line-level style.
+    #[test]
+    fn truncate_line_word_boundary_with_ellipsis_preserves_plain_word_boundary_and_styles() {
+        let line = Line::from(vec!["abcdef ".green(), "ghij".magenta()]).style(Style::new().dim());
+
+        let truncated = truncate_line_word_boundary_with_ellipsis(line, 8);
+
+        assert_eq!(
+            truncated,
+            Line::from(vec!["abcdef".green(), "…".green()]).style(Style::new().dim())
+        );
     }
 
     // Footer hints are ellipsized at word boundaries; this guards against counting invisible

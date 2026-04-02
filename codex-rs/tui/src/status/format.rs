@@ -141,6 +141,7 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Stylize;
 
     fn concat_line(line: &Line<'_>) -> String {
         line.spans
@@ -175,6 +176,24 @@ mod tests {
 
     fn c1_csi_red_text(text: &str) -> String {
         format!("\u{9b}31m{text}\u{9b}0m")
+    }
+
+    // Status values are usually plain styled spans; this locks the pre-wrapper baseline for
+    // ordinary text so the escape-aware helper doesn't change non-link rendering.
+    #[test]
+    fn line_display_width_counts_plain_ascii_and_wide_cells() {
+        let line = Line::from(vec!["ab".into(), " ".into(), "中文".into()]);
+
+        assert_eq!(line_display_width(&line), 7);
+    }
+
+    #[test]
+    fn truncate_line_to_width_preserves_plain_span_styles() {
+        let line = Line::from(vec!["ab".green(), "cdef".magenta()]);
+
+        let truncated = truncate_line_to_width(line, 4);
+
+        assert_eq!(truncated, Line::from(vec!["ab".green(), "cd".magenta()]));
     }
 
     // Status lines reuse the same truncation contract as generic rows: preserve wrapper state,
