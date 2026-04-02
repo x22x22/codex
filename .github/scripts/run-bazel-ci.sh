@@ -146,6 +146,19 @@ if [[ -n "${BAZEL_REPOSITORY_CACHE:-}" ]]; then
   post_config_bazel_args+=("--repository_cache=${BAZEL_REPOSITORY_CACHE}")
 fi
 
+if [[ -n "${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR:-}" ]]; then
+  execution_log_compact_dir="${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR}"
+  execution_log_compact_dir_for_mkdir="${execution_log_compact_dir}"
+  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+    execution_log_compact_dir_for_mkdir="$(cygpath -u "${execution_log_compact_dir}")"
+  fi
+
+  mkdir -p "${execution_log_compact_dir_for_mkdir}"
+  post_config_bazel_args+=(
+    "--execution_log_compact_file=${execution_log_compact_dir}/execution-log-${bazel_args[0]}-${GITHUB_JOB:-local}-$$.zst"
+  )
+fi
+
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   windows_action_env_vars=(
     INCLUDE
