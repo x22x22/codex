@@ -97,7 +97,7 @@ impl Session {
                 .clone()
         };
         crate::rollout::truncation::materialize_rollout_items_for_replay(
-            Some(codex_home.as_path()),
+            codex_home.as_path(),
             rollout_items,
         )
         .await

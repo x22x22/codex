@@ -1,14 +1,14 @@
 use super::*;
 
-use crate::protocol::CompactedItem;
-use crate::protocol::InitialHistory;
-use crate::protocol::ResumedHistory;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ForkReferenceItem;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
@@ -214,6 +214,7 @@ async fn record_initial_history_forked_materializes_fork_reference_rollout_items
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
+    assert!(session.reference_context_item().await.is_none());
 }
 
 #[tokio::test]

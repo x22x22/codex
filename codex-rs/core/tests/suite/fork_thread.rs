@@ -2,6 +2,8 @@ use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::parse_turn_item;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -33,16 +35,52 @@ fn find_user_input_positions(items: &[RolloutItem]) -> Vec<usize> {
 
 fn truncate_before_nth_user_message(
     items: &[RolloutItem],
-    nth_user_message: usize,
+    nth_user_message: i64,
 ) -> Vec<RolloutItem> {
-    if nth_user_message == usize::MAX {
+    let Ok(nth_user_message) = usize::try_from(nth_user_message) else {
         return items.to_vec();
-    }
+    };
     let user_inputs = find_user_input_positions(items);
     let Some(cut_idx) = user_inputs.get(nth_user_message).copied() else {
-        return Vec::new();
+        return items.to_vec();
     };
     items[..cut_idx].to_vec()
+}
+
+fn test_user_message(text: &str) -> RolloutItem {
+    RolloutItem::ResponseItem(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    })
+}
+
+#[test]
+fn truncate_before_nth_user_message_keeps_full_history_for_out_of_range_boundaries() {
+    let rollout_items = vec![test_user_message("u1"), test_user_message("u2")];
+
+    pretty_assertions::assert_eq!(
+        serde_json::to_value(truncate_before_nth_user_message(
+            &rollout_items,
+            /*nth_user_message*/ 2,
+        ))
+        .unwrap(),
+        serde_json::to_value(&rollout_items).unwrap(),
+    );
+}
+
+#[test]
+fn truncate_before_nth_user_message_keeps_full_history_for_i64_max_boundaries() {
+    let rollout_items = vec![test_user_message("u1"), test_user_message("u2")];
+
+    pretty_assertions::assert_eq!(
+        serde_json::to_value(truncate_before_nth_user_message(&rollout_items, i64::MAX,)).unwrap(),
+        serde_json::to_value(&rollout_items).unwrap(),
+    );
 }
 
 fn read_items_materialized(p: &std::path::Path) -> Vec<RolloutItem> {

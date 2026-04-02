@@ -1,5 +1,3 @@
-use crate::AuthManager;
-use crate::CodexAuth;
 use crate::ModelProviderInfo;
 use crate::OPENAI_PROVIDER_ID;
 use crate::SkillsManager;
@@ -18,9 +16,6 @@ use crate::mcp::McpManager;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
-use crate::protocol::Event;
-use crate::protocol::EventMsg;
-use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
@@ -30,17 +25,22 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_exec_server::EnvironmentManager;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 #[cfg(test)]
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -624,7 +624,7 @@ impl ThreadManager {
                 truncate_before_nth_user_message(
                     config.codex_home.as_path(),
                     history,
-                    nth_user_message,
+                    i64::try_from(nth_user_message).unwrap_or(i64::MAX),
                     &snapshot_state,
                 )
                 .await
@@ -659,7 +659,7 @@ impl ThreadManager {
                 .chain(std::iter::once(RolloutItem::ForkReference(
                     ForkReferenceItem {
                         rollout_path: path.clone(),
-                        nth_user_message,
+                        nth_user_message: i64::try_from(nth_user_message).unwrap_or(i64::MAX),
                     },
                 )))
                 .collect();
@@ -959,7 +959,7 @@ impl ThreadManagerState {
 async fn truncate_before_nth_user_message(
     codex_home: &Path,
     history: InitialHistory,
-    n: usize,
+    n: i64,
     snapshot_state: &SnapshotTurnState,
 ) -> InitialHistory {
     let mut items: Vec<RolloutItem> = history.get_rollout_items();
@@ -967,10 +967,12 @@ async fn truncate_before_nth_user_message(
         .iter()
         .any(|item| matches!(item, RolloutItem::ForkReference(_)))
     {
-        items = truncation::materialize_rollout_items_for_replay(Some(codex_home), &items).await;
+        items = truncation::materialize_rollout_items_for_replay(codex_home, &items).await;
     }
     let user_positions = truncation::user_message_positions_in_rollout(&items);
-    let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {
+    let rolled = if snapshot_state.ends_mid_turn
+        && usize::try_from(n).map_or(true, |n| n >= user_positions.len())
+    {
         if let Some(cut_idx) = snapshot_state
             .active_turn_start_index
             .or_else(|| user_positions.last().copied())
