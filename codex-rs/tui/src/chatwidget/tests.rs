@@ -1020,7 +1020,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
 
 #[tokio::test]
 async fn single_line_final_answer_hides_working_status_in_transcript_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
 
     chat.on_user_message_event(UserMessageEvent {
