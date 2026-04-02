@@ -4,6 +4,7 @@ use crate::agent::WatchdogRegistration;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::render_input_preview;
+use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
@@ -96,7 +97,6 @@ impl ToolHandler for Handler {
             .await;
         let config =
             build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-
         let mut candidates_to_try = collect_spawn_agent_model_candidates(
             args.model_fallback_list.as_ref(),
             args.model.as_deref(),
@@ -112,17 +112,22 @@ impl ToolHandler for Handler {
         let mut spawn_result = None;
         for (idx, candidate) in candidates_to_try.iter().enumerate() {
             let mut candidate_config = config.clone();
-            apply_requested_spawn_agent_model_overrides(
-                &session,
-                turn.as_ref(),
-                &mut candidate_config,
-                candidate.model.as_deref(),
-                candidate.reasoning_effort,
-            )
-            .await?;
+            if !fork_context {
+                apply_requested_spawn_agent_model_overrides(
+                    &session,
+                    turn.as_ref(),
+                    &mut candidate_config,
+                    candidate.model.as_deref(),
+                    candidate.reasoning_effort,
+                )
+                .await?;
+            }
             apply_role_to_config(&mut candidate_config, role_name)
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
+            if fork_context {
+                restore_forked_spawn_agent_model_config(&mut candidate_config, turn.as_ref());
+            }
             apply_spawn_agent_runtime_overrides(&mut candidate_config, turn.as_ref())?;
             apply_spawn_agent_overrides(&mut candidate_config, child_depth);
             let attempt_result = session

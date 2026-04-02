@@ -290,7 +290,9 @@ async fn setup_turn_one_with_custom_spawned_child(
     test.submit_turn(TURN_1_PROMPT).await?;
     if child_response_delay.is_none() && wait_for_parent_notification {
         let _ = wait_for_requests(&child_request_log).await?;
-        let rollout_path = test.codex.rollout_path().expect("rollout path");
+        let Some(rollout_path) = test.codex.rollout_path() else {
+            anyhow::bail!("rollout path");
+        };
         let deadline = Instant::now() + Duration::from_secs(6);
         loop {
             test.codex.ensure_rollout_materialized().await;
@@ -506,7 +508,8 @@ async fn spawn_agent_inherits_parent_model_and_reasoning_without_role() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> Result<()> {
+async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings_without_fork_context()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -517,6 +520,7 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
             "agent_type": "custom",
             "model": REQUESTED_MODEL,
             "reasoning_effort": REQUESTED_REASONING_EFFORT,
+            "fork_context": false,
         }),
         |builder| {
             builder.with_config(|config| {

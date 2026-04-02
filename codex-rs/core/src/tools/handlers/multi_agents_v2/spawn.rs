@@ -39,7 +39,8 @@ impl ToolHandler for Handler {
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
-        let fork_mode = args.fork_mode(&turn.config, role_name)?;
+        let fork_context = default_fork_context_for_role(&turn.config, role_name);
+        let fork_mode = args.fork_mode(fork_context)?;
 
         let initial_operation = parse_collab_input(Some(args.message), /*items*/ None)?;
         let prompt = render_input_preview(&initial_operation);
@@ -120,17 +121,22 @@ impl ToolHandler for Handler {
         let mut spawn_result = None;
         for (idx, candidate) in candidates_to_try.iter().enumerate() {
             let mut candidate_config = config.clone();
-            apply_requested_spawn_agent_model_overrides(
-                &session,
-                turn.as_ref(),
-                &mut candidate_config,
-                candidate.model.as_deref(),
-                candidate.reasoning_effort,
-            )
-            .await?;
+            if fork_mode.is_none() {
+                apply_requested_spawn_agent_model_overrides(
+                    &session,
+                    turn.as_ref(),
+                    &mut candidate_config,
+                    candidate.model.as_deref(),
+                    candidate.reasoning_effort,
+                )
+                .await?;
+            }
             apply_role_to_config(&mut candidate_config, role_name)
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
+            if fork_mode.is_some() {
+                restore_forked_spawn_agent_model_config(&mut candidate_config, turn.as_ref());
+            }
             apply_spawn_agent_runtime_overrides(&mut candidate_config, turn.as_ref())?;
             apply_spawn_agent_overrides(&mut candidate_config, child_depth);
             let attempt_result = session
@@ -268,36 +274,42 @@ struct SpawnAgentArgs {
 impl SpawnAgentArgs {
     fn fork_mode(
         &self,
-        config: &crate::config::Config,
-        role_name: Option<&str>,
+        default_fork_context: bool,
     ) -> Result<Option<SpawnAgentForkMode>, FunctionCallError> {
-        if let Some(fork_turns) = self.fork_turns.as_deref() {
-            let trimmed = fork_turns.trim();
-            return match trimmed {
-                "none" => Ok(None),
-                "all" => Ok(Some(SpawnAgentForkMode::FullHistory)),
-                _ => {
-                    let Ok(last_n_turns) = trimmed.parse::<usize>() else {
-                        return Err(FunctionCallError::RespondToModel(
-                            "fork_turns must be `none`, `all`, or a positive integer string"
-                                .to_string(),
-                        ));
-                    };
-                    if last_n_turns == 0 {
-                        return Err(FunctionCallError::RespondToModel(
-                            "fork_turns must be `none`, `all`, or a positive integer string"
-                                .to_string(),
-                        ));
-                    }
-                    Ok(Some(SpawnAgentForkMode::LastNTurns(last_n_turns)))
-                }
-            };
+        if self.fork_context.is_some() {
+            return Err(FunctionCallError::RespondToModel(
+                "fork_context is not supported in MultiAgentV2; use fork_turns instead".to_string(),
+            ));
         }
 
-        let fork_context = self
-            .fork_context
-            .unwrap_or_else(|| default_fork_context_for_role(config, role_name));
-        Ok(fork_context.then_some(SpawnAgentForkMode::FullHistory))
+        let Some(fork_turns) = self
+            .fork_turns
+            .as_deref()
+            .map(str::trim)
+            .filter(|fork_turns| !fork_turns.is_empty())
+        else {
+            return Ok(default_fork_context.then_some(SpawnAgentForkMode::FullHistory));
+        };
+
+        if fork_turns.eq_ignore_ascii_case("none") {
+            return Ok(None);
+        }
+        if fork_turns.eq_ignore_ascii_case("all") {
+            return Ok(Some(SpawnAgentForkMode::FullHistory));
+        }
+
+        let last_n_turns = fork_turns.parse::<usize>().map_err(|_| {
+            FunctionCallError::RespondToModel(
+                "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
+            )
+        })?;
+        if last_n_turns == 0 {
+            return Err(FunctionCallError::RespondToModel(
+                "fork_turns must be `none`, `all`, or a positive integer string".to_string(),
+            ));
+        }
+
+        Ok(Some(SpawnAgentForkMode::LastNTurns(last_n_turns)))
     }
 }
 
