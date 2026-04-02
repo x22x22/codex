@@ -28,7 +28,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 
-use codex_exec_server::AttachedExecutor;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
 use rand::Rng;
@@ -74,21 +73,14 @@ pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
     pub turn: Arc<TurnContext>,
     pub call_id: String,
-    pub attached_executor: Arc<AttachedExecutor>,
 }
 
 impl UnifiedExecContext {
-    pub fn new(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        call_id: String,
-        attached_executor: Arc<AttachedExecutor>,
-    ) -> Self {
+    pub fn new(session: Arc<Session>, turn: Arc<TurnContext>, call_id: String) -> Self {
         Self {
             session,
             turn,
             call_id,
-            attached_executor,
         }
     }
 }

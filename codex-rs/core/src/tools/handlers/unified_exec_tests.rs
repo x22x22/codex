@@ -20,11 +20,7 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use tokio::sync::Mutex;
 
 fn local_exec_handler() -> UnifiedExecHandler {
-    UnifiedExecHandler::new(
-        codex_exec_server::Environment::default()
-            .attached_executor()
-            .expect("default environment should have an attached executor"),
-    )
+    UnifiedExecHandler
 }
 
 #[test]
@@ -210,11 +206,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
         arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
-    let handler = UnifiedExecHandler::new(
-        turn.environment
-            .attached_executor()
-            .expect("test turn context should have an attached executor"),
-    );
+    let handler = UnifiedExecHandler;
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
@@ -238,11 +230,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
         arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
-    let handler = UnifiedExecHandler::new(
-        turn.environment
-            .attached_executor()
-            .expect("test turn context should have an attached executor"),
-    );
+    let handler = UnifiedExecHandler;
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {

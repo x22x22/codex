@@ -27,7 +27,6 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
-use codex_exec_server::AttachedExecutor;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::metrics::names::TOOL_CALL_UNIFIED_EXEC_METRIC;
@@ -36,15 +35,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub struct UnifiedExecHandler {
-    attached_executor: Arc<AttachedExecutor>,
-}
-
-impl UnifiedExecHandler {
-    pub fn new(attached_executor: Arc<AttachedExecutor>) -> Self {
-        Self { attached_executor }
-    }
-}
+pub struct UnifiedExecHandler;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecCommandArgs {
@@ -188,12 +179,7 @@ impl ToolHandler for UnifiedExecHandler {
         };
 
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
-        let context = UnifiedExecContext::new(
-            session.clone(),
-            turn.clone(),
-            call_id.clone(),
-            Arc::clone(&self.attached_executor),
-        );
+        let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
 
         let response = match tool_name.as_str() {
             "exec_command" => {

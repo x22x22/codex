@@ -941,7 +941,7 @@ impl TurnContext {
             sandbox_policy: self.sandbox_policy.get(),
             windows_sandbox_level: self.windows_sandbox_level,
         })
-        .with_attached_executor(self.environment.attached_executor())
+        .with_has_attached_executor(self.environment.has_attached_executor())
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
@@ -1396,7 +1396,7 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
-        .with_attached_executor(environment.attached_executor())
+        .with_has_attached_executor(environment.has_attached_executor())
         .with_unified_exec_shell_mode_for_session(
             user_shell,
             shell_zsh_path,
@@ -5474,7 +5474,7 @@ async fn spawn_review_thread(
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
     )
-    .with_attached_executor(parent_turn_context.environment.attached_executor())
+    .with_has_attached_executor(parent_turn_context.environment.has_attached_executor())
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone());

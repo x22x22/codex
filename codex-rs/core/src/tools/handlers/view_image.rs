@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use codex_exec_server::AttachedExecutor;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -21,17 +20,8 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use std::sync::Arc;
 
-pub struct ViewImageHandler {
-    attached_executor: Arc<AttachedExecutor>,
-}
-
-impl ViewImageHandler {
-    pub fn new(attached_executor: Arc<AttachedExecutor>) -> Self {
-        Self { attached_executor }
-    }
-}
+pub struct ViewImageHandler;
 
 const VIEW_IMAGE_UNSUPPORTED_MESSAGE: &str =
     "view_image is not allowed because you do not support image inputs";
@@ -104,8 +94,8 @@ impl ToolHandler for ViewImageHandler {
                 FunctionCallError::RespondToModel(format!("unable to resolve image path: {error}"))
             })?;
 
-        let metadata = self
-            .attached_executor
+        let metadata = turn
+            .environment
             .get_filesystem()
             .get_metadata(&abs_path)
             .await
@@ -122,8 +112,8 @@ impl ToolHandler for ViewImageHandler {
                 abs_path.display()
             )));
         }
-        let file_bytes = self
-            .attached_executor
+        let file_bytes = turn
+            .environment
             .get_filesystem()
             .read_file(&abs_path)
             .await
