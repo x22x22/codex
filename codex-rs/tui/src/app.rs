@@ -929,6 +929,7 @@ impl SubagentRegistry {
             .retain(|thread_id, _| !superseded.contains(thread_id));
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn on_close_end(&mut self, event: &CollabCloseEndEvent) -> Option<Box<dyn HistoryCell>> {
         let receiver_id = event.receiver_thread_id;
         let info = self.agents.get_mut(&receiver_id)?;
@@ -947,6 +948,7 @@ impl SubagentRegistry {
         None
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn on_wait_end(&mut self, event: &CollabWaitingEndEvent) {
         for (thread_id, status) in &event.statuses {
             let Some(info) = self.agents.get_mut(thread_id) else {
@@ -1163,6 +1165,7 @@ impl SubagentRegistry {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn is_terminal_status(status: &AgentStatus) -> bool {
     matches!(
         status,
@@ -1173,6 +1176,7 @@ fn is_terminal_status(status: &AgentStatus) -> bool {
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn terminal_summary(status: &AgentStatus) -> String {
     match status {
         AgentStatus::Completed(Some(message)) => {
@@ -2163,6 +2167,7 @@ impl App {
         self.primary_thread_id.is_some() && self.active_thread_id == self.primary_thread_id
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn emit_or_queue_subagent_history(&mut self, cell: Box<dyn HistoryCell>) {
         if self.subagents_root_active() {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
@@ -2209,6 +2214,7 @@ impl App {
         self.update_subagent_animation(root_active);
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn process_subagent_side_effects(&mut self, thread_id: ThreadId, event: &Event) {
         if self.primary_thread_id == Some(thread_id) {
             self.subagents.set_root_thread(thread_id);
