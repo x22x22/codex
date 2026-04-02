@@ -705,15 +705,18 @@ impl AgentControl {
     /// Deliver watchdog wake-up input to an owner thread.
     ///
     /// This intentionally bypasses `agent_use_function_call_inbox` for non-subagent owners.
-    /// Every watchdog check-in must wake the owner exactly once, and the injected inbox path
-    /// reliably starts or resumes the owner's next turn while preserving helper identity.
+    /// A watchdog helper wakes the owner through this path only when the helper produced a real
+    /// fallback report. Empty/no-report helper completions are ignored so the next scheduled
+    /// watchdog check-in can try again without leaking helper prompt scaffolding into root.
     pub(crate) async fn send_watchdog_wakeup(
         &self,
         agent_id: ThreadId,
         sender_thread_id: ThreadId,
         message: String,
     ) -> CodexResult<String> {
-        let message = sanitize_watchdog_wakeup_message(message);
+        let Some(message) = sanitize_watchdog_wakeup_message(message) else {
+            return Ok(String::new());
+        };
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         let snapshot = thread.config_snapshot().await;
@@ -1060,19 +1063,7 @@ impl AgentControl {
                     Err(_) => false,
                 };
                 if !helper_sent_input {
-                    let fallback_message = match &status {
-                        AgentStatus::Completed(Some(message)) if !message.trim().is_empty() => {
-                            Some(message.clone())
-                        }
-                        AgentStatus::Completed(_) => Some(
-                            "Watchdog check-in completed without calling send_input or returning a final message."
-                                .to_string(),
-                        ),
-                        AgentStatus::Errored(message) if !message.trim().is_empty() => {
-                            Some(message.clone())
-                        }
-                        _ => None,
-                    };
+                    let fallback_message = watchdog_fallback_message_from_status(&status);
                     if let Some(message) = fallback_message {
                         let _ = control
                             .send_watchdog_wakeup(owner_thread_id, child_thread_id, message)
@@ -1681,17 +1672,29 @@ fn build_agent_inbox_items(
     Ok(items)
 }
 
-fn sanitize_watchdog_wakeup_message(message: String) -> String {
-    let Some(stripped_message) = strip_leading_watchdog_prompt_scaffold(&message) else {
-        return message;
+fn watchdog_fallback_message_from_status(status: &AgentStatus) -> Option<String> {
+    let message = match status {
+        AgentStatus::Completed(Some(message)) => message,
+        AgentStatus::Completed(None)
+        | AgentStatus::Errored(_)
+        | AgentStatus::Interrupted
+        | AgentStatus::Shutdown
+        | AgentStatus::NotFound
+        | AgentStatus::PendingInit
+        | AgentStatus::Running => return None,
     };
 
-    if stripped_message.is_empty() {
-        "Watchdog check-in completed without calling send_input. Review the watchdog helper thread for details."
-            .to_string()
-    } else {
-        stripped_message.to_string()
-    }
+    sanitize_watchdog_wakeup_message(message.clone())
+}
+
+fn sanitize_watchdog_wakeup_message(message: String) -> Option<String> {
+    let Some(stripped_message) = strip_leading_watchdog_prompt_scaffold(&message) else {
+        let message = message.trim();
+        return (!message.is_empty()).then(|| message.to_string());
+    };
+
+    let stripped_message = stripped_message.trim();
+    (!stripped_message.is_empty()).then(|| stripped_message.to_string())
 }
 
 fn strip_leading_watchdog_prompt_scaffold(message: &str) -> Option<&str> {

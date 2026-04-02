@@ -690,18 +690,8 @@ async fn send_watchdog_wakeup_strips_helper_prompt_scaffold_from_fallback_messag
         )
         .await
         .expect("send_watchdog_wakeup should succeed");
-    assert!(!submission_id.is_empty());
-
-    let payload = injected_agent_inbox_payload(&harness, receiver_thread_id);
-    assert_eq!(payload.sender_thread_id, sender_thread_id);
-    assert_eq!(
-        payload.message,
-        "Watchdog check-in completed without calling send_input. Review the watchdog helper thread for details."
-    );
-    assert!(!payload.message.contains("# You are a Subagent"));
-    assert!(!payload.message.contains("AGENTS.watchdog.md"));
-    assert!(!payload.message.contains("Target agent id:"));
-    assert!(!payload.message.contains("watchdog charter"));
+    assert!(submission_id.is_empty());
+    assert_no_injected_agent_inbox_payload(&harness, receiver_thread_id);
 }
 
 #[tokio::test]
@@ -791,7 +781,7 @@ async fn send_watchdog_wakeup_strips_ordinary_prompt_instructions_before_report_
 }
 
 #[tokio::test]
-async fn send_watchdog_wakeup_uses_neutral_fallback_when_scaffold_has_no_report_marker() {
+async fn send_watchdog_wakeup_emits_nothing_when_scaffold_has_no_report_marker() {
     let harness = AgentControlHarness::new().await;
     let (receiver_thread_id, _thread) = harness.start_thread().await;
     let sender_thread_id = ThreadId::new();
@@ -805,17 +795,8 @@ async fn send_watchdog_wakeup_uses_neutral_fallback_when_scaffold_has_no_report_
         .send_watchdog_wakeup(receiver_thread_id, sender_thread_id, message.to_string())
         .await
         .expect("send_watchdog_wakeup should succeed");
-    assert!(!submission_id.is_empty());
-
-    let payload = injected_agent_inbox_payload(&harness, receiver_thread_id);
-    assert_eq!(
-        payload,
-        AgentInboxPayload::new(
-            sender_thread_id,
-            "Watchdog check-in completed without calling send_input. Review the watchdog helper thread for details."
-                .to_string()
-        )
-    );
+    assert!(submission_id.is_empty());
+    assert_no_injected_agent_inbox_payload(&harness, receiver_thread_id);
 }
 
 #[tokio::test]
@@ -2981,4 +2962,19 @@ fn injected_agent_inbox_payload(
         .expect("payload should convert to text");
 
     serde_json::from_str(&output_text).expect("payload should be valid json")
+}
+fn assert_no_injected_agent_inbox_payload(
+    harness: &AgentControlHarness,
+    receiver_thread_id: ThreadId,
+) {
+    assert!(
+        harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .all(|(thread_id, op)| {
+                thread_id != receiver_thread_id || !matches!(op, Op::InjectResponseItems { .. })
+            }),
+        "expected no injected watchdog inbox op"
+    );
 }
