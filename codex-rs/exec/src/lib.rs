@@ -66,6 +66,9 @@ use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
+use codex_git_utils::CodexManagedWorktree;
+use codex_git_utils::GitToolingError;
+use codex_git_utils::create_codex_managed_worktree;
 use codex_git_utils::get_git_repo_root;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
@@ -165,6 +168,14 @@ struct ExecRunArgs {
     stderr_with_ansi: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct StartupCwd {
+    resolved_cwd: Option<PathBuf>,
+    config_cwd: AbsolutePathBuf,
+}
+
+type WorktreeCreator = fn(&Path, &Path) -> Result<CodexManagedWorktree, GitToolingError>;
+
 fn exec_root_span() -> tracing::Span {
     info_span!(
         "codex.exec",
@@ -172,6 +183,33 @@ fn exec_root_span() -> tracing::Span {
         thread.id = field::Empty,
         turn.id = field::Empty,
     )
+}
+
+fn resolve_startup_cwd(
+    requested_cwd: Option<PathBuf>,
+    codex_home: &Path,
+    worktree_creator: Option<WorktreeCreator>,
+) -> anyhow::Result<StartupCwd> {
+    let config_cwd = match requested_cwd.as_deref() {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
+        None => AbsolutePathBuf::current_dir()?,
+    };
+
+    let Some(worktree_creator) = worktree_creator else {
+        return Ok(StartupCwd {
+            resolved_cwd: requested_cwd,
+            config_cwd,
+        });
+    };
+
+    let worktree = worktree_creator(config_cwd.as_path(), codex_home)
+        .map_err(|err| anyhow::anyhow!("failed to create worktree: {err}"))?;
+    let config_cwd = AbsolutePathBuf::from_absolute_path(&worktree.worktree_workspace_root)?;
+
+    Ok(StartupCwd {
+        resolved_cwd: Some(worktree.worktree_workspace_root),
+        config_cwd,
+    })
 }
 
 pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
@@ -189,6 +227,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
+        worktree,
         skip_git_repo_check,
         add_dir,
         ephemeral,
@@ -200,6 +239,14 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         output_schema: output_schema_path,
         config_overrides,
     } = cli;
+
+    // Fail no-prompt stdin reads before creating a detached worktree so
+    // `codex-exec --worktree </dev/null` does not leak a checkout.
+    let prompt = if worktree && command.is_none() && prompt.is_none() {
+        Some(resolve_root_prompt(None))
+    } else {
+        prompt
+    };
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -240,12 +287,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         }
     };
 
-    let resolved_cwd = cwd.clone();
-    let config_cwd = match resolved_cwd.as_deref() {
-        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
-        None => AbsolutePathBuf::current_dir()?,
-    };
-
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
     let codex_home = match find_codex_home() {
@@ -255,6 +296,15 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             std::process::exit(1);
         }
     };
+
+    let StartupCwd {
+        resolved_cwd,
+        config_cwd,
+    } = resolve_startup_cwd(
+        cwd,
+        codex_home.as_path(),
+        worktree.then_some(create_codex_managed_worktree),
+    )?;
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
@@ -1696,6 +1746,67 @@ mod tests {
         assert_eq!(
             trace_id,
             TraceId::from_hex("00000000000000000000000000000077").expect("trace id")
+        );
+    }
+
+    #[test]
+    fn resolve_startup_cwd_uses_requested_cwd_without_worktree() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+
+        let startup_cwd = resolve_startup_cwd(
+            Some(cwd.path().to_path_buf()),
+            codex_home.path(),
+            /*worktree_creator*/ None,
+        )
+        .expect("resolve startup cwd");
+
+        assert_eq!(
+            startup_cwd,
+            StartupCwd {
+                resolved_cwd: Some(cwd.path().to_path_buf()),
+                config_cwd: AbsolutePathBuf::from_absolute_path(
+                    cwd.path().canonicalize().expect("canonicalize cwd")
+                )
+                .expect("absolute cwd"),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_startup_cwd_uses_worktree_workspace_root_when_enabled() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+
+        let startup_cwd = resolve_startup_cwd(
+            Some(cwd.path().to_path_buf()),
+            codex_home.path(),
+            Some(|source_cwd, codex_home| {
+                let worktree_git_root = codex_home.join("worktrees/fake/project");
+                let worktree_git_dir = worktree_git_root.join(".git");
+                let marker_path = worktree_git_dir.join("codex-managed");
+                Ok(CodexManagedWorktree {
+                    source_cwd: source_cwd.to_path_buf(),
+                    source_repo_root: source_cwd.to_path_buf(),
+                    worktree_git_root: worktree_git_root.clone(),
+                    worktree_git_dir,
+                    worktree_workspace_root: worktree_git_root.join("nested/path"),
+                    starting_ref: "main".to_string(),
+                    marker_path,
+                })
+            }),
+        )
+        .expect("resolve startup cwd");
+
+        let expected_worktree_workspace_root =
+            codex_home.path().join("worktrees/fake/project/nested/path");
+        assert_eq!(
+            startup_cwd,
+            StartupCwd {
+                resolved_cwd: Some(expected_worktree_workspace_root.clone()),
+                config_cwd: AbsolutePathBuf::from_absolute_path(&expected_worktree_workspace_root)
+                    .expect("absolute worktree cwd"),
+            }
         );
     }
 

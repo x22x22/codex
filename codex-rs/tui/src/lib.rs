@@ -40,6 +40,9 @@ use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_git_utils::CodexManagedWorktree;
+use codex_git_utils::GitToolingError;
+use codex_git_utils::create_codex_managed_worktree;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
@@ -79,10 +82,9 @@ mod app_event;
 mod app_event_sender;
 mod app_server_session;
 mod ascii_animation;
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod audio_device;
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
+#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
 mod audio_device {
     use crate::app_event::RealtimeAudioDeviceKind;
 
@@ -152,10 +154,9 @@ pub mod update_action;
 mod update_prompt;
 mod updates;
 mod version;
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod voice;
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
+#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
 mod voice {
     use crate::app_event_sender::AppEventSender;
     use codex_core::config::Config;
@@ -221,6 +222,14 @@ use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
 pub use cli::Cli;
 use codex_arg0::Arg0DispatchPaths;
+
+#[derive(Debug, PartialEq, Eq)]
+struct StartupCwd {
+    cwd: Option<PathBuf>,
+    config_cwd: AbsolutePathBuf,
+}
+
+type WorktreeCreator = fn(&Path, &Path) -> Result<CodexManagedWorktree, GitToolingError>;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
@@ -586,6 +595,33 @@ fn latest_session_lookup_params(
     }
 }
 
+fn resolve_startup_cwd(
+    requested_cwd: Option<PathBuf>,
+    codex_home: &Path,
+    worktree_creator: Option<WorktreeCreator>,
+) -> std::io::Result<StartupCwd> {
+    let config_cwd = match requested_cwd.as_deref() {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
+        None => AbsolutePathBuf::current_dir()?,
+    };
+
+    let Some(worktree_creator) = worktree_creator else {
+        return Ok(StartupCwd {
+            cwd: requested_cwd,
+            config_cwd,
+        });
+    };
+
+    let worktree = worktree_creator(config_cwd.as_path(), codex_home)
+        .map_err(|err| std::io::Error::other(format!("Error creating worktree: {err}")))?;
+    let config_cwd = AbsolutePathBuf::from_absolute_path(&worktree.worktree_workspace_root)?;
+
+    Ok(StartupCwd {
+        cwd: Some(worktree.worktree_workspace_root),
+        config_cwd,
+    })
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -604,6 +640,11 @@ pub async fn run_main(
             auth_token: remote_auth_token.clone(),
         })
         .unwrap_or(AppServerTarget::Embedded);
+    if cli.worktree && matches!(app_server_target, AppServerTarget::Remote { .. }) {
+        return Err(std::io::Error::other(
+            "--worktree is only supported for local Codex sessions",
+        ));
+    }
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -653,11 +694,11 @@ pub async fn run_main(
         }
     };
 
-    let cwd = cli.cwd.clone();
-    let config_cwd = match cwd.as_deref() {
-        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
-        None => AbsolutePathBuf::current_dir()?,
-    };
+    let StartupCwd { cwd, config_cwd } = resolve_startup_cwd(
+        cli.cwd.clone(),
+        codex_home.as_path(),
+        cli.worktree.then_some(create_codex_managed_worktree),
+    )?;
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
@@ -1698,6 +1739,67 @@ mod tests {
         assert_eq!(
             normalize_remote_addr("ws://127.0.0.1:4500").expect("ws URL should normalize"),
             "ws://127.0.0.1:4500/"
+        );
+    }
+
+    #[test]
+    fn resolve_startup_cwd_uses_requested_cwd_without_worktree() {
+        let codex_home = TempDir::new().expect("create temp codex home");
+        let cwd = TempDir::new().expect("create temp cwd");
+
+        let startup_cwd = resolve_startup_cwd(
+            Some(cwd.path().to_path_buf()),
+            codex_home.path(),
+            /*worktree_creator*/ None,
+        )
+        .expect("resolve startup cwd");
+
+        assert_eq!(
+            startup_cwd,
+            StartupCwd {
+                cwd: Some(cwd.path().to_path_buf()),
+                config_cwd: AbsolutePathBuf::from_absolute_path(
+                    &cwd.path().canonicalize().expect("canonicalize cwd")
+                )
+                .expect("absolute cwd"),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_startup_cwd_uses_worktree_workspace_root_when_enabled() {
+        let codex_home = TempDir::new().expect("create temp codex home");
+        let cwd = TempDir::new().expect("create temp cwd");
+
+        let startup_cwd = resolve_startup_cwd(
+            Some(cwd.path().to_path_buf()),
+            codex_home.path(),
+            Some(|source_cwd, codex_home| {
+                let worktree_git_root = codex_home.join("worktrees/fake/project");
+                let worktree_git_dir = worktree_git_root.join(".git");
+                let marker_path = worktree_git_dir.join("codex-managed");
+                Ok(CodexManagedWorktree {
+                    source_cwd: source_cwd.to_path_buf(),
+                    source_repo_root: source_cwd.to_path_buf(),
+                    worktree_git_root: worktree_git_root.clone(),
+                    worktree_git_dir,
+                    worktree_workspace_root: worktree_git_root.join("nested/path"),
+                    starting_ref: "main".to_string(),
+                    marker_path,
+                })
+            }),
+        )
+        .expect("resolve startup cwd");
+
+        let expected_worktree_workspace_root =
+            codex_home.path().join("worktrees/fake/project/nested/path");
+        assert_eq!(
+            startup_cwd,
+            StartupCwd {
+                cwd: Some(expected_worktree_workspace_root.clone()),
+                config_cwd: AbsolutePathBuf::from_absolute_path(&expected_worktree_workspace_root)
+                    .expect("absolute worktree cwd"),
+            }
         );
     }
 
