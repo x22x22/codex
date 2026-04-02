@@ -25,6 +25,7 @@ object AgentQuestionNotifier {
     private val notificationStateLock = Any()
     private val activeNotificationTokens = mutableMapOf<String, String>()
     private val retiredNotificationTokens = mutableMapOf<String, MutableSet<String>>()
+    private val suppressedNotificationTokens = mutableMapOf<String, MutableSet<String>>()
 
     fun showQuestion(
         context: Context,
@@ -43,10 +44,20 @@ object AgentQuestionNotifier {
         notificationToken: String,
         notificationText: String,
     ): Boolean {
-        if (notificationText.isBlank() || !activateNotificationToken(session.sessionId, notificationToken)) {
+        if (!activateNotificationToken(session.sessionId, notificationToken)) {
             return false
         }
         val manager = context.getSystemService(NotificationManager::class.java) ?: return false
+        if (
+            !shouldShowDelegatedNotification(session.state) ||
+            isSuppressedNotificationToken(session.sessionId, notificationToken)
+        ) {
+            manager.cancel(notificationId(session.sessionId))
+            return true
+        }
+        if (notificationText.isBlank()) {
+            return false
+        }
         ensureChannel(manager)
         manager.notify(
             notificationId(session.sessionId),
@@ -58,6 +69,33 @@ object AgentQuestionNotifier {
             ),
         )
         return true
+    }
+
+    private fun shouldShowDelegatedNotification(state: Int): Boolean {
+        return when (state) {
+            AgentSessionInfo.STATE_WAITING_FOR_USER,
+            AgentSessionInfo.STATE_COMPLETED,
+            AgentSessionInfo.STATE_FAILED,
+            AgentSessionInfo.STATE_CANCELLED,
+            -> true
+            AgentSessionInfo.STATE_CREATED,
+            AgentSessionInfo.STATE_QUEUED,
+            AgentSessionInfo.STATE_RUNNING,
+            -> false
+            else -> false
+        }
+    }
+
+    fun suppress(
+        context: Context,
+        sessionId: String,
+        notificationToken: String,
+    ) {
+        if (!suppressNotificationToken(sessionId, notificationToken)) {
+            return
+        }
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.cancel(notificationId(sessionId))
     }
 
     fun cancel(context: Context, sessionId: String) {
@@ -152,8 +190,6 @@ object AgentQuestionNotifier {
         return when (state) {
             AgentSessionInfo.STATE_WAITING_FOR_USER ->
                 "Codex needs input for $targetDisplayName"
-            AgentSessionInfo.STATE_RUNNING ->
-                "Codex is working in $targetDisplayName"
             AgentSessionInfo.STATE_COMPLETED ->
                 "Codex finished $targetDisplayName"
             AgentSessionInfo.STATE_FAILED ->
@@ -162,6 +198,7 @@ object AgentQuestionNotifier {
                 "Codex cancelled $targetDisplayName"
             AgentSessionInfo.STATE_CREATED,
             AgentSessionInfo.STATE_QUEUED,
+            AgentSessionInfo.STATE_RUNNING,
             -> "Codex session for $targetDisplayName"
             else -> "Codex session for $targetDisplayName"
         }
@@ -241,6 +278,7 @@ object AgentQuestionNotifier {
         synchronized(notificationStateLock) {
             activeNotificationTokens.remove(sessionId)
             retiredNotificationTokens.remove(sessionId)
+            suppressedNotificationTokens.remove(sessionId)
         }
     }
 
@@ -255,6 +293,7 @@ object AgentQuestionNotifier {
         synchronized(notificationStateLock) {
             retiredNotificationTokens.getOrPut(sessionId, ::mutableSetOf)
                 .add(notificationToken)
+            suppressedNotificationTokens[sessionId]?.remove(notificationToken)
             if (activeNotificationTokens[sessionId] != notificationToken) {
                 return false
             }
@@ -268,7 +307,31 @@ object AgentQuestionNotifier {
             activeNotificationTokens.remove(sessionId)?.let { notificationToken ->
                 retiredNotificationTokens.getOrPut(sessionId, ::mutableSetOf)
                     .add(notificationToken)
+                suppressedNotificationTokens[sessionId]?.remove(notificationToken)
             }
+        }
+    }
+
+    private fun suppressNotificationToken(
+        sessionId: String,
+        notificationToken: String,
+    ): Boolean {
+        if (!activateNotificationToken(sessionId, notificationToken)) {
+            return false
+        }
+        synchronized(notificationStateLock) {
+            suppressedNotificationTokens.getOrPut(sessionId, ::mutableSetOf)
+                .add(notificationToken)
+        }
+        return true
+    }
+
+    private fun isSuppressedNotificationToken(
+        sessionId: String,
+        notificationToken: String,
+    ): Boolean {
+        synchronized(notificationStateLock) {
+            return suppressedNotificationTokens[sessionId]?.contains(notificationToken) == true
         }
     }
 

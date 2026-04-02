@@ -111,6 +111,8 @@ stub SDK docs and the local refactor doc:
   - user-facing question/result/error notifications should be rendered by the
     Agent app when the framework calls `onShowOrUpdateSessionNotification(...)`
     and cancelled when it calls `onCancelSessionNotification(...)`
+  - RUNNING/CREATED/QUEUED callbacks should be ACKed but suppressed so the
+    Agent only notifies for user action or terminal outcomes
   - the Agent must ACK a posted notification with `ackSessionNotification(...)`
     and route inline replies through `answerQuestionFromNotification(...)`
   - if delegated rendering is unavailable, the framework may post a generic

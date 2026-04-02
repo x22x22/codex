@@ -81,6 +81,8 @@ The current repo now contains these implementation slices:
   framework fallback path if the Agent renderer is unavailable or does not ACK
   in time. Inline reply actions route through
   `answerQuestionFromNotification(sessionId, notificationToken, response)`.
+  Running-session callbacks are ACKed but intentionally suppressed so the Agent
+  only notifies when user input is needed or a terminal outcome is ready.
 - The Agent now records an explicit per-child final presentation policy
   (`ATTACHED`, `DETACHED_HIDDEN`, `DETACHED_SHOWN`, or `AGENT_CHOICE`) and
   uses the framework-authoritative `AgentSessionInfo.getTargetPresentation()`
@@ -231,7 +233,9 @@ the Android Agent/Genie flow.
 - Framework-owned notification lifecycle with delegated Agent rendering for
   question/result/error notifications; the Agent app posts the visible
   notification, ACKs the tokenized callback, and falls back to plain
-  framework-owned rendering if the new callback surface is unavailable
+  framework-owned rendering if the new callback surface is unavailable. Running
+  progress notifications are suppressed by ACKing the callback and cancelling
+  any stale session notification instead of posting a new one.
 - Detached-mode Genie sessions now request `showDetachedTarget` before entering
   `WAITING_FOR_USER`, so HOME can keep a visible live icon while the user
   answers the question

@@ -27,6 +27,11 @@ class AgentNotificationReplyReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         thread(name = "CodexAgentNotificationReply-$sessionId") {
             try {
+                AgentQuestionNotifier.suppress(
+                    context = context,
+                    sessionId = sessionId,
+                    notificationToken = notificationToken,
+                )
                 runCatching {
                     AgentSessionController(context).answerQuestionFromNotification(
                         sessionId = sessionId,
@@ -34,7 +39,6 @@ class AgentNotificationReplyReceiver : BroadcastReceiver() {
                         answer = answer,
                         parentSessionId = null,
                     )
-                    AgentQuestionNotifier.cancel(context, sessionId)
                 }.onFailure { err ->
                     Log.w(TAG, "Failed to answer notification question for $sessionId", err)
                 }
