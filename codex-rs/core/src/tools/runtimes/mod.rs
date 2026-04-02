@@ -6,6 +6,7 @@ small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::path_utils;
 use crate::shell::Shell;
+use crate::shell_snapshot::ShellSnapshot;
 use crate::tools::sandboxing::ToolError;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
@@ -38,7 +39,7 @@ pub(crate) fn build_sandbox_command(
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
 /// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
-/// when a snapshot is configured on the session shell, rewrite the argv
+/// when a snapshot is configured for the session shell, rewrite the argv
 /// to a single non-login shell that sources the snapshot before running
 /// the original script:
 ///
@@ -51,6 +52,7 @@ pub(crate) fn build_sandbox_command(
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
+    session_shell_snapshot: Option<&ShellSnapshot>,
     cwd: &Path,
     explicit_env_overrides: &HashMap<String, String>,
 ) -> Vec<String> {
@@ -58,7 +60,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    let Some(snapshot) = session_shell.shell_snapshot() else {
+    let Some(snapshot) = session_shell_snapshot else {
         return command.to_vec();
     };
 

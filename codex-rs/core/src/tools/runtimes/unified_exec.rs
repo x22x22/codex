@@ -202,9 +202,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
+        let session_shell_snapshot = ctx.session.shell_snapshot();
         let command = maybe_wrap_shell_lc_with_snapshot(
             base_command,
             session_shell.as_ref(),
+            session_shell_snapshot.as_deref(),
             &req.cwd,
             &req.explicit_env_overrides,
         );

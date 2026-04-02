@@ -556,7 +556,6 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
     let user_shell = Shell {
         shell_type: ShellType::Zsh,
         shell_path: PathBuf::from("/bin/zsh"),
-        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
     assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
@@ -571,7 +570,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
     assert_eq!(
         tools_config
             .with_unified_exec_shell_mode_for_session(
-                tool_user_shell_type(&user_shell),
+                user_shell.shell_type,
                 Some(&PathBuf::from(if cfg!(windows) {
                     r"C:\opt\codex\zsh"
                 } else {
