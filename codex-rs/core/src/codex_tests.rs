@@ -54,6 +54,7 @@ use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::TelemetryAuthMode;
+use codex_protocol::AgentPath;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -69,6 +70,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::NetworkApprovalProtocol;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
@@ -4779,6 +4781,40 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     .await;
 
     assert_eq!(sess.get_pending_input().await, vec![queued_item]);
+}
+
+#[tokio::test]
+async fn on_task_finished_records_queue_only_mailbox_mail_without_restart() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let communication = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker path should parse"),
+        AgentPath::root(),
+        Vec::new(),
+        "queued completion".to_string(),
+        /*trigger_turn*/ false,
+    );
+    sess.enqueue_mailbox_communication(communication.clone());
+
+    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+        .await;
+    sleep(Duration::from_millis(50)).await;
+
+    assert!(!sess.has_pending_input().await);
+    assert!(sess.active_turn.lock().await.is_none());
+    assert_eq!(
+        sess.clone_history().await.raw_items(),
+        &[ResponseItem::from(communication.to_response_input_item())],
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

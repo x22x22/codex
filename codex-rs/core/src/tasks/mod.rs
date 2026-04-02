@@ -356,6 +356,20 @@ impl Session {
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
         }
+
+        let mailbox_drain = self.drain_mailbox().await;
+        let mut next_turn_mailbox_input = Vec::new();
+        let mut queue_mail_for_next_turn = false;
+        for mail in mailbox_drain.mails {
+            let mailbox_input = mail.to_response_input_item();
+            queue_mail_for_next_turn |= mail.trigger_turn;
+            if queue_mail_for_next_turn {
+                next_turn_mailbox_input.push(mailbox_input);
+            } else {
+                pending_input.push(mailbox_input);
+            }
+        }
+
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
                 match inspect_pending_input(self, &turn_context, pending_input_item).await {
@@ -370,6 +384,11 @@ impl Session {
                 }
             }
         }
+        if mailbox_drain.saw_trigger_turn {
+            self.queue_response_items_for_next_turn(next_turn_mailbox_input)
+                .await;
+        }
+
         // Emit token usage metrics.
         if let Some(token_usage_at_turn_start) = token_usage_at_turn_start {
             // TODO(jif): drop this

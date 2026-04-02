@@ -19,6 +19,11 @@ pub(crate) struct MailboxReceiver {
     pending_mails: VecDeque<InterAgentCommunication>,
 }
 
+pub(crate) struct MailboxDrain {
+    pub(crate) mails: Vec<InterAgentCommunication>,
+    pub(crate) saw_trigger_turn: bool,
+}
+
 impl Mailbox {
     pub(crate) fn new() -> (Self, MailboxReceiver) {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -65,9 +70,14 @@ impl MailboxReceiver {
         self.pending_mails.iter().any(|mail| mail.trigger_turn)
     }
 
-    pub(crate) fn drain(&mut self) -> Vec<InterAgentCommunication> {
+    pub(crate) fn drain(&mut self) -> MailboxDrain {
         self.sync_pending_mails();
-        self.pending_mails.drain(..).collect()
+        let mails = self.pending_mails.drain(..).collect::<Vec<_>>();
+        let saw_trigger_turn = mails.iter().any(|mail| mail.trigger_turn);
+        MailboxDrain {
+            mails,
+            saw_trigger_turn,
+        }
     }
 }
 
@@ -134,28 +144,38 @@ mod tests {
         mailbox.send(mail_one.clone());
         mailbox.send(mail_two.clone());
 
-        assert_eq!(receiver.drain(), vec![mail_one, mail_two]);
+        let drain = receiver.drain();
+        assert_eq!(drain.mails, vec![mail_one, mail_two]);
+        assert!(!drain.saw_trigger_turn);
         assert!(!receiver.has_pending());
     }
 
     #[tokio::test]
-    async fn mailbox_tracks_pending_trigger_turn_mail() {
+    async fn mailbox_drain_tracks_pending_trigger_turn_mail() {
         let (mailbox, mut receiver) = Mailbox::new();
 
-        mailbox.send(make_mail(
+        let queue_only_mail = make_mail(
             AgentPath::root(),
             AgentPath::try_from("/root/worker").expect("agent path"),
             "queued",
             /*trigger_turn*/ false,
-        ));
-        assert!(!receiver.has_pending_trigger_turn());
+        );
+        mailbox.send(queue_only_mail.clone());
 
-        mailbox.send(make_mail(
+        let drain = receiver.drain();
+        assert_eq!(drain.mails, vec![queue_only_mail]);
+        assert!(!drain.saw_trigger_turn);
+
+        let trigger_turn_mail = make_mail(
             AgentPath::root(),
             AgentPath::try_from("/root/worker").expect("agent path"),
             "wake",
             /*trigger_turn*/ true,
-        ));
-        assert!(receiver.has_pending_trigger_turn());
+        );
+        mailbox.send(trigger_turn_mail.clone());
+
+        let drain = receiver.drain();
+        assert_eq!(drain.mails, vec![trigger_turn_mail]);
+        assert!(drain.saw_trigger_turn);
     }
 }

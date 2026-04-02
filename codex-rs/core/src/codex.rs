@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicU64;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
+use crate::agent::MailboxDrain;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
@@ -4052,6 +4053,10 @@ impl Session {
         self.mailbox.send(communication);
     }
 
+    pub(crate) async fn drain_mailbox(&self) -> MailboxDrain {
+        self.mailbox_rx.lock().await.drain()
+    }
+
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
         self.mailbox_rx.lock().await.has_pending_trigger_turn()
     }
@@ -4080,9 +4085,9 @@ impl Session {
             }
         };
         let mailbox_items = {
-            let mut mailbox_rx = self.mailbox_rx.lock().await;
-            mailbox_rx
-                .drain()
+            self.drain_mailbox()
+                .await
+                .mails
                 .into_iter()
                 .map(|mail| mail.to_response_input_item())
                 .collect::<Vec<_>>()
@@ -4099,7 +4104,6 @@ impl Session {
     }
 
     /// Queue response items to be injected into the next active turn created for this session.
-    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
