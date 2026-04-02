@@ -341,11 +341,7 @@ impl Session {
                 && at.remove_task(&turn_context.sub_id)
             {
                 should_clear_active_turn = true;
-                let turn_state = Arc::clone(&at.turn_state);
-                if should_clear_active_turn {
-                    *active = None;
-                }
-                Some(turn_state)
+                Some(Arc::clone(&at.turn_state))
             } else {
                 None
             }
@@ -369,6 +365,10 @@ impl Session {
                 pending_input.push(mailbox_input);
             }
         }
+        if mailbox_drain.saw_trigger_turn {
+            self.queue_response_items_for_next_turn(next_turn_mailbox_input)
+                .await;
+        }
 
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
@@ -383,10 +383,6 @@ impl Session {
                     }
                 }
             }
-        }
-        if mailbox_drain.saw_trigger_turn {
-            self.queue_response_items_for_next_turn(next_turn_mailbox_input)
-                .await;
         }
 
         // Emit token usage metrics.
@@ -475,6 +471,7 @@ impl Session {
         self.send_event(turn_context.as_ref(), event).await;
 
         if should_clear_active_turn {
+            *self.active_turn.lock().await = None;
             let session = Arc::clone(self);
             let _scheduler = tokio::task::spawn_blocking(move || {
                 tokio::runtime::Handle::current().block_on(async move {

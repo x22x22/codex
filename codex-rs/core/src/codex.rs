@@ -4754,28 +4754,45 @@ mod handlers {
         };
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
-        match sess
-            .steer_input(items.clone(), /*expected_turn_id*/ None)
-            .await
-        {
-            Ok(_) => current_context.session_telemetry.user_prompt(&items),
-            Err(SteerInputError::NoActiveTurn(items)) => {
-                current_context.session_telemetry.user_prompt(&items);
-                sess.refresh_mcp_servers_if_requested(&current_context)
+        loop {
+            match sess
+                .steer_input(items.clone(), /*expected_turn_id*/ None)
+                .await
+            {
+                Ok(_) => {
+                    current_context.session_telemetry.user_prompt(&items);
+                    break;
+                }
+                Err(SteerInputError::NoActiveTurn(input_items)) => {
+                    let has_pending_turn_start_reservation = sess
+                        .active_turn
+                        .lock()
+                        .await
+                        .as_ref()
+                        .is_some_and(|active_turn| active_turn.tasks.is_empty());
+                    if has_pending_turn_start_reservation {
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                    current_context.session_telemetry.user_prompt(&input_items);
+                    sess.refresh_mcp_servers_if_requested(&current_context)
+                        .await;
+                    sess.spawn_task(
+                        Arc::clone(&current_context),
+                        input_items,
+                        crate::tasks::RegularTask::new(),
+                    )
                     .await;
-                sess.spawn_task(
-                    Arc::clone(&current_context),
-                    items,
-                    crate::tasks::RegularTask::new(),
-                )
-                .await;
-            }
-            Err(err) => {
-                sess.send_event_raw(Event {
-                    id: sub_id,
-                    msg: EventMsg::Error(err.to_error_event()),
-                })
-                .await;
+                    break;
+                }
+                Err(err) => {
+                    sess.send_event_raw(Event {
+                        id: sub_id,
+                        msg: EventMsg::Error(err.to_error_event()),
+                    })
+                    .await;
+                    break;
+                }
             }
         }
     }
