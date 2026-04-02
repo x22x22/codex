@@ -86,7 +86,6 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 pub type JsonSchema = codex_tools::JsonSchema;
 
@@ -444,9 +443,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+    use std::sync::Arc;
     let mut builder = ToolRegistryBuilder::new();
 
     let shell_handler = Arc::new(ShellHandler);
+    let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
@@ -499,7 +500,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     if config.has_attached_executor {
-        let unified_exec_handler = Arc::new(UnifiedExecHandler);
         match &config.shell_type {
             ConfigShellToolType::Default => {
                 push_tool_spec(
