@@ -1,5 +1,4 @@
 use crate::agent::AgentStatus;
-use crate::agent::status::is_final;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
@@ -17,6 +16,8 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::CollabAgentRef;
+use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
 use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
@@ -27,12 +28,27 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use tokio::time::Duration;
+use tokio::time::Instant;
 use tokio::time::timeout;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
+const ASYNC_QUOTA_EXHAUSTION_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
+
+pub(crate) enum SpawnAttemptRetryDecision {
+    Accept(AgentStatus),
+    Retry(AgentStatus),
+}
+
+pub(crate) fn spawn_attempt_event_call_id(call_id: &str, attempt_index: usize) -> String {
+    if attempt_index == 0 {
+        call_id.to_string()
+    } else {
+        format!("{call_id}#{}", attempt_index + 1)
+    }
+}
 
 pub(crate) fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError> {
     match payload {
@@ -98,7 +114,7 @@ pub(crate) fn collect_spawn_agent_model_candidates(
             .iter()
             .map(|candidate| SpawnAgentModelCandidate {
                 model: Some(candidate.model.clone()),
-                reasoning_effort: candidate.reasoning_effort,
+                reasoning_effort: candidate.reasoning_effort.or(requested_reasoning_effort),
             })
             .collect();
     }
@@ -113,6 +129,30 @@ pub(crate) fn collect_spawn_agent_model_candidates(
     candidates
 }
 
+pub(crate) async fn close_quota_exhausted_spawn_attempt(
+    agent_control: &crate::agent::control::AgentControl,
+    thread_id: ThreadId,
+    retry_status: AgentStatus,
+) -> SpawnAttemptRetryDecision {
+    let retry_decision =
+        recheck_spawn_attempt_retry_decision(retry_status, thread_id, agent_control).await;
+    let SpawnAttemptRetryDecision::Retry(status) = retry_decision else {
+        return retry_decision;
+    };
+
+    // There is still a narrow TOCTOU window: a child can leave `PendingInit` after the final
+    // status read above and before `close_agent` runs. `AgentControl` does not currently expose
+    // a compare-and-close primitive, so this is the strongest local mitigation available.
+    if let Err(err) = agent_control.close_agent(thread_id).await
+        && !matches!(
+            err,
+            CodexErr::ThreadNotFound(_) | CodexErr::InternalAgentDied
+        )
+    {
+        tracing::warn!("failed to close quota-exhausted spawn attempt {thread_id}: {err}");
+    }
+    SpawnAttemptRetryDecision::Retry(status)
+}
 pub(crate) fn spawn_should_retry_on_quota_exhaustion(error: &CodexErr) -> bool {
     matches!(
         error,
@@ -120,36 +160,93 @@ pub(crate) fn spawn_should_retry_on_quota_exhaustion(error: &CodexErr) -> bool {
     )
 }
 
-pub(crate) async fn spawn_should_retry_on_async_quota_exhaustion(
+pub(crate) async fn probe_spawn_attempt_for_async_quota_exhaustion(
     thread_status: AgentStatus,
     thread_id: ThreadId,
     agent_control: &crate::agent::control::AgentControl,
-) -> bool {
-    if is_final(&thread_status) && spawn_should_retry_on_quota_exhaustion_status(&thread_status) {
-        return true;
+) -> SpawnAttemptRetryDecision {
+    match thread_status {
+        AgentStatus::Completed(_)
+        | AgentStatus::Errored(_)
+        | AgentStatus::Shutdown
+        | AgentStatus::NotFound => {
+            return retry_decision_for_final_spawn_status(thread_status);
+        }
+        AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted => {}
     }
 
     let Ok(mut status_rx) = agent_control.subscribe_status(thread_id).await else {
-        return false;
+        return match thread_status {
+            AgentStatus::Running | AgentStatus::Interrupted => {
+                SpawnAttemptRetryDecision::Accept(thread_status)
+            }
+            _ => SpawnAttemptRetryDecision::Retry(AgentStatus::PendingInit),
+        };
     };
-    let mut status = status_rx.borrow_and_update().clone();
-    if is_final(&status) && spawn_should_retry_on_quota_exhaustion_status(&status) {
-        return true;
-    }
+    let deadline = Instant::now() + ASYNC_QUOTA_EXHAUSTION_STATUS_TIMEOUT;
 
     loop {
-        if timeout(Duration::from_millis(250), status_rx.changed())
-            .await
-            .is_err()
-        {
-            break;
+        let status = status_rx.borrow_and_update().clone();
+        match status {
+            AgentStatus::Completed(_)
+            | AgentStatus::Errored(_)
+            | AgentStatus::Shutdown
+            | AgentStatus::NotFound => {
+                return retry_decision_for_final_spawn_status(status);
+            }
+            AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted => {}
         }
-        status = status_rx.borrow().clone();
-        if is_final(&status) {
-            return spawn_should_retry_on_quota_exhaustion_status(&status);
+
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return match status {
+                AgentStatus::PendingInit => {
+                    SpawnAttemptRetryDecision::Retry(AgentStatus::PendingInit)
+                }
+                AgentStatus::Running | AgentStatus::Interrupted => {
+                    SpawnAttemptRetryDecision::Accept(status)
+                }
+                AgentStatus::Completed(_)
+                | AgentStatus::Errored(_)
+                | AgentStatus::Shutdown
+                | AgentStatus::NotFound => retry_decision_for_final_spawn_status(status),
+            };
+        };
+        match timeout(remaining, status_rx.changed()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => return SpawnAttemptRetryDecision::Retry(AgentStatus::PendingInit),
+            Err(_) => return SpawnAttemptRetryDecision::Retry(AgentStatus::PendingInit),
         }
     }
-    false
+}
+
+pub(crate) async fn recheck_spawn_attempt_retry_decision(
+    status: AgentStatus,
+    thread_id: ThreadId,
+    agent_control: &crate::agent::control::AgentControl,
+) -> SpawnAttemptRetryDecision {
+    if !matches!(status, AgentStatus::PendingInit) {
+        return SpawnAttemptRetryDecision::Retry(status);
+    }
+
+    let latest_status = agent_control.get_status(thread_id).await;
+    match latest_status {
+        AgentStatus::Running | AgentStatus::Interrupted => {
+            SpawnAttemptRetryDecision::Accept(latest_status)
+        }
+        AgentStatus::Completed(_)
+        | AgentStatus::Errored(_)
+        | AgentStatus::Shutdown
+        | AgentStatus::NotFound => retry_decision_for_final_spawn_status(latest_status),
+        AgentStatus::PendingInit => SpawnAttemptRetryDecision::Retry(AgentStatus::PendingInit),
+    }
+}
+
+fn retry_decision_for_final_spawn_status(status: AgentStatus) -> SpawnAttemptRetryDecision {
+    if spawn_should_retry_on_quota_exhaustion_status(&status) {
+        SpawnAttemptRetryDecision::Retry(status)
+    } else {
+        SpawnAttemptRetryDecision::Accept(status)
+    }
 }
 
 fn spawn_should_retry_on_quota_exhaustion_status(status: &AgentStatus) -> bool {
@@ -210,6 +307,88 @@ pub(crate) fn collab_spawn_error(err: CodexErr) -> FunctionCallError {
         CodexErr::UnsupportedOperation(message) => FunctionCallError::RespondToModel(message),
         err => FunctionCallError::RespondToModel(format!("collab spawn failed: {err}")),
     }
+}
+
+pub(crate) async fn send_collab_agent_spawn_error_event(
+    session: &Session,
+    turn: &TurnContext,
+    call_id: String,
+    prompt: String,
+    model: String,
+    reasoning_effort: ReasoningEffort,
+    err: &CodexErr,
+) {
+    session
+        .send_event(
+            turn,
+            CollabAgentSpawnEndEvent {
+                call_id,
+                sender_thread_id: session.conversation_id,
+                new_thread_id: None,
+                new_agent_nickname: None,
+                new_agent_role: None,
+                prompt,
+                model,
+                reasoning_effort,
+                status: match err {
+                    CodexErr::ThreadNotFound(_) => AgentStatus::NotFound,
+                    err => AgentStatus::Errored(err.to_string()),
+                },
+            }
+            .into(),
+        )
+        .await;
+}
+
+pub(crate) async fn send_collab_agent_spawn_begin_event(
+    session: &Session,
+    turn: &TurnContext,
+    call_id: String,
+    prompt: String,
+    model: String,
+    reasoning_effort: ReasoningEffort,
+) {
+    session
+        .send_event(
+            turn,
+            CollabAgentSpawnBeginEvent {
+                call_id,
+                sender_thread_id: session.conversation_id,
+                prompt,
+                model,
+                reasoning_effort,
+            }
+            .into(),
+        )
+        .await;
+}
+
+pub(crate) async fn send_collab_agent_spawn_retry_preempted_event(
+    session: &Session,
+    turn: &TurnContext,
+    call_id: String,
+    prompt: String,
+    model: String,
+    reasoning_effort: ReasoningEffort,
+    status: AgentStatus,
+) {
+    session
+        .send_event(
+            turn,
+            CollabAgentSpawnEndEvent {
+                call_id,
+                sender_thread_id: session.conversation_id,
+                new_thread_id: None,
+                new_agent_nickname: None,
+                new_agent_role: None,
+                prompt,
+                model,
+                reasoning_effort,
+                status,
+            }
+            .into(),
+        )
+        .await;
 }
 
 pub(crate) fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {

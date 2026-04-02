@@ -4,6 +4,14 @@ use codex_core::config::AgentRoleConfig;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -17,6 +25,8 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -39,7 +49,7 @@ const ROLE_MODEL: &str = "gpt-5.1-codex-max";
 const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
 const FALLBACK_MODEL_A: &str = "gpt-5.1";
 const FALLBACK_REASONING_EFFORT_A: ReasoningEffort = ReasoningEffort::Low;
-const FALLBACK_MODEL_B: &str = "gpt-5.2";
+const FALLBACK_MODEL_B: &str = "gpt-5.2-codex";
 const FALLBACK_REASONING_EFFORT_B: ReasoningEffort = ReasoningEffort::Medium;
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
@@ -158,7 +168,7 @@ fn role_block(description: &str, role_name: &str) -> Option<String> {
 }
 
 async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let ids = test.thread_manager.list_thread_ids().await;
         if let Some(spawned_id) = ids
@@ -188,6 +198,61 @@ async fn wait_for_requests(
         }
         sleep(Duration::from_millis(10)).await;
     }
+}
+
+async fn submit_turn_and_wait_for_spawn_attempt_events(
+    test: &TestCodex,
+    prompt: &str,
+    expected_attempts: usize,
+) -> Result<Vec<(CollabAgentSpawnBeginEvent, CollabAgentSpawnEndEvent)>> {
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let turn_id = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    let mut spawn_events = Vec::with_capacity(expected_attempts);
+    let mut pending_begin = None;
+    loop {
+        let event = wait_for_event(&test.codex, |_| true).await;
+        match event {
+            EventMsg::CollabAgentSpawnBegin(event) => {
+                pending_begin = Some(event);
+            }
+            EventMsg::CollabAgentSpawnEnd(event) => {
+                let begin_event = pending_begin
+                    .take()
+                    .ok_or_else(|| anyhow::anyhow!("spawn end event without matching begin"))?;
+                spawn_events.push((begin_event, event));
+            }
+            EventMsg::TurnComplete(event) if event.turn_id == turn_id => break,
+            _ => {}
+        }
+    }
+    if let Some(begin_event) = pending_begin {
+        anyhow::bail!("spawn begin event without matching end: {begin_event:?}");
+    }
+    assert_eq!(spawn_events.len(), expected_attempts);
+    Ok(spawn_events)
 }
 
 async fn setup_turn_one_with_spawned_child(
@@ -625,7 +690,52 @@ async fn spawn_agent_model_fallback_list_retries_after_quota_exhaustion() -> Res
     });
     let test = builder.build(&server).await?;
 
-    test.submit_turn(TURN_1_PROMPT).await?;
+    let spawn_events = submit_turn_and_wait_for_spawn_attempt_events(
+        &test,
+        TURN_1_PROMPT,
+        /*expected_attempts*/ 2,
+    )
+    .await?;
+
+    let (quota_begin_event, quota_end_event) = &spawn_events[0];
+    assert_eq!(quota_begin_event.call_id, SPAWN_CALL_ID);
+    assert_eq!(quota_begin_event.prompt, CHILD_PROMPT);
+    assert_eq!(quota_begin_event.model, FALLBACK_MODEL_A);
+    assert_eq!(
+        quota_begin_event.reasoning_effort,
+        FALLBACK_REASONING_EFFORT_A
+    );
+    assert_eq!(quota_end_event.call_id, SPAWN_CALL_ID);
+    assert_eq!(quota_end_event.new_thread_id, None);
+    assert_eq!(quota_end_event.new_agent_nickname, None);
+    assert_eq!(quota_end_event.new_agent_role, None);
+    assert_eq!(quota_end_event.prompt, CHILD_PROMPT);
+    assert_eq!(quota_end_event.model, FALLBACK_MODEL_A);
+    assert_eq!(
+        quota_end_event.reasoning_effort,
+        FALLBACK_REASONING_EFFORT_A
+    );
+    match &quota_end_event.status {
+        AgentStatus::PendingInit => {}
+        AgentStatus::Errored(message) if message.to_lowercase().contains("quota") => {}
+        status => panic!("unexpected first-attempt retry status: {status:?}"),
+    }
+
+    let (fallback_begin_event, fallback_end_event) = &spawn_events[1];
+    assert_eq!(fallback_begin_event.call_id, format!("{SPAWN_CALL_ID}#2"));
+    assert_eq!(fallback_begin_event.prompt, CHILD_PROMPT);
+    assert_eq!(fallback_begin_event.model, FALLBACK_MODEL_B);
+    assert_eq!(
+        fallback_begin_event.reasoning_effort,
+        FALLBACK_REASONING_EFFORT_B
+    );
+    assert_eq!(fallback_end_event.call_id, format!("{SPAWN_CALL_ID}#2"));
+    assert_eq!(fallback_end_event.prompt, CHILD_PROMPT);
+    assert_eq!(fallback_end_event.model, FALLBACK_MODEL_B);
+    assert_eq!(
+        fallback_end_event.reasoning_effort,
+        FALLBACK_REASONING_EFFORT_B
+    );
 
     let quota_requests = quota_child_attempt
         .requests()
@@ -649,8 +759,8 @@ async fn spawn_agent_model_fallback_list_retries_after_quota_exhaustion() -> Res
         );
     }
 
-    let fallback_requests = fallback_child_attempt
-        .requests()
+    let fallback_requests = wait_for_requests(&fallback_child_attempt)
+        .await?
         .into_iter()
         .filter(|request| {
             request.body_json().get("model").and_then(Value::as_str) == Some(FALLBACK_MODEL_B)

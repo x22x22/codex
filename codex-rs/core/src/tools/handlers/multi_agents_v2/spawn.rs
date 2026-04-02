@@ -50,29 +50,17 @@ impl ToolHandler for Handler {
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
         }
-        session
-            .send_event(
-                &turn,
-                CollabAgentSpawnBeginEvent {
-                    call_id: call_id.clone(),
-                    sender_thread_id: session.conversation_id,
-                    prompt: prompt.clone(),
-                    model: args
-                        .model_fallback_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .map(|candidate| candidate.model.clone())
-                        .unwrap_or_else(|| args.model.clone().unwrap_or_default()),
-                    reasoning_effort: args
-                        .model_fallback_list
-                        .as_ref()
-                        .and_then(|list| list.first())
-                        .and_then(|candidate| candidate.reasoning_effort)
-                        .unwrap_or_else(|| args.reasoning_effort.unwrap_or_default()),
-                }
-                .into(),
-            )
-            .await;
+        let mut candidates_to_try = collect_spawn_agent_model_candidates(
+            args.model_fallback_list.as_ref(),
+            args.model.as_deref(),
+            args.reasoning_effort,
+        );
+        if candidates_to_try.is_empty() {
+            candidates_to_try.push(SpawnAgentModelCandidate {
+                model: None,
+                reasoning_effort: None,
+            });
+        }
         let config =
             build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
 
@@ -117,6 +105,18 @@ impl ToolHandler for Handler {
 
         let mut spawn_result = None;
         for (idx, candidate) in candidates_to_try.iter().enumerate() {
+            let attempt_call_id = spawn_attempt_event_call_id(&call_id, idx);
+            let candidate_model = candidate.model.clone().unwrap_or_default();
+            let candidate_reasoning_effort = candidate.reasoning_effort.unwrap_or_default();
+            send_collab_agent_spawn_begin_event(
+                &session,
+                &turn,
+                attempt_call_id.clone(),
+                prompt.clone(),
+                candidate_model.clone(),
+                candidate_reasoning_effort,
+            )
+            .await;
             let mut candidate_config = config.clone();
             apply_requested_spawn_agent_model_overrides(
                 &session,
@@ -146,20 +146,57 @@ impl ToolHandler for Handler {
                 .await;
             match attempt_result {
                 Ok(spawned_agent) => {
-                    if spawn_should_retry_on_async_quota_exhaustion(
-                        spawned_agent.status.clone(),
-                        spawned_agent.thread_id,
-                        &session.services.agent_control,
-                    )
-                    .await
-                        && idx + 1 < candidates_to_try.len()
-                    {
-                        continue;
-                    }
-                    spawn_result = Some(spawned_agent);
+                    let status = if idx + 1 < candidates_to_try.len() {
+                        match probe_spawn_attempt_for_async_quota_exhaustion(
+                            spawned_agent.status.clone(),
+                            spawned_agent.thread_id,
+                            &session.services.agent_control,
+                        )
+                        .await
+                        {
+                            SpawnAttemptRetryDecision::Accept(status) => status,
+                            SpawnAttemptRetryDecision::Retry(retry_status) => {
+                                match close_quota_exhausted_spawn_attempt(
+                                    &session.services.agent_control,
+                                    spawned_agent.thread_id,
+                                    retry_status,
+                                )
+                                .await
+                                {
+                                    SpawnAttemptRetryDecision::Accept(status) => status,
+                                    SpawnAttemptRetryDecision::Retry(status) => {
+                                        send_collab_agent_spawn_retry_preempted_event(
+                                            &session,
+                                            &turn,
+                                            attempt_call_id,
+                                            prompt.clone(),
+                                            candidate_model,
+                                            candidate_reasoning_effort,
+                                            status,
+                                        )
+                                        .await;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        spawned_agent.status.clone()
+                    };
+                    spawn_result = Some((spawned_agent, status, attempt_call_id));
                     break;
                 }
                 Err(err) => {
+                    send_collab_agent_spawn_error_event(
+                        &session,
+                        &turn,
+                        attempt_call_id,
+                        prompt.clone(),
+                        candidate_model,
+                        candidate_reasoning_effort,
+                        &err,
+                    )
+                    .await;
                     if spawn_should_retry_on_quota_exhaustion(&err)
                         && idx + 1 < candidates_to_try.len()
                     {
@@ -169,14 +206,13 @@ impl ToolHandler for Handler {
                 }
             }
         }
-        let Some(spawned_agent) = spawn_result else {
+        let Some((spawned_agent, status, spawn_event_call_id)) = spawn_result else {
             return Err(FunctionCallError::RespondToModel(
                 "No spawn attempts were executed".to_string(),
             ));
         };
         let new_thread_id = Some(spawned_agent.thread_id);
         let new_agent_metadata = Some(spawned_agent.metadata.clone());
-        let status = spawned_agent.status.clone();
         let agent_snapshot = match new_thread_id {
             Some(thread_id) => {
                 session
@@ -214,7 +250,7 @@ impl ToolHandler for Handler {
             .send_event(
                 &turn,
                 CollabAgentSpawnEndEvent {
-                    call_id,
+                    call_id: spawn_event_call_id,
                     sender_thread_id: session.conversation_id,
                     new_thread_id,
                     new_agent_nickname,
