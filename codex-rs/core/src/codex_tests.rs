@@ -4784,9 +4784,29 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 }
 
 #[tokio::test]
-async fn inject_response_items_rejects_pending_turn_start_reservation() {
+async fn inject_response_items_accepts_pending_turn_start_reservation() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     *sess.active_turn.lock().await = Some(ActiveTurn::default());
+    let pending_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "queued during turn-complete".to_string(),
+        }],
+    };
+
+    sess.inject_response_items(vec![pending_item.clone()])
+        .await
+        .expect("starting active turn reservation should accept injected items");
+
+    assert_eq!(sess.get_pending_input().await, vec![pending_item]);
+}
+
+#[tokio::test]
+async fn inject_response_items_rejects_finalizing_turn_reservation() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let mut finalizing_turn = ActiveTurn::default();
+    finalizing_turn.accepts_input_without_running_tasks = false;
+    *sess.active_turn.lock().await = Some(finalizing_turn);
     let pending_item = ResponseInputItem::Message {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
@@ -4797,7 +4817,7 @@ async fn inject_response_items_rejects_pending_turn_start_reservation() {
     let err = sess
         .inject_response_items(vec![pending_item.clone()])
         .await
-        .expect_err("empty active turn reservation should reject injected items");
+        .expect_err("finalizing active turn reservation should reject injected items");
 
     assert_eq!(err, vec![pending_item]);
 }

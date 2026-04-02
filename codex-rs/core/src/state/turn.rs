@@ -27,6 +27,7 @@ use codex_protocol::protocol::TokenUsage;
 pub(crate) struct ActiveTurn {
     pub(crate) tasks: IndexMap<String, RunningTask>,
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
+    pub(crate) accepts_input_without_running_tasks: bool,
 }
 
 impl Default for ActiveTurn {
@@ -34,6 +35,7 @@ impl Default for ActiveTurn {
         Self {
             tasks: IndexMap::new(),
             turn_state: Arc::new(Mutex::new(TurnState::default())),
+            accepts_input_without_running_tasks: true,
         }
     }
 }

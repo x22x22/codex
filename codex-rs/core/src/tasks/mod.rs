@@ -198,6 +198,7 @@ impl Session {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
             debug_assert!(turn.tasks.is_empty());
+            turn.accepts_input_without_running_tasks = true;
             Arc::clone(&turn.turn_state)
         };
         {
@@ -335,18 +336,19 @@ impl Session {
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_tool_calls = 0_u64;
-        let turn_state = {
+        let finalizing_turn_state = {
             let mut active = self.active_turn.lock().await;
             if let Some(at) = active.as_mut()
                 && at.remove_task(&turn_context.sub_id)
             {
                 should_clear_active_turn = true;
+                at.accepts_input_without_running_tasks = false;
                 Some(Arc::clone(&at.turn_state))
             } else {
                 None
             }
         };
-        if let Some(turn_state) = turn_state {
+        if let Some(turn_state) = finalizing_turn_state.as_ref() {
             let mut ts = turn_state.lock().await;
             pending_input = ts.take_pending_input();
             turn_tool_calls = ts.tool_calls;
@@ -464,6 +466,19 @@ impl Session {
                 &[("token_type", "reasoning_output"), tmp_mem],
             );
         }
+        if should_clear_active_turn
+            && let Some(turn_state) = finalizing_turn_state.as_ref()
+        {
+            let mut active = self.active_turn.lock().await;
+            if let Some(at) = active.as_ref()
+                && Arc::ptr_eq(&at.turn_state, turn_state)
+                && at.tasks.is_empty()
+                && !at.accepts_input_without_running_tasks
+            {
+                *active = None;
+            }
+        }
+
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
@@ -471,7 +486,6 @@ impl Session {
         self.send_event(turn_context.as_ref(), event).await;
 
         if should_clear_active_turn {
-            *self.active_turn.lock().await = None;
             let session = Arc::clone(self);
             let _scheduler = tokio::task::spawn_blocking(move || {
                 tokio::runtime::Handle::current().block_on(async move {
