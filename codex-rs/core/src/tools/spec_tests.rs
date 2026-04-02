@@ -988,6 +988,53 @@ fn js_repl_enabled_adds_tools() {
 }
 
 #[test]
+fn no_attached_executor_hides_executor_backed_tools() {
+    let model_info = model_info_from_models_json("gpt-5-codex");
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    features.enable(Feature::JsRepl);
+    let available_models = Vec::new();
+    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_has_attached_executor(false);
+    tools_config
+        .experimental_supported_tools
+        .push("list_dir".to_string());
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(std::collections::HashMap::new()),
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+
+    if let Some(shell_tool) = shell_tool_name(&tools_config) {
+        assert_lacks_tool_name(&tools, shell_tool);
+    }
+    for absent in [
+        "exec_command",
+        "write_stdin",
+        "apply_patch",
+        "list_dir",
+        VIEW_IMAGE_TOOL_NAME,
+        "js_repl",
+        "js_repl_reset",
+    ] {
+        assert_lacks_tool_name(&tools, absent);
+    }
+
+    assert_contains_tool_names(&tools, &["update_plan", "request_user_input", "web_search"]);
+}
+
+#[test]
 fn image_generation_tools_require_feature_and_supported_model() {
     let config = test_config();
     let mut supported_model_info =

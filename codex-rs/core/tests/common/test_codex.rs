@@ -478,9 +478,9 @@ impl TestCodexBuilder {
         test_env: TestEnv,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
-        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
-            test_env.exec_server_url().map(str::to_owned),
-        ));
+        let environment_manager = Arc::new(
+            codex_exec_server::EnvironmentManager::from_environment(test_env.environment()),
+        );
         let thread_manager = if config.model_catalog.is_some() {
             ThreadManager::new(
                 &config,
