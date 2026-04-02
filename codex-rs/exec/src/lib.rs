@@ -1766,7 +1766,7 @@ mod tests {
             StartupCwd {
                 resolved_cwd: Some(cwd.path().to_path_buf()),
                 config_cwd: AbsolutePathBuf::from_absolute_path(
-                    &cwd.path().canonicalize().expect("canonicalize cwd")
+                    cwd.path().canonicalize().expect("canonicalize cwd")
                 )
                 .expect("absolute cwd"),
             }
