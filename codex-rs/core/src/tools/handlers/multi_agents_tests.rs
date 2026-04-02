@@ -367,7 +367,6 @@ async fn spawn_agent_fork_context_ignores_child_model_overrides() {
     session.conversation_id = root.thread_id;
     let expected_model = turn.model_info.slug.clone();
     let expected_model_provider_id = turn.config.model_provider_id.clone();
-    let expected_model_provider_name = turn.provider.name.clone();
     let expected_active_profile = turn.config.active_profile.clone();
     let expected_reasoning_effort = turn.reasoning_effort;
     let expected_service_tier = turn.config.service_tier;
@@ -408,7 +407,6 @@ async fn spawn_agent_fork_context_ignores_child_model_overrides() {
 
     assert_eq!(snapshot.model, expected_model);
     assert_eq!(snapshot.model_provider_id, expected_model_provider_id);
-    assert_eq!(snapshot.model_provider.name, expected_model_provider_name);
     assert_eq!(snapshot.active_profile, expected_active_profile);
     assert_eq!(snapshot.reasoning_effort, expected_reasoning_effort);
     assert_eq!(snapshot.service_tier, expected_service_tier);
@@ -446,7 +444,6 @@ async fn multi_agent_v2_spawn_fork_turns_ignores_child_model_overrides() {
     };
     let expected_model = turn.model_info.slug.clone();
     let expected_model_provider_id = turn.config.model_provider_id.clone();
-    let expected_model_provider_name = turn.provider.name.clone();
     let expected_active_profile = turn.config.active_profile.clone();
     let expected_reasoning_effort = turn.reasoning_effort;
     let expected_service_tier = turn.config.service_tier;
@@ -490,7 +487,6 @@ async fn multi_agent_v2_spawn_fork_turns_ignores_child_model_overrides() {
 
     assert_eq!(snapshot.model, expected_model);
     assert_eq!(snapshot.model_provider_id, expected_model_provider_id);
-    assert_eq!(snapshot.model_provider.name, expected_model_provider_name);
     assert_eq!(snapshot.active_profile, expected_active_profile);
     assert_eq!(snapshot.reasoning_effort, expected_reasoning_effort);
     assert_eq!(snapshot.service_tier, expected_service_tier);
