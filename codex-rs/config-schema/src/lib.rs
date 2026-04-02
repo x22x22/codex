@@ -59,9 +59,8 @@ pub fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
 }
 
 fn preserve_schema_presentation(value: Value) -> anyhow::Result<Value> {
-    let template_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/config.schema.json");
-    let template = std::fs::read_to_string(template_path)?;
-    let template = serde_json::from_str(&template)?;
+    let template = include_str!("../../core/config.schema.json");
+    let template = serde_json::from_str(template)?;
     Ok(preserve_schema_presentation_from_template(value, &template))
 }
 
