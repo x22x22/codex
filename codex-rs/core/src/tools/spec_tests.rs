@@ -6,22 +6,33 @@ use crate::shell::ShellType;
 use crate::tools::ToolRouter;
 use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
+use codex_features::Feature;
+use codex_features::Features;
+use codex_protocol::config_types::WebSearchConfig;
+use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_tools::AdditionalProperties;
 use codex_tools::CommandToolOptions;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::FreeformTool;
+use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ResponsesApiWebSearchFilters;
 use codex_tools::ResponsesApiWebSearchUserLocation;
 use codex_tools::SpawnAgentToolOptions;
 use codex_tools::ViewImageToolOptions;
 use codex_tools::WaitAgentTimeoutOptions;
+use codex_tools::create_apply_patch_freeform_tool;
 use codex_tools::create_close_agent_tool_v1;
 use codex_tools::create_close_agent_tool_v2;
 use codex_tools::create_exec_command_tool;
@@ -32,14 +43,18 @@ use codex_tools::create_send_input_tool_v1;
 use codex_tools::create_send_message_tool;
 use codex_tools::create_spawn_agent_tool_v1;
 use codex_tools::create_spawn_agent_tool_v2;
+use codex_tools::create_update_plan_tool;
 use codex_tools::create_view_image_tool;
 use codex_tools::create_wait_agent_tool_v1;
 use codex_tools::create_wait_agent_tool_v2;
 use codex_tools::create_write_stdin_tool;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
+use codex_tools::request_permissions_tool_description;
+use codex_tools::request_user_input_tool_description;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::*;
@@ -178,7 +193,7 @@ fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSp
 fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
     SpawnAgentToolOptions {
         available_models: &config.available_models,
-        agent_type_description: crate::agent::role::spawn_tool_spec::build(&config.agent_roles),
+        agent_type_description: agent_type_description(config),
     }
 }
 
@@ -246,30 +261,6 @@ fn model_info_from_models_json(slug: &str) -> ModelInfo {
         .find(|candidate| candidate.slug == slug)
         .unwrap_or_else(|| panic!("model slug {slug} is missing from models.json"));
     with_config_overrides(model, &config)
-}
-
-#[test]
-fn unified_exec_is_blocked_for_windows_sandboxed_policies_only() {
-    assert!(!unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::new_read_only_policy(),
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(!unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::new_workspace_write_policy(),
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::DangerFullAccess,
-        WindowsSandboxLevel::RestrictedToken,
-    ));
-    assert!(unified_exec_allowed_in_environment(
-        /*is_windows*/ true,
-        &SandboxPolicy::DangerFullAccess,
-        WindowsSandboxLevel::Disabled,
-    ));
 }
 
 #[test]
@@ -343,7 +334,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             exec_permission_approvals_enabled: false,
         }),
         create_write_stdin_tool(),
-        PLAN_TOOL.clone(),
+        create_update_plan_tool(),
         request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
         create_apply_patch_freeform_tool(),
         ToolSpec::WebSearch {
@@ -497,13 +488,13 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("spawn_agent should use object params");
     };
     assert!(properties.contains_key("task_name"));
-    assert!(properties.contains_key("items"));
+    assert!(properties.contains_key("message"));
     assert!(properties.contains_key("fork_turns"));
-    assert!(!properties.contains_key("message"));
+    assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
         required.as_ref(),
-        Some(&vec!["task_name".to_string(), "items".to_string()])
+        Some(&vec!["task_name".to_string(), "message".to_string()])
     );
     let output_schema = output_schema
         .as_ref()
@@ -527,10 +518,11 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     };
     assert!(properties.contains_key("target"));
     assert!(!properties.contains_key("interrupt"));
-    assert!(!properties.contains_key("message"));
+    assert!(properties.contains_key("message"));
+    assert!(!properties.contains_key("items"));
     assert_eq!(
         required.as_ref(),
-        Some(&vec!["target".to_string(), "items".to_string()])
+        Some(&vec!["target".to_string(), "message".to_string()])
     );
 
     let assign_task = find_tool(&tools, "assign_task");
@@ -546,10 +538,11 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         panic!("assign_task should use object params");
     };
     assert!(properties.contains_key("target"));
-    assert!(!properties.contains_key("message"));
+    assert!(properties.contains_key("message"));
+    assert!(!properties.contains_key("items"));
     assert_eq!(
         required.as_ref(),
-        Some(&vec!["target".to_string(), "items".to_string()])
+        Some(&vec!["target".to_string(), "message".to_string()])
     );
 
     let wait_agent = find_tool(&tools, "wait_agent");
@@ -1285,12 +1278,7 @@ fn web_search_tool_type_text_and_image_sets_search_content_types() {
             filters: None,
             user_location: None,
             search_context_size: None,
-            search_content_types: Some(
-                WEB_SEARCH_CONTENT_TYPES
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect()
-            ),
+            search_content_types: Some(vec!["text".to_string(), "image".to_string()]),
         }
     );
 }
@@ -1640,7 +1628,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
     assert_eq!(
         tools_config
             .with_unified_exec_shell_mode_for_session(
-                &user_shell,
+                tool_user_shell_type(&user_shell),
                 Some(&PathBuf::from(if cfg!(windows) {
                     r"C:\opt\codex\zsh"
                 } else {

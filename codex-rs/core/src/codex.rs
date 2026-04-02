@@ -265,11 +265,11 @@ use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
 use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -944,7 +944,9 @@ impl TurnContext {
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
-        .with_agent_roles(config.agent_roles.clone());
+        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+            &config.agent_roles,
+        ));
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -1396,13 +1398,15 @@ impl Session {
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
         .with_unified_exec_shell_mode_for_session(
-            user_shell,
+            crate::tools::spec::tool_user_shell_type(user_shell),
             shell_zsh_path,
             main_execve_wrapper_exe,
         )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_agent_roles(per_turn_config.agent_roles.clone());
+        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+            &per_turn_config.agent_roles,
+        ));
 
         let cwd = session_configuration.cwd.clone();
 
@@ -1996,6 +2000,7 @@ impl Session {
             config.mcp_oauth_credentials_store_mode,
             auth_statuses.clone(),
             &session_configuration.approval_policy,
+            INITIAL_SUBMIT_ID.to_owned(),
             tx_event.clone(),
             sandbox_state,
             config.codex_home.clone(),
@@ -4246,16 +4251,12 @@ impl Session {
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
+        let mcp_config = config.to_mcp_config(self.services.plugins_manager.as_ref());
         let tool_plugin_provenance = self
             .services
             .mcp_manager
             .tool_plugin_provenance(config.as_ref());
-        let mcp_servers = with_codex_apps_mcp(
-            mcp_servers,
-            self.features.apps_enabled_for_auth(auth.as_ref()),
-            auth.as_ref(),
-            config.as_ref(),
-        );
+        let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         let sandbox_state = SandboxState {
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
@@ -4273,6 +4274,7 @@ impl Session {
             store_mode,
             auth_statuses,
             &turn_context.config.permissions.approval_policy,
+            turn_context.sub_id.clone(),
             self.get_tx_event(),
             sandbox_state,
             config.codex_home.clone(),
@@ -4615,8 +4617,6 @@ mod handlers {
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
-    use crate::mcp::auth::compute_auth_statuses;
-    use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
     use crate::rollout::RolloutRecorder;
     use crate::rollout::session_index;
@@ -4625,6 +4625,8 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
+    use codex_mcp::mcp::auth::compute_auth_statuses;
+    use codex_mcp::mcp::collect_mcp_snapshot_from_manager;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -5468,13 +5470,15 @@ async fn spawn_review_thread(
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
     .with_unified_exec_shell_mode_for_session(
-        sess.services.user_shell.as_ref(),
+        crate::tools::spec::tool_user_shell_type(sess.services.user_shell.as_ref()),
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
     )
     .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_agent_roles(config.agent_roles.clone());
+    .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+        &config.agent_roles,
+    ));
 
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();
