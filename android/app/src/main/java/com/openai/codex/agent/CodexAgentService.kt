@@ -205,7 +205,9 @@ class CodexAgentService : AgentService() {
         val manager = agentManager ?: return
         val events = manager.getSessionEvents(session.sessionId)
         val question = findLatestQuestion(events) ?: return
-        updateQuestionNotification(session, question)
+        if (!isBridgeQuestion(question)) {
+            AgentQuestionNotifier.cancel(this, session.sessionId)
+        }
         maybeAutoAnswerGenieQuestion(session, question)
     }
 
@@ -232,26 +234,6 @@ class CodexAgentService : AgentService() {
             }
             pendingGenieQuestions.remove(questionKey)
         }
-    }
-
-    private fun updateQuestionNotification(session: AgentSessionInfo, question: String) {
-        if (question.isBlank()) {
-            AgentQuestionNotifier.cancel(this, session.sessionId)
-            return
-        }
-        if (isBridgeQuestion(question)) {
-            AgentQuestionNotifier.cancel(this, session.sessionId)
-            return
-        }
-        if (pendingGenieQuestions.contains(genieQuestionKey(session.sessionId, question))) {
-            return
-        }
-        AgentQuestionNotifier.showQuestion(
-            context = this,
-            sessionId = session.sessionId,
-            targetPackage = session.targetPackage,
-            question = question,
-        )
     }
 
     private fun findLatestQuestion(events: List<AgentSessionEvent>): String? {

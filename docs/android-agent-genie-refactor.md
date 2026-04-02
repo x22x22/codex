@@ -68,6 +68,10 @@ The current repo now contains these implementation slices:
   `request_user_input` in Default mode so ambiguous delegated tasks can pause in
   real framework `WAITING_FOR_USER` state instead of guessing or emitting a
   plain-text question as a normal completion.
+- In detached mode, Genie question handoff now recovers a missing target task by
+  calling `ensureDetachedTargetHidden` before retrying `showDetachedTarget`, so a
+  `WAITING_FOR_USER` session keeps launcher icon/badge behavior aligned with the
+  still-live framework session.
 - The Agent now auto-answers only internal bridge questions. User-facing Genie
   questions remain user-facing and are surfaced through the normal framework
   question flow, notifications, and desktop/UI answer surfaces.
@@ -218,7 +222,11 @@ the Android Agent/Genie flow.
   - detached target ensure-hidden/show/hide/attach/close
   - typed detached frame capture with runtime-aware recovery
 - `request_user_input` bridged from hosted Codex back into AgentSDK questions
-- Agent-owned question notifications for Genie questions that need user input
+- Framework-owned question notifications for Genie questions that need user
+  input; the Agent app suppresses its former duplicate notification mirror
+- Detached-mode Genie sessions now request `showDetachedTarget` before entering
+  `WAITING_FOR_USER`, so HOME can keep a visible live icon while the user
+  answers the question
 - Agent-mediated answers only for internal bridge questions that the user
   should never see as product-facing prompts
 - Agent planning can now use `request_user_input` to ask the user clarifying
@@ -248,6 +256,8 @@ the Android Agent/Genie flow.
   - hosted Agent bridge for framework session APIs
 - `android/app/src/main/java/com/openai/codex/agent/MainActivity.kt`
   - Agent session UI, Agent clarification dialogs, and Agent-native auth controls
+- `android/app/src/main/java/com/openai/codex/agent/SessionDetailActivity.kt`
+  - HOME/AGENT session inspection and question answering UI
 - `android/app/src/main/java/com/openai/codex/agent/AgentUserInputPrompter.kt`
   - Android dialog bridge for hosted Agent `request_user_input` calls
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`

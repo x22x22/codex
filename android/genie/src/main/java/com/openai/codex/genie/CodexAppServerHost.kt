@@ -6,6 +6,7 @@ import android.app.agent.GenieService
 import android.content.Context
 import android.util.Log
 import com.openai.codex.bridge.DesktopSessionBootstrap
+import com.openai.codex.bridge.DetachedTargetCompat
 import com.openai.codex.bridge.FrameworkEventBridge
 import com.openai.codex.bridge.HostedCodexConfig
 import com.openai.codex.bridge.SessionExecutionSettings
@@ -628,6 +629,13 @@ class CodexAppServerHost(
         val questions = params.optJSONArray("questions") ?: JSONArray()
         val renderedQuestion = renderAgentQuestion(questions)
         Log.i(TAG, "Requesting Agent input for ${request.sessionId}: $renderedQuestion")
+        if (request.isDetachedModeAllowed) {
+            runCatching {
+                showDetachedTargetForUserQuestion()
+            }.onFailure { err ->
+                recordNonFatalObserverFailure("request_user_input/showDetachedTarget", err)
+            }
+        }
         publishFrameworkQuestion(renderedQuestion)
         updateFrameworkState(AgentSessionInfo.STATE_WAITING_FOR_USER)
         val answer = control.waitForUserResponse()
@@ -999,8 +1007,32 @@ class CodexAppServerHost(
                     JSONObject()
                         .put("code", code)
                         .put("message", message),
-                ),
+            ),
         )
+    }
+
+    private fun showDetachedTargetForUserQuestion() {
+        var result = DetachedTargetCompat.showDetachedTarget(
+            callback = callback,
+            sessionId = request.sessionId,
+        )
+        if (result.needsRecovery()) {
+            publishFrameworkTrace(result.summary("show for question"))
+            val recovery = DetachedTargetCompat.ensureDetachedTargetHidden(
+                callback = callback,
+                sessionId = request.sessionId,
+            )
+            publishFrameworkTrace(recovery.summary("ensure hidden for question"))
+            if (recovery.isOk()) {
+                result = DetachedTargetCompat.showDetachedTarget(
+                    callback = callback,
+                    sessionId = request.sessionId,
+                )
+            } else {
+                return
+            }
+        }
+        publishFrameworkTrace(result.summary("show for question"))
     }
 
     private fun sendMessage(message: JSONObject) {
