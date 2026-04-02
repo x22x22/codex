@@ -713,6 +713,7 @@ impl AgentControl {
         sender_thread_id: ThreadId,
         message: String,
     ) -> CodexResult<String> {
+        let message = sanitize_watchdog_wakeup_message(message);
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         let snapshot = thread.config_snapshot().await;
@@ -1678,6 +1679,45 @@ fn build_agent_inbox_items(
     ]);
 
     Ok(items)
+}
+
+fn sanitize_watchdog_wakeup_message(message: String) -> String {
+    let Some(stripped_message) = strip_leading_watchdog_prompt_scaffold(&message) else {
+        return message;
+    };
+
+    if stripped_message.is_empty() {
+        "Watchdog check-in completed without calling send_input. Review the watchdog helper thread for details."
+            .to_string()
+    } else {
+        stripped_message.to_string()
+    }
+}
+
+fn strip_leading_watchdog_prompt_scaffold(message: &str) -> Option<&str> {
+    let mut lines = message.split_inclusive('\n').scan(0, |offset, line| {
+        let line_start = *offset;
+        *offset += line.len();
+        Some((line_start, line))
+    });
+    let Some((_, first_line)) = lines.find(|(_, line)| !line.trim().is_empty()) else {
+        return None;
+    };
+    if first_line.trim() != "# You are a Subagent" {
+        return None;
+    }
+
+    for (line_start, line) in lines {
+        let trimmed_line = line.trim();
+        if trimmed_line.starts_with("AUTOPLAN_WATCHDOG_REPORT")
+            || trimmed_line.starts_with("Watchdog:")
+            || trimmed_line.starts_with("Watchdog report:")
+        {
+            return Some(message[line_start..].trim().trim_start_matches('\n'));
+        }
+    }
+
+    Some("")
 }
 
 async fn inject_agent_message(
