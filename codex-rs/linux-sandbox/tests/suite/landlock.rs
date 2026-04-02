@@ -183,8 +183,9 @@ async fn run_cmd_result_with_policies(
         justification: None,
         arg0: None,
     };
-    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
+    let sandbox_program = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+    let codex_linux_sandbox_exe =
+        Some(std::fs::canonicalize(&sandbox_program).unwrap_or(sandbox_program));
 
     process_exec_tool_call(
         params,
