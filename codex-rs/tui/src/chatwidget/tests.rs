@@ -881,18 +881,18 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.on_task_started();
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert!(chat.bottom_pane.status_indicator_visible());
 
     chat.on_agent_message_delta("Final answer line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
-    assert_eq!(chat.bottom_pane.is_task_running(), true);
+    assert!(!chat.bottom_pane.status_indicator_visible());
+    assert!(chat.bottom_pane.is_task_running());
 
     // A second idle tick should not toggle the row back on and cause jitter.
     chat.on_commit_tick();
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert!(!chat.bottom_pane.status_indicator_visible());
 }
 
 #[tokio::test]
@@ -900,13 +900,13 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.on_task_started();
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert!(chat.bottom_pane.status_indicator_visible());
 
     chat.on_agent_message_delta("Preamble line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+    assert!(!chat.bottom_pane.status_indicator_visible());
 
     complete_assistant_message(
         &mut chat,
@@ -915,11 +915,11 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
         Some(MessagePhase::Commentary),
     );
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
-    assert_eq!(chat.bottom_pane.is_task_running(), true);
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert!(chat.bottom_pane.is_task_running());
 
     begin_exec(&mut chat, "call-1", "echo hi");
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert!(chat.bottom_pane.status_indicator_visible());
 }
 
 #[tokio::test]
@@ -931,19 +931,19 @@ async fn plan_completion_restores_status_indicator_after_streaming_plan_output()
     chat.set_collaboration_mask(plan_mask);
 
     chat.on_task_started();
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert!(chat.bottom_pane.status_indicator_visible());
 
     chat.on_plan_delta("- Step 1\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
-    assert_eq!(chat.bottom_pane.is_task_running(), true);
+    assert!(!chat.bottom_pane.status_indicator_visible());
+    assert!(chat.bottom_pane.is_task_running());
 
     chat.on_plan_item_completed("- Step 1\n".to_string());
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
-    assert_eq!(chat.bottom_pane.is_task_running(), true);
+    assert!(chat.bottom_pane.status_indicator_visible());
+    assert!(chat.bottom_pane.is_task_running());
 }
 
 #[tokio::test]
@@ -981,16 +981,16 @@ async fn unified_exec_begin_restores_status_indicator_after_preamble() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.on_task_started();
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert!(chat.bottom_pane.status_indicator_visible());
 
     // Simulate a hidden status row during an active turn.
     chat.bottom_pane.hide_status_indicator();
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
-    assert_eq!(chat.bottom_pane.is_task_running(), true);
+    assert!(!chat.bottom_pane.status_indicator_visible());
+    assert!(chat.bottom_pane.is_task_running());
 
     begin_unified_exec_startup(&mut chat, "call-1", "proc-1", "sleep 2");
 
-    assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
+    assert!(chat.bottom_pane.status_indicator_visible());
 }
 
 #[tokio::test]
@@ -3604,7 +3604,6 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         model_catalog: test_model_catalog(&cfg),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        feedback_audience: FeedbackAudience::External,
         status_account_display: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),
@@ -3649,7 +3648,6 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model_catalog: test_model_catalog(&cfg),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        feedback_audience: FeedbackAudience::External,
         status_account_display: None,
         initial_plan_type: None,
         model: Some(resolved_model.clone()),

@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 1061
 expression: term.backend().vt100().screen().contents()
 ---
 
@@ -11,4 +12,4 @@ expression: term.backend().vt100().screen().contents()
 
 › Ask Codex to do anything
 
-  ? for shortcuts    100% context left
+  gpt-5.3-codex default · 100% left · /…
