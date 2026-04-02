@@ -240,6 +240,8 @@ class CreateSessionActivity : Activity() {
                     if (draftSession == null) {
                         startActivity(
                             Intent(this, SessionDetailActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
                                 .putExtra(SessionDetailActivity.EXTRA_SESSION_ID, incomingSessionId),
                         )
                         finish()

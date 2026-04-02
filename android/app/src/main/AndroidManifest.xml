@@ -49,9 +49,10 @@
 
         <activity
             android:name=".CreateSessionActivity"
+            android:documentLaunchMode="always"
             android:exported="true"
             android:excludeFromRecents="true"
-            android:launchMode="singleTop"
+            android:launchMode="standard"
             android:taskAffinity="com.openai.codex.agent.create"
             android:theme="@style/CodexCreateSessionTheme">
             <intent-filter>
