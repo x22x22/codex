@@ -72,7 +72,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         Some(vec!["task_name".to_string(), "message".to_string()])
     );
     let Some(JsonSchema::Array { items, .. }) = properties.get("model_fallback_list") else {
-        panic!("spawn_agent v2 should define model_fallback_list as an array of objects");
+        panic!("spawn_agent v2 should define model_fallback_list as an array");
     };
     let JsonSchema::Object {
         properties: model_fallback_item_properties,
@@ -91,6 +91,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             ),
         })
     );
+    assert!(model_fallback_item_properties.contains_key("reasoning_effort"));
     assert_eq!(model_fallback_item_required, &vec!["model".to_string()]);
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
@@ -100,19 +101,19 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
 
 #[test]
 fn spawn_agent_tool_v1_includes_model_fallback_list() {
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) =
-        create_spawn_agent_tool_v1(SpawnAgentToolOptions {
-            available_models: &[model_preset("visible", /*show_in_picker*/ true)],
-            agent_type_description: "role help".to_string(),
-        })
-    else {
+    let tool = create_spawn_agent_tool_v1(SpawnAgentToolOptions {
+        available_models: &[],
+        agent_type_description: "role help".to_string(),
+    });
+
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
         panic!("spawn_agent should be a function tool");
     };
     let JsonSchema::Object { properties, .. } = parameters else {
         panic!("spawn_agent should use object params");
     };
     let Some(JsonSchema::Array { .. }) = properties.get("model_fallback_list") else {
-        panic!("model_fallback_list should be an array");
+        panic!("spawn_agent v1 should define model_fallback_list as an array");
     };
     assert!(properties.contains_key("model_fallback_list"));
     assert!(properties.contains_key("fork_context"));

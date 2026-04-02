@@ -23,7 +23,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions<'_>) -> ToolSpe
     let available_models_description = spawn_agent_models_description(options.available_models);
     let return_value_description =
         "Returns the spawned agent id plus the user-facing nickname when available.";
-    let properties = spawn_agent_common_properties(&options.agent_type_description);
+    let properties = spawn_agent_common_properties_v1(&options.agent_type_description);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -647,7 +647,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
     }
 }
 
-fn spawn_agent_common_properties(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
+fn spawn_agent_model_fallback_list_schema() -> JsonSchema {
     let model_fallback_item_properties = BTreeMap::from([
         (
             "model".to_string(),
@@ -669,6 +669,20 @@ fn spawn_agent_common_properties(agent_type_description: &str) -> BTreeMap<Strin
         ),
     ]);
 
+    JsonSchema::Array {
+        items: Box::new(JsonSchema::Object {
+            properties: model_fallback_item_properties,
+            required: Some(vec!["model".to_string()]),
+            additional_properties: Some(false.into()),
+        }),
+        description: Some(
+            "Ordered model candidates for fallback retries. Each entry may include an optional reasoning effort."
+                .to_string(),
+        ),
+    }
+}
+
+fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
     BTreeMap::from([
         (
             "message".to_string(),
@@ -705,20 +719,6 @@ fn spawn_agent_common_properties(agent_type_description: &str) -> BTreeMap<Strin
             },
         ),
         (
-            "model_fallback_list".to_string(),
-            JsonSchema::Array {
-                items: Box::new(JsonSchema::Object {
-                    properties: model_fallback_item_properties,
-                    required: Some(vec!["model".to_string()]),
-                    additional_properties: Some(false.into()),
-                }),
-                description: Some(
-                    "Ordered model candidates for fallback retries. Each entry may include an optional reasoning effort."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
             "reasoning_effort".to_string(),
             JsonSchema::String {
                 description: Some(
@@ -727,31 +727,14 @@ fn spawn_agent_common_properties(agent_type_description: &str) -> BTreeMap<Strin
                 ),
             },
         ),
+        (
+            "model_fallback_list".to_string(),
+            spawn_agent_model_fallback_list_schema(),
+        ),
     ])
 }
 
 fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<String, JsonSchema> {
-    let model_fallback_item_properties = BTreeMap::from([
-        (
-            "model".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Model to try. Must be a model slug from the current model picker list."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "reasoning_effort".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional reasoning effort override for this candidate. Replaces the inherited reasoning effort."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
     BTreeMap::from([
         (
             "message".to_string(),
@@ -793,20 +776,6 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             },
         ),
         (
-            "model_fallback_list".to_string(),
-            JsonSchema::Array {
-                items: Box::new(JsonSchema::Object {
-                    properties: model_fallback_item_properties,
-                    required: Some(vec!["model".to_string()]),
-                    additional_properties: Some(false.into()),
-                }),
-                description: Some(
-                    "Ordered model candidates for fallback retries. Each entry may include an optional reasoning effort."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
             "reasoning_effort".to_string(),
             JsonSchema::String {
                 description: Some(
@@ -814,6 +783,10 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
                         .to_string(),
                 ),
             },
+        ),
+        (
+            "model_fallback_list".to_string(),
+            spawn_agent_model_fallback_list_schema(),
         ),
     ])
 }
