@@ -259,6 +259,654 @@ fn model_provided_unified_exec_is_blocked_for_windows_sandboxed_policies() {
 }
 
 #[test]
+fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
+    let model_info = model_info_from_models_json("gpt-5-codex");
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+
+    // Build actual map name -> spec
+    use std::collections::BTreeMap;
+    use std::collections::HashSet;
+    let mut actual: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
+    let mut duplicate_names = Vec::new();
+    for t in &tools {
+        let name = t.name().to_string();
+        if actual.insert(name.clone(), t.spec.clone()).is_some() {
+            duplicate_names.push(name);
+        }
+    }
+    assert!(
+        duplicate_names.is_empty(),
+        "duplicate tool entries detected: {duplicate_names:?}"
+    );
+
+    // Build expected from the same helpers used by the builder.
+    let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
+    for spec in [
+        create_exec_command_tool(CommandToolOptions {
+            allow_login_shell: true,
+            exec_permission_approvals_enabled: false,
+        }),
+        create_write_stdin_tool(),
+        PLAN_TOOL.clone(),
+        request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
+        create_apply_patch_freeform_tool(),
+        ToolSpec::WebSearch {
+            external_web_access: Some(true),
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        },
+        create_view_image_tool(ViewImageToolOptions {
+            can_request_original_image_detail: config.can_request_original_image_detail,
+        }),
+    ] {
+        expected.insert(spec.name().to_string(), spec);
+    }
+    let mut collab_specs = if config.multi_agent_v2 {
+        vec![
+            create_spawn_agent_tool_v2(spawn_agent_tool_options(&config)),
+            create_send_message_tool(),
+            create_wait_agent_tool_v2(wait_agent_timeout_options()),
+            create_close_agent_tool_v2(),
+            create_list_agents_tool_v2(),
+        ]
+    } else {
+        let mut collab_specs = vec![
+            create_spawn_agent_tool_v1(spawn_agent_tool_options(&config)),
+            create_send_input_tool_v1(),
+            create_resume_agent_tool(),
+            create_wait_agent_tool_v1(wait_agent_timeout_options()),
+            create_close_agent_tool_v1(),
+        ];
+        if config.agent_watchdog {
+            collab_specs.push(create_list_agents_tool(config.agent_watchdog));
+        }
+        collab_specs
+    };
+    for spec in collab_specs.split_off(0) {
+        expected.insert(spec.name().to_string(), spec);
+    }
+    if config.agent_watchdog {
+        let spec = create_watchdog_tools_namespace(vec![
+            create_compact_parent_context_tool(),
+            create_watchdog_self_close_tool(),
+        ]);
+        expected.insert(spec.name().to_string(), spec);
+    }
+
+    if config.exec_permission_approvals_enabled {
+        let spec = create_request_permissions_tool(request_permissions_tool_description());
+        expected.insert(spec.name().to_string(), spec);
+    }
+
+    // Exact name set match — this is the only test allowed to fail when tools change.
+    let actual_names: HashSet<_> = actual.keys().cloned().collect();
+    let expected_names: HashSet<_> = expected.keys().cloned().collect();
+    assert_eq!(actual_names, expected_names, "tool name set mismatch");
+
+    // Compare specs ignoring human-readable descriptions.
+    for name in expected.keys() {
+        let mut a = actual.get(name).expect("present").clone();
+        let mut e = expected.get(name).expect("present").clone();
+        strip_descriptions_tool(&mut a);
+        strip_descriptions_tool(&mut e);
+        assert_eq!(a, e, "spec mismatch for {name}");
+    }
+}
+
+#[test]
+fn test_build_specs_collab_tools_enabled() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    assert_contains_tool_names(&tools, &["tool_search"]);
+    assert_contains_tool_names(
+        &tools,
+        &["spawn_agent", "send_input", "wait_agent", "close_agent"],
+    );
+    assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+    assert_lacks_tool_name(&tools, "list_agents");
+    assert_lacks_tool_name(&tools, "watchdog");
+}
+
+#[test]
+fn test_build_specs_watchdog_collab_tools_include_self_close_tool() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    features.enable(Feature::AgentWatchdog);
+    features.normalize_dependencies();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert_contains_top_level_tool_name(&tools, "watchdog");
+    assert_contains_top_level_tool_name(&tools, "spawn_agent");
+    assert_contains_top_level_tool_name(&tools, "send_input");
+    assert_contains_top_level_tool_name(&tools, "wait_agent");
+    assert_contains_top_level_tool_name(&tools, "close_agent");
+    assert_contains_top_level_tool_name(&tools, "list_agents");
+    assert_contains_tool_names(&tools, &["tool_search", "list_agents", "close_agent"]);
+    assert_lacks_top_level_tool_name(&tools, "watchdog_self_close");
+    assert_lacks_top_level_tool_name(&tools, "compact_parent_context");
+
+    let watchdog_self_close = find_namespaced_tool(&tools, "watchdog", "watchdog_self_close");
+    let ToolSpec::Function(ResponsesApiTool {
+        defer_loading: Some(deferred),
+        ..
+    }) = &watchdog_self_close.spec
+    else {
+        panic!("watchdog_self_close should be a function tool");
+    };
+    assert!(*deferred);
+    let compact_parent_context = find_namespaced_tool(&tools, "watchdog", "compact_parent_context");
+    let ToolSpec::Function(ResponsesApiTool {
+        defer_loading: Some(deferred),
+        ..
+    }) = &compact_parent_context.spec
+    else {
+        panic!("compact_parent_context should be a function tool");
+    };
+    assert!(*deferred);
+}
+
+#[test]
+fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    features.enable(Feature::MultiAgentV2);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    assert_contains_tool_names(
+        &tools,
+        &[
+            "spawn_agent",
+            "send_message",
+            "assign_task",
+            "wait_agent",
+            "close_agent",
+            "list_agents",
+        ],
+    );
+
+    let spawn_agent = find_tool(&tools, "spawn_agent");
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &spawn_agent.spec
+    else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("spawn_agent should use object params");
+    };
+    assert!(properties.contains_key("task_name"));
+    assert_eq!(required.as_ref(), Some(&vec!["task_name".to_string()]));
+    let output_schema = output_schema
+        .as_ref()
+        .expect("spawn_agent should define output schema");
+    assert_eq!(
+        output_schema["required"],
+        json!(["agent_id", "task_name", "nickname"])
+    );
+
+    let send_message = find_tool(&tools, "send_message");
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &send_message.spec else {
+        panic!("send_message should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("send_message should use object params");
+    };
+    assert!(properties.contains_key("target"));
+    assert!(!properties.contains_key("message"));
+    assert_eq!(
+        required.as_ref(),
+        Some(&vec!["target".to_string(), "items".to_string()])
+    );
+
+    let assign_task = find_tool(&tools, "assign_task");
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &assign_task.spec else {
+        panic!("assign_task should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("assign_task should use object params");
+    };
+    assert!(properties.contains_key("target"));
+    assert!(!properties.contains_key("message"));
+    assert_eq!(
+        required.as_ref(),
+        Some(&vec!["target".to_string(), "items".to_string()])
+    );
+
+    let wait_agent = find_tool(&tools, "wait_agent");
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &wait_agent.spec
+    else {
+        panic!("wait_agent should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("wait_agent should use object params");
+    };
+    assert!(properties.contains_key("targets"));
+    assert_eq!(required.as_ref(), Some(&vec!["targets".to_string()]));
+    let output_schema = output_schema
+        .as_ref()
+        .expect("wait_agent should define output schema");
+    assert_eq!(
+        output_schema["properties"]["message"]["description"],
+        json!("Brief wait summary without the agent's final content.")
+    );
+
+    let list_agents = find_tool(&tools, "list_agents");
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &list_agents.spec
+    else {
+        panic!("list_agents should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("list_agents should use object params");
+    };
+    assert!(properties.contains_key("path_prefix"));
+    assert_eq!(required.as_ref(), None);
+    let output_schema = output_schema
+        .as_ref()
+        .expect("list_agents should define output schema");
+    assert_eq!(
+        output_schema["properties"]["agents"]["items"]["required"],
+        json!(["agent_name", "agent_status", "last_task_message"])
+    );
+    assert_lacks_tool_name(&tools, "send_input");
+    assert_lacks_tool_name(&tools, "resume_agent");
+}
+
+#[test]
+fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::SpawnCsv);
+    features.normalize_dependencies();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    assert_contains_tool_names(
+        &tools,
+        &[
+            "spawn_agent",
+            "send_input",
+            "wait_agent",
+            "close_agent",
+            "spawn_agents_on_csv",
+        ],
+    );
+}
+
+#[test]
+fn view_image_tool_omits_detail_without_original_detail_feature() {
+    let config = test_config();
+    let mut model_info =
+        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    model_info.supports_image_detail_original = true;
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+        panic!("view_image should be a function tool");
+    };
+    let JsonSchema::Object { properties, .. } = parameters else {
+        panic!("view_image should use an object schema");
+    };
+    assert!(!properties.contains_key("detail"));
+}
+
+#[test]
+fn view_image_tool_includes_detail_with_original_detail_feature() {
+    let config = test_config();
+    let mut model_info =
+        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    model_info.supports_image_detail_original = true;
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ImageDetailOriginal);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+        panic!("view_image should be a function tool");
+    };
+    let JsonSchema::Object { properties, .. } = parameters else {
+        panic!("view_image should use an object schema");
+    };
+    assert!(properties.contains_key("detail"));
+    let Some(JsonSchema::String {
+        description: Some(description),
+    }) = properties.get("detail")
+    else {
+        panic!("view_image detail should include a description");
+    };
+    assert!(description.contains("only supported value is `original`"));
+    assert!(description.contains("omit this field for default resized behavior"));
+}
+
+#[test]
+fn test_build_specs_agent_job_worker_tools_enabled() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::SpawnCsv);
+    features.normalize_dependencies();
+    features.enable(Feature::Sqlite);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::SubAgent(SubAgentSource::Other(
+            "agent_job:test".to_string(),
+        )),
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    assert_contains_tool_names(
+        &tools,
+        &[
+            "spawn_agent",
+            "send_input",
+            "resume_agent",
+            "wait_agent",
+            "close_agent",
+            "spawn_agents_on_csv",
+            "report_agent_job_result",
+        ],
+    );
+    assert_lacks_tool_name(&tools, "request_user_input");
+}
+
+#[test]
+fn request_user_input_description_reflects_default_mode_feature_flag() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    let request_user_input_tool = find_tool(&tools, "request_user_input");
+    assert_eq!(
+        request_user_input_tool.spec,
+        request_user_input_tool_spec(/*default_mode_request_user_input*/ false)
+    );
+
+    features.enable(Feature::DefaultModeRequestUserInput);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    let request_user_input_tool = find_tool(&tools, "request_user_input");
+    assert_eq!(
+        request_user_input_tool.spec,
+        request_user_input_tool_spec(/*default_mode_request_user_input*/ true)
+    );
+}
+
+#[test]
+fn request_permissions_requires_feature_flag() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    assert_lacks_tool_name(&tools, "request_permissions");
+
+    let mut features = Features::with_defaults();
+    features.enable(Feature::RequestPermissionsTool);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+    let request_permissions_tool = find_tool(&tools, "request_permissions");
+    assert_eq!(
+        request_permissions_tool.spec,
+        create_request_permissions_tool(request_permissions_tool_description())
+    );
+}
+
+#[test]
+fn request_permissions_tool_is_independent_from_additional_permissions() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ExecPermissionApprovals);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*app_tools*/ None,
+        &[],
+    )
+    .build();
+
+    assert_lacks_tool_name(&tools, "request_permissions");
+}
+
+#[test]
 fn get_memory_requires_feature_flag() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);

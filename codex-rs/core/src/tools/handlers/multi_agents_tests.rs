@@ -109,14 +109,7 @@ async fn attach_watchdog_helper_for_tests(
         .await
         .expect("owner thread should start");
     let target = agent_control
-        .spawn_agent(
-            config.clone(),
-            Op::UserInput {
-                items: Vec::new(),
-                final_output_json_schema: None,
-            },
-            None,
-        )
+        .spawn_agent_handle(config.clone(), /*session_source*/ None)
         .await
         .expect("watchdog target thread should start");
     let helper = manager
