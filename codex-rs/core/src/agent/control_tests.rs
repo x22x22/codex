@@ -907,8 +907,14 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         history.raw_items(),
         "old parent context"
     ));
-    assert!(!history_contains_text(history.raw_items(), "queued message"));
-    assert!(history_contains_text(history.raw_items(), "triggered context"));
+    assert!(!history_contains_text(
+        history.raw_items(),
+        "queued message"
+    ));
+    assert!(history_contains_text(
+        history.raw_items(),
+        "triggered context"
+    ));
     assert!(history_contains_text(
         history.raw_items(),
         "current parent task"
@@ -1012,11 +1018,12 @@ async fn spawn_agent_fork_snapshots_parent_boundary_for_persisted_fork_reference
             }) if rollout_path == &parent_rollout_path
         )
     }));
-    let materialized_child_rollout = crate::rollout::truncation::materialize_rollout_items_for_replay(
-        harness.config.codex_home.as_path(),
-        &resumed.history,
-    )
-    .await;
+    let materialized_child_rollout =
+        crate::rollout::truncation::materialize_rollout_items_for_replay(
+            harness.config.codex_home.as_path(),
+            &resumed.history,
+        )
+        .await;
     let materialized_child_response_items: Vec<ResponseItem> = materialized_child_rollout
         .iter()
         .filter_map(|item| match item {
