@@ -17,7 +17,16 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_exec_server::Environment;
 use tokio::sync::Mutex;
+
+fn unified_exec_handler() -> UnifiedExecHandler {
+    UnifiedExecHandler::new(
+        Environment::default()
+            .executor_attachment()
+            .expect("default environment has an executor attachment"),
+    )
+}
 
 #[test]
 fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
@@ -202,7 +211,7 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
         arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
-    let handler = UnifiedExecHandler;
+    let handler = unified_exec_handler();
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
@@ -226,7 +235,7 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
         arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),
     };
     let (session, turn) = make_session_and_context().await;
-    let handler = UnifiedExecHandler;
+    let handler = unified_exec_handler();
 
     assert_eq!(
         handler.pre_tool_use_payload(&ToolInvocation {
@@ -263,8 +272,10 @@ fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_co
         ]),
     };
 
+    let handler = unified_exec_handler();
+
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-43", &payload, &output),
+        handler.post_tool_use_payload("call-43", &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             command: "echo three".to_string(),
             tool_response: serde_json::json!("three"),
@@ -293,8 +304,10 @@ fn exec_command_post_tool_use_payload_skips_interactive_exec() {
         ]),
     };
 
+    let handler = unified_exec_handler();
+
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-44", &payload, &output),
+        handler.post_tool_use_payload("call-44", &payload, &output),
         None
     );
 }
@@ -320,8 +333,10 @@ fn exec_command_post_tool_use_payload_skips_running_sessions() {
         ]),
     };
 
+    let handler = unified_exec_handler();
+
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-45", &payload, &output),
+        handler.post_tool_use_payload("call-45", &payload, &output),
         None
     );
 }

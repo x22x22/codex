@@ -32,13 +32,19 @@ async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContex
         let server = exec_server().await?;
         let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
         Ok(FileSystemContext {
-            file_system: environment.get_filesystem(),
+            file_system: environment
+                .executor_attachment()
+                .expect("remote environment has an executor attachment")
+                .get_filesystem(),
             _server: Some(server),
         })
     } else {
         let environment = Environment::create(/*exec_server_url*/ None).await?;
         Ok(FileSystemContext {
-            file_system: environment.get_filesystem(),
+            file_system: environment
+                .executor_attachment()
+                .expect("local environment has an executor attachment")
+                .get_filesystem(),
             _server: None,
         })
     }

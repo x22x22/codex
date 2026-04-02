@@ -1,6 +1,15 @@
 use super::*;
+use codex_exec_server::Environment;
+use codex_exec_server::ExecutorAttachment;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 use tempfile::tempdir;
+
+fn test_executor_attachment() -> Arc<ExecutorAttachment> {
+    Environment::default()
+        .executor_attachment()
+        .expect("default environment should have an executor attachment")
+}
 
 #[tokio::test]
 async fn lists_directory_entries() {
@@ -34,8 +43,13 @@ async fn lists_directory_entries() {
         symlink(dir_path.join("entry.txt"), &link_path).expect("create symlink");
     }
 
+    let executor_attachment = test_executor_attachment();
     let entries = list_dir_slice(
-        dir_path, /*offset*/ 1, /*limit*/ 20, /*depth*/ 3,
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 1,
+        /*limit*/ 20,
+        /*depth*/ 3,
     )
     .await
     .expect("list directory");
@@ -70,8 +84,13 @@ async fn errors_when_offset_exceeds_entries() {
         .await
         .expect("create sub dir");
 
+    let executor_attachment = test_executor_attachment();
     let err = list_dir_slice(
-        dir_path, /*offset*/ 10, /*limit*/ 1, /*depth*/ 2,
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 10,
+        /*limit*/ 1,
+        /*depth*/ 2,
     )
     .await
     .expect_err("offset exceeds entries");
@@ -99,8 +118,13 @@ async fn respects_depth_parameter() {
         .await
         .expect("write deeper");
 
+    let executor_attachment = test_executor_attachment();
     let entries_depth_one = list_dir_slice(
-        dir_path, /*offset*/ 1, /*limit*/ 10, /*depth*/ 1,
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 1,
+        /*limit*/ 10,
+        /*depth*/ 1,
     )
     .await
     .expect("list depth 1");
@@ -110,7 +134,11 @@ async fn respects_depth_parameter() {
     );
 
     let entries_depth_two = list_dir_slice(
-        dir_path, /*offset*/ 1, /*limit*/ 20, /*depth*/ 2,
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 1,
+        /*limit*/ 20,
+        /*depth*/ 2,
     )
     .await
     .expect("list depth 2");
@@ -125,7 +153,11 @@ async fn respects_depth_parameter() {
     );
 
     let entries_depth_three = list_dir_slice(
-        dir_path, /*offset*/ 1, /*limit*/ 30, /*depth*/ 3,
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 1,
+        /*limit*/ 30,
+        /*depth*/ 3,
     )
     .await
     .expect("list depth 3");
@@ -158,8 +190,13 @@ async fn paginates_in_sorted_order() {
         .await
         .expect("write b child");
 
+    let executor_attachment = test_executor_attachment();
     let first_page = list_dir_slice(
-        dir_path, /*offset*/ 1, /*limit*/ 2, /*depth*/ 2,
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 1,
+        /*limit*/ 2,
+        /*depth*/ 2,
     )
     .await
     .expect("list page one");
@@ -173,7 +210,11 @@ async fn paginates_in_sorted_order() {
     );
 
     let second_page = list_dir_slice(
-        dir_path, /*offset*/ 3, /*limit*/ 2, /*depth*/ 2,
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 3,
+        /*limit*/ 2,
+        /*depth*/ 2,
     )
     .await
     .expect("list page two");
@@ -197,9 +238,16 @@ async fn handles_large_limit_without_overflow() {
         .await
         .expect("write gamma");
 
-    let entries = list_dir_slice(dir_path, /*offset*/ 2, usize::MAX, /*depth*/ 1)
-        .await
-        .expect("list without overflow");
+    let executor_attachment = test_executor_attachment();
+    let entries = list_dir_slice(
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 2,
+        usize::MAX,
+        /*depth*/ 1,
+    )
+    .await
+    .expect("list without overflow");
     assert_eq!(
         entries,
         vec!["beta.txt".to_string(), "gamma.txt".to_string(),]
@@ -218,8 +266,13 @@ async fn indicates_truncated_results() {
             .expect("write file");
     }
 
+    let executor_attachment = test_executor_attachment();
     let entries = list_dir_slice(
-        dir_path, /*offset*/ 1, /*limit*/ 25, /*depth*/ 1,
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 1,
+        /*limit*/ 25,
+        /*depth*/ 1,
     )
     .await
     .expect("list directory");
@@ -242,8 +295,13 @@ async fn truncation_respects_sorted_order() -> anyhow::Result<()> {
     tokio::fs::write(nested.join("child.txt"), b"child").await?;
     tokio::fs::write(deeper.join("grandchild.txt"), b"deep").await?;
 
+    let executor_attachment = test_executor_attachment();
     let entries_depth_three = list_dir_slice(
-        dir_path, /*offset*/ 1, /*limit*/ 3, /*depth*/ 3,
+        executor_attachment.as_ref(),
+        dir_path,
+        /*offset*/ 1,
+        /*limit*/ 3,
+        /*depth*/ 3,
     )
     .await?;
     assert_eq!(

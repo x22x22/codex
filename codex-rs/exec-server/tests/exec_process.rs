@@ -31,13 +31,19 @@ async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
         let server = exec_server().await?;
         let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
         Ok(ProcessContext {
-            backend: environment.get_exec_backend(),
+            backend: environment
+                .executor_attachment()
+                .expect("remote environment has an executor attachment")
+                .get_exec_backend(),
             server: Some(server),
         })
     } else {
         let environment = Environment::create(/*exec_server_url*/ None).await?;
         Ok(ProcessContext {
-            backend: environment.get_exec_backend(),
+            backend: environment
+                .executor_attachment()
+                .expect("local environment has an executor attachment")
+                .get_exec_backend(),
             server: None,
         })
     }

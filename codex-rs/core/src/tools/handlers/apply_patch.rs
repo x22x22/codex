@@ -31,7 +31,7 @@ use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
-use codex_exec_server::AttachedExecutor;
+use codex_exec_server::ExecutorAttachment;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -42,13 +42,13 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub struct ApplyPatchHandler {
-    _attached_executor: Arc<AttachedExecutor>,
+    executor_attachment: Arc<ExecutorAttachment>,
 }
 
 impl ApplyPatchHandler {
-    pub fn new(attached_executor: Arc<AttachedExecutor>) -> Self {
+    pub fn new(executor_attachment: Arc<ExecutorAttachment>) -> Self {
         Self {
-            _attached_executor: attached_executor,
+            executor_attachment,
         }
     }
 }
@@ -224,7 +224,8 @@ impl ToolHandler for ApplyPatchHandler {
                         };
 
                         let mut orchestrator = ToolOrchestrator::new();
-                        let mut runtime = ApplyPatchRuntime::new();
+                        let mut runtime =
+                            ApplyPatchRuntime::new(Arc::clone(&self.executor_attachment));
                         let tool_ctx = ToolCtx {
                             session: session.clone(),
                             turn: turn.clone(),
@@ -303,6 +304,12 @@ pub(crate) async fn intercept_apply_patch(
                     Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
                 }
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                    let Some(executor_attachment) = turn.environment.executor_attachment() else {
+                        return Err(FunctionCallError::RespondToModel(
+                            "apply_patch interception requires an executor attachment".to_string(),
+                        ));
+                    };
+
                     let changes = convert_apply_patch_to_protocol(&apply.action);
                     let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx = ToolEventCtx::new(
@@ -326,7 +333,7 @@ pub(crate) async fn intercept_apply_patch(
                     };
 
                     let mut orchestrator = ToolOrchestrator::new();
-                    let mut runtime = ApplyPatchRuntime::new();
+                    let mut runtime = ApplyPatchRuntime::new(executor_attachment);
                     let tool_ctx = ToolCtx {
                         session: session.clone(),
                         turn: turn.clone(),

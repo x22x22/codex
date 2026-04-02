@@ -21,15 +21,17 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_exec_server::AttachedExecutor;
+use codex_exec_server::ExecutorAttachment;
 
 pub struct ViewImageHandler {
-    attached_executor: Arc<AttachedExecutor>,
+    executor_attachment: Arc<ExecutorAttachment>,
 }
 
 impl ViewImageHandler {
-    pub fn new(attached_executor: Arc<AttachedExecutor>) -> Self {
-        Self { attached_executor }
+    pub fn new(executor_attachment: Arc<ExecutorAttachment>) -> Self {
+        Self {
+            executor_attachment,
+        }
     }
 }
 
@@ -105,7 +107,7 @@ impl ToolHandler for ViewImageHandler {
             })?;
 
         let metadata = self
-            .attached_executor
+            .executor_attachment
             .get_filesystem()
             .get_metadata(&abs_path)
             .await
@@ -123,7 +125,7 @@ impl ToolHandler for ViewImageHandler {
             )));
         }
         let file_bytes = self
-            .attached_executor
+            .executor_attachment
             .get_filesystem()
             .read_file(&abs_path)
             .await

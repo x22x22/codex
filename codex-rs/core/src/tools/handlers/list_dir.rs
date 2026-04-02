@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_exec_server::AttachedExecutor;
+use codex_exec_server::ExecutorAttachment;
+use codex_exec_server::ReadDirectoryEntry;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
@@ -20,13 +22,13 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
 pub struct ListDirHandler {
-    _attached_executor: Arc<AttachedExecutor>,
+    executor_attachment: Arc<ExecutorAttachment>,
 }
 
 impl ListDirHandler {
-    pub fn new(attached_executor: Arc<AttachedExecutor>) -> Self {
+    pub fn new(executor_attachment: Arc<ExecutorAttachment>) -> Self {
         Self {
-            _attached_executor: attached_executor,
+            executor_attachment,
         }
     }
 }
@@ -111,7 +113,8 @@ impl ToolHandler for ListDirHandler {
             ));
         }
 
-        let entries = list_dir_slice(&path, offset, limit, depth).await?;
+        let entries =
+            list_dir_slice(&self.executor_attachment, &path, offset, limit, depth).await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -120,13 +123,21 @@ impl ToolHandler for ListDirHandler {
 }
 
 async fn list_dir_slice(
+    executor_attachment: &ExecutorAttachment,
     path: &Path,
     offset: usize,
     limit: usize,
     depth: usize,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, &mut entries).await?;
+    collect_entries(
+        executor_attachment,
+        path,
+        Path::new(""),
+        depth,
+        &mut entries,
+    )
+    .await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -159,6 +170,7 @@ async fn list_dir_slice(
 }
 
 async fn collect_entries(
+    executor_attachment: &ExecutorAttachment,
     dir_path: &Path,
     relative_prefix: &Path,
     depth: usize,
@@ -168,41 +180,18 @@ async fn collect_entries(
     queue.push_back((dir_path.to_path_buf(), relative_prefix.to_path_buf(), depth));
 
     while let Some((current_dir, prefix, remaining_depth)) = queue.pop_front() {
-        let mut read_dir = fs::read_dir(&current_dir).await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
-        })?;
-
         let mut dir_entries = Vec::new();
 
-        while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
-        })? {
-            let file_type = entry.file_type().await.map_err(|err| {
-                FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
-            })?;
-
-            let file_name = entry.file_name();
-            let relative_path = if prefix.as_os_str().is_empty() {
-                PathBuf::from(&file_name)
-            } else {
-                prefix.join(&file_name)
-            };
-
-            let display_name = format_entry_component(&file_name);
-            let display_depth = prefix.components().count();
-            let sort_key = format_entry_name(&relative_path);
-            let kind = DirEntryKind::from(&file_type);
-            dir_entries.push((
-                entry.path(),
-                relative_path,
-                kind,
-                DirEntry {
-                    name: sort_key,
-                    display_name,
-                    depth: display_depth,
-                    kind,
-                },
-            ));
+        if executor_attachment.exec_server_url().is_some() {
+            collect_remote_dir_entries(
+                executor_attachment,
+                &current_dir,
+                &prefix,
+                &mut dir_entries,
+            )
+            .await?;
+        } else {
+            collect_local_dir_entries(&current_dir, &prefix, &mut dir_entries).await?;
         }
 
         dir_entries.sort_unstable_by(|a, b| a.3.name.cmp(&b.3.name));
@@ -216,6 +205,96 @@ async fn collect_entries(
     }
 
     Ok(())
+}
+
+async fn collect_local_dir_entries(
+    current_dir: &Path,
+    prefix: &Path,
+    dir_entries: &mut Vec<(PathBuf, PathBuf, DirEntryKind, DirEntry)>,
+) -> Result<(), FunctionCallError> {
+    let mut read_dir = fs::read_dir(current_dir).await.map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
+    })?;
+
+    while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
+    })? {
+        let file_type = entry.file_type().await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
+        })?;
+        let file_name = entry.file_name();
+        let relative_path = relative_child_path(prefix, &file_name);
+        let kind = DirEntryKind::from(&file_type);
+        dir_entries.push((
+            entry.path(),
+            relative_path.clone(),
+            kind,
+            to_dir_entry(relative_path, &file_name, kind),
+        ));
+    }
+
+    Ok(())
+}
+
+async fn collect_remote_dir_entries(
+    executor_attachment: &ExecutorAttachment,
+    current_dir: &Path,
+    prefix: &Path,
+    dir_entries: &mut Vec<(PathBuf, PathBuf, DirEntryKind, DirEntry)>,
+) -> Result<(), FunctionCallError> {
+    let current_dir = AbsolutePathBuf::from_absolute_path(current_dir).map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to inspect directory path: {err}"))
+    })?;
+    let entries = executor_attachment
+        .get_filesystem()
+        .read_directory(&current_dir)
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
+        })?;
+
+    for entry in entries {
+        let file_name = OsStr::new(entry.file_name.as_str());
+        let relative_path = relative_child_path(prefix, file_name);
+        let kind = DirEntryKind::from(&entry);
+        dir_entries.push((
+            current_dir
+                .join(entry.file_name.as_str())
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to inspect entry path: {err}"
+                    ))
+                })?
+                .into_path_buf(),
+            relative_path.clone(),
+            kind,
+            to_dir_entry(relative_path, file_name, kind),
+        ));
+    }
+
+    Ok(())
+}
+
+fn relative_child_path(prefix: &Path, file_name: &OsStr) -> PathBuf {
+    if prefix.as_os_str().is_empty() {
+        PathBuf::from(file_name)
+    } else {
+        prefix.join(file_name)
+    }
+}
+
+fn to_dir_entry(relative_path: PathBuf, file_name: &OsStr, kind: DirEntryKind) -> DirEntry {
+    let display_name = format_entry_component(file_name);
+    let display_depth = relative_path
+        .parent()
+        .map_or(0, |prefix| prefix.components().count());
+    let sort_key = format_entry_name(&relative_path);
+    DirEntry {
+        name: sort_key,
+        display_name,
+        depth: display_depth,
+        kind,
+    }
 }
 
 fn format_entry_name(path: &Path) -> String {
@@ -271,6 +350,20 @@ impl From<&FileType> for DirEntryKind {
         } else if file_type.is_dir() {
             DirEntryKind::Directory
         } else if file_type.is_file() {
+            DirEntryKind::File
+        } else {
+            DirEntryKind::Other
+        }
+    }
+}
+
+impl From<&ReadDirectoryEntry> for DirEntryKind {
+    fn from(entry: &ReadDirectoryEntry) -> Self {
+        // The remote directory API currently exposes directory/file booleans, but not a symlink
+        // bit, so remote listings preserve entries but cannot render the local "@" suffix.
+        if entry.is_directory {
+            DirEntryKind::Directory
+        } else if entry.is_file {
             DirEntryKind::File
         } else {
             DirEntryKind::Other

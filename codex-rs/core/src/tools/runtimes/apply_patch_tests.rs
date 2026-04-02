@@ -1,13 +1,20 @@
 use super::*;
+use codex_exec_server::Environment;
 use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 #[cfg(not(target_os = "windows"))]
 use std::path::PathBuf;
 
-#[test]
-fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
-    let runtime = ApplyPatchRuntime::new();
+#[tokio::test]
+async fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
+    let runtime = ApplyPatchRuntime::new(
+        Environment::create(/*exec_server_url*/ None)
+            .await
+            .expect("create environment")
+            .executor_attachment()
+            .expect("default environment should have an executor attachment"),
+    );
     assert!(runtime.wants_no_sandbox_approval(AskForApproval::OnRequest));
     assert!(
         !runtime.wants_no_sandbox_approval(AskForApproval::Granular(GranularApprovalConfig {

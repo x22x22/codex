@@ -4,12 +4,17 @@
 //! decision to avoid re-prompting, builds the self-invocation command for
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
+use crate::error::CodexErr;
+use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
+use crate::exec::StreamOutput;
+use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecOptions;
+use crate::sandboxing::ExecRequest;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -22,6 +27,10 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_exec_server::ExecOutputStream as ExecutorOutputStream;
+use codex_exec_server::ExecParams as ExecutorExecParams;
+use codex_exec_server::ExecutorAttachment;
+use codex_exec_server::ProcessId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
@@ -31,7 +40,13 @@ use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
+
+const EXEC_TIMEOUT_EXIT_CODE: i32 = 124;
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -44,12 +59,15 @@ pub struct ApplyPatchRequest {
     pub timeout_ms: Option<u64>,
 }
 
-#[derive(Default)]
-pub struct ApplyPatchRuntime;
+pub struct ApplyPatchRuntime {
+    executor_attachment: Arc<ExecutorAttachment>,
+}
 
 impl ApplyPatchRuntime {
-    pub fn new() -> Self {
-        Self
+    pub fn new(executor_attachment: Arc<ExecutorAttachment>) -> Self {
+        Self {
+            executor_attachment,
+        }
     }
 
     fn build_guardian_review_request(
@@ -115,6 +133,141 @@ impl ApplyPatchRuntime {
             call_id: ctx.call_id.clone(),
             tx_event: ctx.session.get_tx_event(),
         })
+    }
+
+    async fn execute_request(
+        &self,
+        env: ExecRequest,
+        ctx: &ToolCtx,
+    ) -> Result<ExecToolCallOutput, CodexErr> {
+        let start = Instant::now();
+        let out = if self.executor_attachment.exec_server_url().is_some() {
+            self.execute_request_remote(env, ctx).await?
+        } else {
+            execute_env(env, Self::stdout_stream(ctx)).await?
+        };
+        let duration = start.elapsed();
+
+        let mut out = out;
+        out.duration = duration;
+        Ok(out)
+    }
+
+    async fn execute_request_remote(
+        &self,
+        env: ExecRequest,
+        ctx: &ToolCtx,
+    ) -> Result<ExecToolCallOutput, CodexErr> {
+        let started = self
+            .executor_attachment
+            .get_exec_backend()
+            .start(ExecutorExecParams {
+                process_id: ProcessId::new(format!("apply-patch-{}", ctx.call_id)),
+                argv: env.command.clone(),
+                cwd: env.cwd.clone(),
+                env: env.env.clone(),
+                tty: false,
+                arg0: env.arg0.clone(),
+            })
+            .await
+            .map_err(|err| CodexErr::Io(io::Error::other(err)))?;
+
+        let process = started.process;
+        let mut wake_rx = process.subscribe_wake();
+        let mut after_seq = None;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut aggregated_output = Vec::new();
+        let mut exit_code = None;
+        let mut timed_out = false;
+        let expiration = env.expiration.clone();
+        let capture_policy = env.capture_policy;
+        let expiration_wait = async move {
+            if matches!(capture_policy, ExecCapturePolicy::ShellTool) {
+                expiration.wait().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::pin!(expiration_wait);
+
+        loop {
+            let response = process
+                .read(after_seq, /*max_bytes*/ None, /*wait_ms*/ Some(0))
+                .await
+                .map_err(|err| CodexErr::Io(io::Error::other(err)))?;
+
+            for chunk in response.chunks {
+                let bytes = chunk.chunk.into_inner();
+                match chunk.stream {
+                    ExecutorOutputStream::Stdout | ExecutorOutputStream::Pty => {
+                        stdout.extend_from_slice(&bytes);
+                    }
+                    ExecutorOutputStream::Stderr => {
+                        stderr.extend_from_slice(&bytes);
+                    }
+                }
+                aggregated_output.extend_from_slice(&bytes);
+            }
+
+            if let Some(message) = response.failure {
+                return Err(CodexErr::Io(io::Error::other(message)));
+            }
+
+            if response.exited {
+                exit_code = response.exit_code;
+            }
+
+            if response.closed {
+                break;
+            }
+
+            after_seq = response.next_seq.checked_sub(1);
+            tokio::select! {
+                wake_result = wake_rx.changed() => {
+                    if wake_result.is_err() {
+                        return Err(CodexErr::Io(io::Error::other(
+                            "exec-server wake channel closed",
+                        )));
+                    }
+                }
+                _ = &mut expiration_wait, if !timed_out => {
+                    process
+                        .terminate()
+                        .await
+                        .map_err(|err| CodexErr::Io(io::Error::other(err)))?;
+                    timed_out = true;
+                    exit_code = Some(EXEC_TIMEOUT_EXIT_CODE);
+                    break;
+                }
+            }
+        }
+
+        let output = ExecToolCallOutput {
+            exit_code: exit_code.unwrap_or(-1),
+            stdout: StreamOutput::new(String::from_utf8_lossy(&stdout).to_string()),
+            stderr: StreamOutput::new(String::from_utf8_lossy(&stderr).to_string()),
+            aggregated_output: StreamOutput::new(
+                String::from_utf8_lossy(&aggregated_output).to_string(),
+            ),
+            duration: Duration::ZERO,
+            timed_out,
+        };
+
+        if timed_out {
+            return Err(CodexErr::Sandbox(SandboxErr::Timeout {
+                output: Box::new(output),
+            }));
+        }
+
+        if is_likely_sandbox_denied(env.sandbox, &output) {
+            return Err(CodexErr::Sandbox(SandboxErr::Denied {
+                output: Box::new(output),
+                network_policy_decision: None,
+            }));
+        }
+
+        Ok(output)
     }
 }
 
@@ -223,7 +376,8 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         let env = attempt
             .env_for(command, options, /*network*/ None)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(env, Self::stdout_stream(ctx))
+        let out = self
+            .execute_request(env, ctx)
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)

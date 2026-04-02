@@ -27,7 +27,7 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
-use codex_exec_server::AttachedExecutor;
+use codex_exec_server::ExecutorAttachment;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::metrics::names::TOOL_CALL_UNIFIED_EXEC_METRIC;
@@ -37,12 +37,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub struct UnifiedExecHandler {
-    attached_executor: Arc<AttachedExecutor>,
+    executor_attachment: Arc<ExecutorAttachment>,
 }
 
 impl UnifiedExecHandler {
-    pub fn new(attached_executor: Arc<AttachedExecutor>) -> Self {
-        Self { attached_executor }
+    pub fn new(executor_attachment: Arc<ExecutorAttachment>) -> Self {
+        Self {
+            executor_attachment,
+        }
     }
 }
 
@@ -192,7 +194,7 @@ impl ToolHandler for UnifiedExecHandler {
             session.clone(),
             turn.clone(),
             call_id.clone(),
-            Arc::clone(&self.attached_executor),
+            Arc::clone(&self.executor_attachment),
         );
 
         let response = match tool_name.as_str() {

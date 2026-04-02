@@ -99,8 +99,8 @@ async fn exec_command_with_tty(
                 tty,
                 Box::new(NoopSpawnLifecycle),
                 turn.environment
-                    .attached_executor()
-                    .expect("test turn has attached executor")
+                    .executor_attachment()
+                    .expect("test turn has executor attachment")
                     .as_ref(),
             )
             .await?,
@@ -110,8 +110,8 @@ async fn exec_command_with_tty(
         Arc::clone(turn),
         "call".to_string(),
         turn.environment
-            .attached_executor()
-            .expect("test turn has attached executor"),
+            .executor_attachment()
+            .expect("test turn has executor attachment"),
     );
     let started_at = Instant::now();
     let process_started_alive = !process.has_exited() && process.exit_code().is_none();
@@ -516,13 +516,16 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
     );
 
     let environment = codex_exec_server::Environment::default();
+    let executor_attachment = environment
+        .executor_attachment()
+        .expect("default environment has an executor attachment");
     let process = UnifiedExecProcessManager::default()
         .open_session_with_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ false,
             Box::new(NoopSpawnLifecycle),
-            &environment,
+            executor_attachment.as_ref(),
         )
         .await?;
 
@@ -550,6 +553,9 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
 
     let remote_test_env = remote_test_env().await?;
     let environment = remote_test_env.environment();
+    let executor_attachment = environment
+        .executor_attachment()
+        .expect("remote environment has an executor attachment");
     let (_, turn) = make_session_and_context().await;
     let request = test_exec_request(
         &turn,
@@ -565,7 +571,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
             &request,
             /*tty*/ true,
             Box::new(NoopSpawnLifecycle),
-            environment,
+            executor_attachment.as_ref(),
         )
         .await?;
 
@@ -604,6 +610,10 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
     let remote_test_env = remote_test_env().await?;
     let (_, mut turn) = make_session_and_context().await;
     turn.environment = Arc::new(remote_test_env.environment().clone());
+    let executor_attachment = turn
+        .environment
+        .executor_attachment()
+        .expect("remote environment has an executor attachment");
 
     let request = test_exec_request(
         &turn,
@@ -621,7 +631,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],
             }),
-            turn.environment.as_ref(),
+            executor_attachment.as_ref(),
         )
         .await
         .expect_err("expected inherited fd rejection");

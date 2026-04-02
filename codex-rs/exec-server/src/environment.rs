@@ -14,26 +14,32 @@ use crate::remote_process::RemoteProcess;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
+/// Exec backend access for a concrete executor attachment.
+///
+/// Implementations should return a backend bound to the same environment
+/// instance so process execution and filesystem operations stay on one
+/// transport.
 pub trait ExecutorEnvironment: Send + Sync {
     fn get_exec_backend(&self) -> Arc<dyn ExecBackend>;
 }
 
+/// Executor and filesystem transports attached to one environment.
 #[derive(Clone)]
-pub struct AttachedExecutor {
+pub struct ExecutorAttachment {
     exec_server_url: Option<String>,
     exec_backend: Arc<dyn ExecBackend>,
     file_system: Arc<dyn ExecutorFileSystem>,
 }
 
-impl std::fmt::Debug for AttachedExecutor {
+impl std::fmt::Debug for ExecutorAttachment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AttachedExecutor")
+        f.debug_struct("ExecutorAttachment")
             .field("exec_server_url", &self.exec_server_url)
             .finish_non_exhaustive()
     }
 }
 
-impl AttachedExecutor {
+impl ExecutorAttachment {
     fn new_local(exec_backend: Arc<dyn ExecBackend>) -> Self {
         Self {
             exec_server_url: None,
@@ -63,7 +69,7 @@ impl AttachedExecutor {
     }
 }
 
-impl ExecutorEnvironment for AttachedExecutor {
+impl ExecutorEnvironment for ExecutorAttachment {
     fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         self.get_exec_backend()
     }
@@ -113,30 +119,31 @@ impl EnvironmentManager {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 enum ExecutorMode {
     #[default]
-    LocalExecutor,
-    RemoteExecutor {
+    Local,
+    Remote {
         url: String,
     },
-    NoExecutor,
+    None,
 }
 
 impl ExecutorMode {
     fn remote_exec_server_url(&self) -> Option<&str> {
         match self {
-            Self::RemoteExecutor { url } => Some(url.as_str()),
-            Self::LocalExecutor | Self::NoExecutor => None,
+            Self::Remote { url } => Some(url.as_str()),
+            Self::Local | Self::None => None,
         }
     }
 
     fn has_attached_executor(&self) -> bool {
-        !matches!(self, Self::NoExecutor)
+        !matches!(self, Self::None)
     }
 }
 
+/// Session/turn environment plus an optional executor attachment.
 #[derive(Clone)]
 pub struct Environment {
     executor_mode: ExecutorMode,
-    attached_executor: Option<Arc<AttachedExecutor>>,
+    executor_attachment: Option<Arc<ExecutorAttachment>>,
 }
 
 impl Default for Environment {
@@ -150,8 +157,8 @@ impl Default for Environment {
         }
 
         Self {
-            executor_mode: ExecutorMode::LocalExecutor,
-            attached_executor: Some(Arc::new(AttachedExecutor::new_local(Arc::new(
+            executor_mode: ExecutorMode::Local,
+            executor_attachment: Some(Arc::new(ExecutorAttachment::new_local(Arc::new(
                 local_process,
             )))),
         }
@@ -172,7 +179,7 @@ impl Environment {
     }
 
     async fn create_with_mode(executor_mode: ExecutorMode) -> Result<Self, ExecServerError> {
-        let attached_executor = if let Some(url) = executor_mode.remote_exec_server_url() {
+        let executor_attachment = if let Some(url) = executor_mode.remote_exec_server_url() {
             let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
                 websocket_url: url.to_string(),
                 client_name: "codex-environment".to_string(),
@@ -180,11 +187,11 @@ impl Environment {
                 initialize_timeout: std::time::Duration::from_secs(5),
             })
             .await?;
-            Some(Arc::new(AttachedExecutor::new_remote(
+            Some(Arc::new(ExecutorAttachment::new_remote(
                 url.to_string(),
                 client,
             )))
-        } else if matches!(executor_mode, ExecutorMode::NoExecutor) {
+        } else if matches!(executor_mode, ExecutorMode::None) {
             None
         } else {
             let local_process = LocalProcess::default();
@@ -194,14 +201,14 @@ impl Environment {
             local_process
                 .initialized()
                 .map_err(ExecServerError::Protocol)?;
-            Some(Arc::new(AttachedExecutor::new_local(Arc::new(
+            Some(Arc::new(ExecutorAttachment::new_local(Arc::new(
                 local_process,
             ))))
         };
 
         Ok(Self {
             executor_mode,
-            attached_executor,
+            executor_attachment,
         })
     }
 
@@ -213,16 +220,16 @@ impl Environment {
         self.executor_mode.has_attached_executor()
     }
 
-    pub fn attached_executor(&self) -> Option<Arc<AttachedExecutor>> {
-        self.attached_executor.clone()
+    pub fn executor_attachment(&self) -> Option<Arc<ExecutorAttachment>> {
+        self.executor_attachment.clone()
     }
 }
 
 fn parse_executor_mode(exec_server_url: Option<String>) -> ExecutorMode {
     match exec_server_url.as_deref().map(str::trim) {
-        None | Some("") => ExecutorMode::LocalExecutor,
-        Some(url) if url.eq_ignore_ascii_case("none") => ExecutorMode::NoExecutor,
-        Some(url) => ExecutorMode::RemoteExecutor {
+        None | Some("") => ExecutorMode::Local,
+        Some(url) if url.eq_ignore_ascii_case("none") => ExecutorMode::None,
+        Some(url) => ExecutorMode::Remote {
             url: url.to_string(),
         },
     }
@@ -247,42 +254,42 @@ mod tests {
 
         assert_eq!(environment.exec_server_url(), None);
         assert!(environment.has_attached_executor());
-        assert_eq!(environment.executor_mode, ExecutorMode::LocalExecutor);
-        assert!(environment.attached_executor().is_some());
+        assert_eq!(environment.executor_mode, ExecutorMode::Local);
+        assert!(environment.executor_attachment().is_some());
     }
 
     #[test]
     fn environment_manager_normalizes_empty_url() {
         let manager = EnvironmentManager::new(Some(String::new()));
 
-        assert_eq!(manager.executor_mode, ExecutorMode::LocalExecutor);
+        assert_eq!(manager.executor_mode, ExecutorMode::Local);
     }
 
     #[test]
     fn environment_manager_preserves_no_executor_setting() {
         let manager = EnvironmentManager::new(Some("none".to_string()));
 
-        assert_eq!(manager.executor_mode, ExecutorMode::NoExecutor);
+        assert_eq!(manager.executor_mode, ExecutorMode::None);
     }
 
     #[test]
     fn parse_executor_mode_preserves_no_executor_semantics() {
-        assert_eq!(parse_executor_mode(None), ExecutorMode::LocalExecutor);
+        assert_eq!(parse_executor_mode(None), ExecutorMode::Local);
         assert_eq!(
             parse_executor_mode(Some(String::new())),
-            ExecutorMode::LocalExecutor
+            ExecutorMode::Local
         );
         assert_eq!(
             parse_executor_mode(Some("none".to_string())),
-            ExecutorMode::NoExecutor
+            ExecutorMode::None
         );
         assert_eq!(
             parse_executor_mode(Some("NONE".to_string())),
-            ExecutorMode::NoExecutor
+            ExecutorMode::None
         );
         assert_eq!(
             parse_executor_mode(Some("ws://localhost:1234".to_string())),
-            ExecutorMode::RemoteExecutor {
+            ExecutorMode::Remote {
                 url: "ws://localhost:1234".to_string(),
             }
         );
@@ -303,8 +310,8 @@ mod tests {
         let environment = Environment::default();
 
         let response = environment
-            .attached_executor()
-            .expect("default environment has attached executor")
+            .executor_attachment()
+            .expect("default environment has executor attachment")
             .get_exec_backend()
             .start(crate::ExecParams {
                 process_id: ProcessId::from("default-env-proc"),
@@ -321,23 +328,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_executor_environment_disables_attached_executor() {
+    async fn no_executor_environment_disables_executor_attachment() {
         let environment = Environment::create(Some("none".to_string()))
             .await
             .expect("create environment");
 
         assert_eq!(environment.exec_server_url(), None);
         assert!(!environment.has_attached_executor());
-        assert_eq!(environment.executor_mode, ExecutorMode::NoExecutor);
-        assert!(environment.attached_executor().is_none());
+        assert_eq!(environment.executor_mode, ExecutorMode::None);
+        assert!(environment.executor_attachment().is_none());
     }
 
     #[tokio::test]
-    async fn no_executor_environment_has_no_executor_capability() {
+    async fn no_executor_environment_has_no_executor_attachment() {
         let environment = Environment::create(Some("none".to_string()))
             .await
             .expect("create environment");
 
-        assert!(environment.attached_executor().is_none());
+        assert!(environment.executor_attachment().is_none());
     }
 }

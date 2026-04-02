@@ -15,7 +15,11 @@ async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
     };
 
     let test_env = test_env().await?;
-    let file_system = test_env.environment().get_filesystem();
+    let file_system = test_env
+        .environment()
+        .executor_attachment()
+        .expect("remote test environment has an executor attachment")
+        .get_filesystem();
 
     let file_path = remote_test_file_path();
     let file_path_abs = absolute_path(file_path.clone())?;

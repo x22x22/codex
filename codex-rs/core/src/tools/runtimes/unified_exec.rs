@@ -37,7 +37,7 @@ use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
-use codex_exec_server::AttachedExecutor;
+use codex_exec_server::ExecutorAttachment;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
@@ -81,7 +81,7 @@ pub struct UnifiedExecApprovalKey {
 /// unified-exec side while delegating process startup to the manager.
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
-    attached_executor: Arc<AttachedExecutor>,
+    executor_attachment: Arc<ExecutorAttachment>,
     shell_mode: UnifiedExecShellMode,
 }
 
@@ -89,12 +89,12 @@ impl<'a> UnifiedExecRuntime<'a> {
     /// Creates a runtime bound to the shared unified-exec process manager.
     pub fn new(
         manager: &'a UnifiedExecProcessManager,
-        attached_executor: Arc<AttachedExecutor>,
+        executor_attachment: Arc<ExecutorAttachment>,
         shell_mode: UnifiedExecShellMode,
     ) -> Self {
         Self {
             manager,
-            attached_executor,
+            executor_attachment,
             shell_mode,
         }
     }
@@ -247,7 +247,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
-                    if self.attached_executor.exec_server_url().is_some() {
+                    if self.executor_attachment.exec_server_url().is_some() {
                         return Err(ToolError::Rejected(
                             "unified_exec zsh-fork is not supported when exec_server_url is configured".to_string(),
                         ));
@@ -259,7 +259,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             &prepared.exec_request,
                             req.tty,
                             prepared.spawn_lifecycle,
-                            self.attached_executor.as_ref(),
+                            self.executor_attachment.as_ref(),
                         )
                         .await
                         .map_err(|err| match err {
@@ -295,7 +295,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 &exec_env,
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
-                self.attached_executor.as_ref(),
+                self.executor_attachment.as_ref(),
             )
             .await
             .map_err(|err| match err {

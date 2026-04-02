@@ -132,6 +132,8 @@ pub async fn test_env() -> Result<TestEnv> {
             let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
             let cwd = remote_aware_cwd_path();
             environment
+                .executor_attachment()
+                .expect("remote test environment has an executor attachment")
                 .get_filesystem()
                 .create_directory(
                     &absolute_path(&cwd)?,
@@ -663,7 +665,11 @@ impl TestCodex {
     }
 
     pub fn fs(&self) -> Arc<dyn ExecutorFileSystem> {
-        self._test_env.environment().get_filesystem()
+        self._test_env
+            .environment()
+            .executor_attachment()
+            .expect("test environment has an executor attachment")
+            .get_filesystem()
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
