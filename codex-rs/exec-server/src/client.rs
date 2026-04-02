@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +20,7 @@ use codex_app_server_protocol::FsRemoveResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCNotification;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -28,6 +31,7 @@ use tracing::debug;
 
 use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
+use crate::client_api::RemoteExecPathTranslation;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::protocol::EXEC_CLOSED_METHOD;
@@ -91,6 +95,7 @@ impl RemoteExecServerConnectArgs {
             client_name,
             connect_timeout: CONNECT_TIMEOUT,
             initialize_timeout: INITIALIZE_TIMEOUT,
+            path_translation: None,
         }
     }
 }
@@ -109,6 +114,7 @@ pub(crate) struct Session {
 
 struct Inner {
     client: RpcClient,
+    path_translation: Option<RemoteExecPathTranslation>,
     // The remote transport delivers one shared notification stream for every
     // process on the connection. Keep a local process_id -> session registry so
     // we can turn those connection-global notifications into process wakeups
@@ -162,6 +168,7 @@ impl ExecServerClient {
     ) -> Result<Self, ExecServerError> {
         let websocket_url = args.websocket_url.clone();
         let connect_timeout = args.connect_timeout;
+        let path_translation = args.path_translation.clone();
         let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
             .await
             .map_err(|_| ExecServerError::WebSocketConnectTimeout {
@@ -179,6 +186,7 @@ impl ExecServerClient {
                 format!("exec-server websocket {websocket_url}"),
             ),
             args.into(),
+            path_translation,
         )
         .await
     }
@@ -208,6 +216,10 @@ impl ExecServerClient {
     }
 
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        let params = ExecParams {
+            cwd: self.translate_path_buf(params.cwd),
+            ..params
+        };
         self.inner
             .client
             .call(EXEC_METHOD, &params)
@@ -261,6 +273,9 @@ impl ExecServerClient {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, ExecServerError> {
+        let params = FsReadFileParams {
+            path: self.translate_absolute_path(params.path)?,
+        };
         self.inner
             .client
             .call(FS_READ_FILE_METHOD, &params)
@@ -272,6 +287,10 @@ impl ExecServerClient {
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, ExecServerError> {
+        let params = FsWriteFileParams {
+            path: self.translate_absolute_path(params.path)?,
+            ..params
+        };
         self.inner
             .client
             .call(FS_WRITE_FILE_METHOD, &params)
@@ -283,6 +302,10 @@ impl ExecServerClient {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, ExecServerError> {
+        let params = FsCreateDirectoryParams {
+            path: self.translate_absolute_path(params.path)?,
+            ..params
+        };
         self.inner
             .client
             .call(FS_CREATE_DIRECTORY_METHOD, &params)
@@ -294,6 +317,9 @@ impl ExecServerClient {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, ExecServerError> {
+        let params = FsGetMetadataParams {
+            path: self.translate_absolute_path(params.path)?,
+        };
         self.inner
             .client
             .call(FS_GET_METADATA_METHOD, &params)
@@ -305,6 +331,9 @@ impl ExecServerClient {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, ExecServerError> {
+        let params = FsReadDirectoryParams {
+            path: self.translate_absolute_path(params.path)?,
+        };
         self.inner
             .client
             .call(FS_READ_DIRECTORY_METHOD, &params)
@@ -316,6 +345,10 @@ impl ExecServerClient {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, ExecServerError> {
+        let params = FsRemoveParams {
+            path: self.translate_absolute_path(params.path)?,
+            ..params
+        };
         self.inner
             .client
             .call(FS_REMOVE_METHOD, &params)
@@ -324,6 +357,11 @@ impl ExecServerClient {
     }
 
     pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
+        let params = FsCopyParams {
+            source_path: self.translate_absolute_path(params.source_path)?,
+            destination_path: self.translate_absolute_path(params.destination_path)?,
+            recursive: params.recursive,
+        };
         self.inner
             .client
             .call(FS_COPY_METHOD, &params)
@@ -353,6 +391,7 @@ impl ExecServerClient {
     async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
+        path_translation: Option<RemoteExecPathTranslation>,
     ) -> Result<Self, ExecServerError> {
         let (rpc_client, mut events_rx) = RpcClient::new(connection);
         let inner = Arc::new_cyclic(|weak| {
@@ -386,6 +425,7 @@ impl ExecServerClient {
 
             Inner {
                 client: rpc_client,
+                path_translation,
                 sessions: ArcSwap::from_pointee(HashMap::new()),
                 sessions_write_lock: Mutex::new(()),
                 reader_task,
@@ -404,6 +444,33 @@ impl ExecServerClient {
             .await
             .map_err(ExecServerError::Json)
     }
+
+    fn translate_path_buf(&self, path: PathBuf) -> PathBuf {
+        translate_path(self.inner.path_translation.as_ref(), path.as_path())
+    }
+
+    fn translate_absolute_path(
+        &self,
+        path: AbsolutePathBuf,
+    ) -> Result<AbsolutePathBuf, ExecServerError> {
+        let translated = self.translate_path_buf(path.to_path_buf());
+        AbsolutePathBuf::from_absolute_path(translated.as_path()).map_err(|err| {
+            ExecServerError::Protocol(format!(
+                "failed to translate path `{}` for remote exec-server: {err}",
+                path.display()
+            ))
+        })
+    }
+}
+
+fn translate_path(path_translation: Option<&RemoteExecPathTranslation>, path: &Path) -> PathBuf {
+    let Some(path_translation) = path_translation else {
+        return path.to_path_buf();
+    };
+    let Ok(suffix) = path.strip_prefix(path_translation.local_root.as_path()) else {
+        return path.to_path_buf();
+    };
+    path_translation.remote_root.join(suffix)
 }
 
 impl From<RpcCallError> for ExecServerError {
@@ -628,6 +695,9 @@ async fn handle_server_notification(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::path::PathBuf;
+
     use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::JSONRPCResponse;
@@ -643,7 +713,9 @@ mod tests {
 
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
+    use super::translate_path;
     use crate::ProcessId;
+    use crate::client_api::RemoteExecPathTranslation;
     use crate::connection::JsonRpcConnection;
     use crate::protocol::EXEC_EXITED_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
@@ -718,6 +790,7 @@ mod tests {
                 "test-exec-server-client".to_string(),
             ),
             ExecServerClientConnectOptions::default(),
+            /*path_translation*/ None,
         )
         .await
         .expect("client should connect");
@@ -776,5 +849,25 @@ mod tests {
         drop(notifications_tx);
         drop(client);
         server.await.expect("server task should finish");
+    }
+
+    #[test]
+    fn translate_path_rewrites_local_root_prefix() {
+        let path_translation = RemoteExecPathTranslation {
+            local_root: PathBuf::from("/Users/starr/code/worktrees/codex-remote-exec-devserver"),
+            remote_root: PathBuf::from("/home/dev-user/code/codex"),
+        };
+
+        assert_eq!(
+            translate_path(
+                Some(&path_translation),
+                Path::new("/Users/starr/code/worktrees/codex-remote-exec-devserver/codex-rs")
+            ),
+            PathBuf::from("/home/dev-user/code/codex/codex-rs")
+        );
+        assert_eq!(
+            translate_path(Some(&path_translation), Path::new("/tmp/codex")),
+            PathBuf::from("/tmp/codex")
+        );
     }
 }

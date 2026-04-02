@@ -16,6 +16,7 @@ mod server;
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
 pub use client_api::ExecServerClientConnectOptions;
+pub use client_api::RemoteExecPathTranslation;
 pub use client_api::RemoteExecServerConnectArgs;
 pub use codex_app_server_protocol::FsCopyParams;
 pub use codex_app_server_protocol::FsCopyResponse;

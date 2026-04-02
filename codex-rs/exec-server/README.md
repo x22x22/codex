@@ -3,9 +3,8 @@
 `codex-exec-server` is a small standalone JSON-RPC server for spawning
 and controlling subprocesses through `codex-utils-pty`.
 
-This PR intentionally lands only the standalone binary, client, wire protocol,
-and docs. Exec and filesystem methods are stubbed server-side here and are
-implemented in follow-up PRs.
+This crate provides the standalone binary, client, wire protocol, and
+exec/filesystem handlers used by remote executor sessions.
 
 It currently provides:
 
@@ -13,8 +12,18 @@ It currently provides:
 - a Rust client: `ExecServerClient`
 - a small protocol module with shared request/response types
 
-This crate is intentionally narrow. It is not wired into the main Codex CLI or
-unified-exec in this PR; it is only the standalone transport layer.
+This crate is intentionally narrow. The main Codex TUI can connect its embedded
+app-server to a remote exec-server over SSH with:
+
+```bash
+codex --exec-server-ssh dev \
+  --exec-server-local-root /Users/starr/code/worktrees/codex-remote-exec-devserver \
+  --exec-server-remote-root /home/dev-user/code/codex
+```
+
+For custom remote binary locations, use `--exec-server-program` as well. The
+root-mapping flags are only needed when the local and remote checkout paths
+differ.
 
 ## Transport
 
@@ -36,7 +45,7 @@ Each connection follows this sequence:
 1. Send `initialize`.
 2. Wait for the `initialize` response.
 3. Send `initialized`.
-4. Call exec or filesystem RPCs once the follow-up implementation PRs land.
+4. Call exec or filesystem RPCs.
 
 If the server receives any notification other than `initialized`, it replies
 with an error using request id `-1`.

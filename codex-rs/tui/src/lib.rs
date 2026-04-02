@@ -40,6 +40,7 @@ use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_core::state_db::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_exec_server::RemoteExecPathTranslation;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
@@ -228,6 +229,8 @@ pub use public_widgets::composer_input::ComposerInput;
 
 async fn start_embedded_app_server(
     arg0_paths: Arg0DispatchPaths,
+    exec_server_url: Option<String>,
+    exec_server_path_translation: Option<RemoteExecPathTranslation>,
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
@@ -236,6 +239,8 @@ async fn start_embedded_app_server(
 ) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
         arg0_paths,
+        exec_server_url,
+        exec_server_path_translation,
         config,
         cli_kv_overrides,
         loader_overrides,
@@ -248,7 +253,10 @@ async fn start_embedded_app_server(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AppServerTarget {
-    Embedded,
+    Embedded {
+        exec_server_url: Option<String>,
+        exec_server_path_translation: Option<RemoteExecPathTranslation>,
+    },
     Remote {
         websocket_url: String,
         auth_token: Option<String>,
@@ -357,8 +365,13 @@ async fn start_app_server(
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppServerClient> {
     match target {
-        AppServerTarget::Embedded => start_embedded_app_server(
+        AppServerTarget::Embedded {
+            exec_server_url,
+            exec_server_path_translation,
+        } => start_embedded_app_server(
             arg0_paths,
+            exec_server_url.clone(),
+            exec_server_path_translation.clone(),
             config,
             cli_kv_overrides,
             loader_overrides,
@@ -395,11 +408,20 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
-    start_app_server_for_picker(config, &AppServerTarget::Embedded).await
+    start_app_server_for_picker(
+        config,
+        &AppServerTarget::Embedded {
+            exec_server_url: None,
+            exec_server_path_translation: None,
+        },
+    )
+    .await
 }
 
 async fn start_embedded_app_server_with<F, Fut>(
     arg0_paths: Arg0DispatchPaths,
+    exec_server_url: Option<String>,
+    exec_server_path_translation: Option<RemoteExecPathTranslation>,
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
@@ -423,6 +445,8 @@ where
         .collect();
     let client = start_client(InProcessClientStartArgs {
         arg0_paths,
+        exec_server_url,
+        exec_server_path_translation,
         config: Arc::new(config),
         cli_overrides: cli_kv_overrides,
         loader_overrides,
@@ -592,18 +616,28 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     remote: Option<String>,
     remote_auth_token: Option<String>,
+    exec_server_url: Option<String>,
+    exec_server_path_translation: Option<(PathBuf, PathBuf)>,
 ) -> std::io::Result<AppExitInfo> {
     let remote_url = remote;
     if let (Some(websocket_url), Some(_)) = (remote_url.as_deref(), remote_auth_token.as_ref()) {
         validate_remote_auth_token_transport(websocket_url).map_err(std::io::Error::other)?;
     }
-    let app_server_target = remote_url
-        .clone()
-        .map(|websocket_url| AppServerTarget::Remote {
+    let app_server_target = remote_url.clone().map_or(
+        AppServerTarget::Embedded {
+            exec_server_url,
+            exec_server_path_translation: exec_server_path_translation.map(
+                |(local_root, remote_root)| RemoteExecPathTranslation {
+                    local_root,
+                    remote_root,
+                },
+            ),
+        },
+        |websocket_url| AppServerTarget::Remote {
             websocket_url,
             auth_token: remote_auth_token.clone(),
-        })
-        .unwrap_or(AppServerTarget::Embedded);
+        },
+    );
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -787,7 +821,7 @@ pub async fn run_main(
         }
     }
 
-    if matches!(app_server_target, AppServerTarget::Embedded) {
+    if matches!(app_server_target, AppServerTarget::Embedded { .. }) {
         #[allow(clippy::print_stderr)]
         if let Err(err) = enforce_login_restrictions(&AuthConfig {
             codex_home: config.codex_home.clone(),
@@ -1331,6 +1365,19 @@ async fn run_ratatui_app(
             return Err(err);
         }
     };
+    let embedded_exec_server_url = match &app_server_target {
+        AppServerTarget::Embedded {
+            exec_server_url, ..
+        } => exec_server_url.clone(),
+        AppServerTarget::Remote { .. } => None,
+    };
+    let embedded_exec_server_path_translation = match &app_server_target {
+        AppServerTarget::Embedded {
+            exec_server_path_translation,
+            ..
+        } => exec_server_path_translation.clone(),
+        AppServerTarget::Remote { .. } => None,
+    };
 
     let app_result = App::run(
         &mut tui,
@@ -1347,6 +1394,8 @@ async fn run_ratatui_app(
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
         remote_auth_token,
+        embedded_exec_server_url,
+        embedded_exec_server_path_translation,
     )
     .await;
 
@@ -1673,6 +1722,8 @@ mod tests {
     ) -> color_eyre::Result<InProcessAppServerClient> {
         start_embedded_app_server(
             Arg0DispatchPaths::default(),
+            None,
+            None,
             config,
             Vec::new(),
             LoaderOverrides::default(),
@@ -1924,6 +1975,8 @@ mod tests {
         let config = build_config(&temp_dir).await?;
         let result = start_embedded_app_server_with(
             Arg0DispatchPaths::default(),
+            /*exec_server_url*/ None,
+            /*exec_server_path_translation*/ None,
             config,
             Vec::new(),
             LoaderOverrides::default(),

@@ -95,6 +95,7 @@ use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_exec_server::RemoteExecPathTranslation;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -984,6 +985,8 @@ pub(crate) struct App {
     feedback_audience: FeedbackAudience,
     remote_app_server_url: Option<String>,
     remote_app_server_auth_token: Option<String>,
+    embedded_exec_server_url: Option<String>,
+    embedded_exec_server_path_translation: Option<RemoteExecPathTranslation>,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -3510,6 +3513,8 @@ impl App {
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
+        embedded_exec_server_url: Option<String>,
+        embedded_exec_server_path_translation: Option<RemoteExecPathTranslation>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -3727,6 +3732,8 @@ impl App {
             feedback_audience,
             remote_app_server_url,
             remote_app_server_auth_token,
+            embedded_exec_server_url,
+            embedded_exec_server_path_translation,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -3979,7 +3986,12 @@ impl App {
                             websocket_url,
                             auth_token: self.remote_app_server_auth_token.clone(),
                         },
-                        None => crate::AppServerTarget::Embedded,
+                        None => crate::AppServerTarget::Embedded {
+                            exec_server_url: self.embedded_exec_server_url.clone(),
+                            exec_server_path_translation: self
+                                .embedded_exec_server_path_translation
+                                .clone(),
+                        },
                     },
                 )
                 .await
@@ -8972,6 +8984,8 @@ guardian_approval = true
             feedback_audience: FeedbackAudience::External,
             remote_app_server_url: None,
             remote_app_server_auth_token: None,
+            embedded_exec_server_url: None,
+            embedded_exec_server_path_translation: None,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
@@ -9026,6 +9040,8 @@ guardian_approval = true
                 feedback_audience: FeedbackAudience::External,
                 remote_app_server_url: None,
                 remote_app_server_auth_token: None,
+                embedded_exec_server_url: None,
+                embedded_exec_server_path_translation: None,
                 pending_update_action: None,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),

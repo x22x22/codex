@@ -43,6 +43,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_exec_server::RemoteExecPathTranslation;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use serde::de::DeserializeOwned;
@@ -258,6 +259,10 @@ impl Error for TypedRequestError {
 pub struct InProcessClientStartArgs {
     /// Resolved argv0 dispatch paths used by command execution internals.
     pub arg0_paths: Arg0DispatchPaths,
+    /// Optional websocket URL for a remote exec-server used by the embedded app-server.
+    pub exec_server_url: Option<String>,
+    /// Optional local-to-remote path rewrite for outbound exec-server requests.
+    pub exec_server_path_translation: Option<RemoteExecPathTranslation>,
     /// Shared config used to initialize app-server runtime.
     pub config: Arc<Config>,
     /// CLI config overrides that are already parsed into TOML values.
@@ -312,6 +317,8 @@ impl InProcessClientStartArgs {
         let initialize = self.initialize_params();
         InProcessStartArgs {
             arg0_paths: self.arg0_paths,
+            exec_server_url: self.exec_server_url,
+            exec_server_path_translation: self.exec_server_path_translation,
             config: self.config,
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
@@ -888,6 +895,8 @@ mod tests {
     ) -> InProcessAppServerClient {
         InProcessAppServerClient::start(InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
+            exec_server_url: None,
+            exec_server_path_translation: None,
             config: Arc::new(build_test_config().await),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
@@ -1885,11 +1894,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_start_args_leave_manager_bootstrap_to_app_server() {
+    async fn runtime_start_args_forward_exec_server_config_to_app_server() {
         let config = Arc::new(build_test_config().await);
+        let exec_server_path_translation = RemoteExecPathTranslation {
+            local_root: std::path::PathBuf::from("/local/codex"),
+            remote_root: std::path::PathBuf::from("/remote/codex"),
+        };
 
         let runtime_args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
+            exec_server_url: Some("ws://127.0.0.1:9999/".to_string()),
+            exec_server_path_translation: Some(exec_server_path_translation.clone()),
             config: config.clone(),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
@@ -1907,6 +1922,14 @@ mod tests {
         .into_runtime_start_args();
 
         assert_eq!(runtime_args.config, config);
+        assert_eq!(
+            runtime_args.exec_server_url,
+            Some("ws://127.0.0.1:9999/".to_string())
+        );
+        assert_eq!(
+            runtime_args.exec_server_path_translation,
+            Some(exec_server_path_translation)
+        );
     }
 
     #[tokio::test]

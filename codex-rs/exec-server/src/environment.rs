@@ -5,6 +5,7 @@ use tokio::sync::OnceCell;
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::RemoteExecServerConnectArgs;
+use crate::client_api::RemoteExecPathTranslation;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
@@ -21,6 +22,7 @@ pub trait ExecutorEnvironment: Send + Sync {
 #[derive(Debug, Default)]
 pub struct EnvironmentManager {
     exec_server_url: Option<String>,
+    path_translation: Option<RemoteExecPathTranslation>,
     current_environment: OnceCell<Arc<Environment>>,
 }
 
@@ -28,8 +30,14 @@ impl EnvironmentManager {
     pub fn new(exec_server_url: Option<String>) -> Self {
         Self {
             exec_server_url: normalize_exec_server_url(exec_server_url),
+            path_translation: None,
             current_environment: OnceCell::new(),
         }
+    }
+
+    pub fn with_path_translation(mut self, path_translation: RemoteExecPathTranslation) -> Self {
+        self.path_translation = Some(path_translation);
+        self
     }
 
     pub fn from_env() -> Self {
@@ -44,12 +52,21 @@ impl EnvironmentManager {
         self.current_environment
             .get_or_try_init(|| async {
                 Ok(Arc::new(
-                    Environment::create(self.exec_server_url.clone()).await?,
+                    Environment::create_with_args(EnvironmentCreateArgs {
+                        exec_server_url: self.exec_server_url.clone(),
+                        path_translation: self.path_translation.clone(),
+                    })
+                    .await?,
                 ))
             })
             .await
             .map(Arc::clone)
     }
+}
+
+struct EnvironmentCreateArgs {
+    exec_server_url: Option<String>,
+    path_translation: Option<RemoteExecPathTranslation>,
 }
 
 #[derive(Clone)]
@@ -87,6 +104,18 @@ impl std::fmt::Debug for Environment {
 
 impl Environment {
     pub async fn create(exec_server_url: Option<String>) -> Result<Self, ExecServerError> {
+        Self::create_with_args(EnvironmentCreateArgs {
+            exec_server_url,
+            path_translation: None,
+        })
+        .await
+    }
+
+    async fn create_with_args(args: EnvironmentCreateArgs) -> Result<Self, ExecServerError> {
+        let EnvironmentCreateArgs {
+            exec_server_url,
+            path_translation,
+        } = args;
         let exec_server_url = normalize_exec_server_url(exec_server_url);
         let remote_exec_server_client = if let Some(url) = &exec_server_url {
             Some(
@@ -95,6 +124,7 @@ impl Environment {
                     client_name: "codex-environment".to_string(),
                     connect_timeout: std::time::Duration::from_secs(5),
                     initialize_timeout: std::time::Duration::from_secs(5),
+                    path_translation,
                 })
                 .await?,
             )
@@ -158,15 +188,19 @@ mod tests {
     use std::sync::Arc;
 
     use super::Environment;
+    use super::EnvironmentCreateArgs;
     use super::EnvironmentManager;
     use crate::ProcessId;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn create_without_remote_exec_server_url_does_not_connect() {
-        let environment = Environment::create(/*exec_server_url*/ None)
-            .await
-            .expect("create environment");
+        let environment = Environment::create_with_args(EnvironmentCreateArgs {
+            exec_server_url: None,
+            path_translation: None,
+        })
+        .await
+        .expect("create environment");
 
         assert_eq!(environment.exec_server_url(), None);
         assert!(environment.remote_exec_server_client.is_none());

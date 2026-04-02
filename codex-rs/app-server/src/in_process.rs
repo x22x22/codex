@@ -79,6 +79,7 @@ use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::RemoteExecPathTranslation;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::mpsc;
@@ -106,6 +107,13 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
 pub struct InProcessStartArgs {
     /// Resolved argv0 dispatch paths used by command execution internals.
     pub arg0_paths: Arg0DispatchPaths,
+    /// Optional websocket URL for a remote exec-server backing the embedded runtime.
+    ///
+    /// When omitted, app-server falls back to `CODEX_EXEC_SERVER_URL` and then
+    /// to a local execution environment.
+    pub exec_server_url: Option<String>,
+    /// Optional local-to-remote path rewrite for outbound exec-server requests.
+    pub exec_server_path_translation: Option<RemoteExecPathTranslation>,
     /// Shared base config used to initialize core components.
     pub config: Arc<Config>,
     /// CLI config overrides that are already parsed into TOML values.
@@ -337,9 +345,10 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
         .await?;
     if let Err(error) = initialize_response {
         let _ = client.shutdown().await;
+        let error_message = error.message;
         return Err(IoError::new(
             ErrorKind::InvalidData,
-            format!("in-process initialize failed: {}", error.message),
+            format!("in-process initialize failed: {error_message}"),
         ));
     }
     client.notify(ClientNotification::Initialized)?;
@@ -381,11 +390,18 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
+            let mut environment_manager = match args.exec_server_url {
+                Some(exec_server_url) => EnvironmentManager::new(Some(exec_server_url)),
+                None => EnvironmentManager::from_env(),
+            };
+            if let Some(path_translation) = args.exec_server_path_translation {
+                environment_manager = environment_manager.with_path_translation(path_translation);
+            }
             let mut processor = MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
-                environment_manager: Arc::new(EnvironmentManager::from_env()),
+                environment_manager: Arc::new(environment_manager),
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
                 cloud_requirements: args.cloud_requirements,
@@ -712,6 +728,8 @@ mod tests {
     ) -> InProcessClientHandle {
         let args = InProcessStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
+            exec_server_url: None,
+            exec_server_path_translation: None,
             config: Arc::new(build_test_config().await),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),

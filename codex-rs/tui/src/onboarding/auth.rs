@@ -917,6 +917,8 @@ mod tests {
             .unwrap();
         let client = InProcessAppServerClient::start(InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
+            exec_server_url: None,
+            exec_server_path_translation: None,
             config: Arc::new(config),
             cli_overrides: Vec::new(),
             loader_overrides: Default::default(),
