@@ -565,7 +565,7 @@ impl UnifiedExecProcessManager {
                 codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
                     codex_windows_sandbox::spawn_windows_sandbox_session_elevated(
                         policy_json.as_str(),
-                        env.sandbox_policy_cwd.as_path(),
+                        env.windows_sandbox_policy_cwd.as_path(),
                         codex_home.as_ref(),
                         env.command.clone(),
                         env.cwd.as_path(),
@@ -580,7 +580,7 @@ impl UnifiedExecProcessManager {
                 _ => {
                     codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
                         policy_json.as_str(),
-                        env.sandbox_policy_cwd.as_path(),
+                        env.windows_sandbox_policy_cwd.as_path(),
                         codex_home.as_ref(),
                         env.command.clone(),
                         env.cwd.as_path(),
