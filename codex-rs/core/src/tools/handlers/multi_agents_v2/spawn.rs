@@ -39,8 +39,9 @@ impl ToolHandler for Handler {
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
+        let fork_mode = args.fork_mode(&turn.config, role_name)?;
 
-        let initial_operation = parse_collab_input(args.message, args.items)?;
+        let initial_operation = parse_collab_input(Some(args.message), /*items*/ None)?;
         let prompt = render_input_preview(&initial_operation);
 
         let session_source = turn.session_source.clone();
@@ -51,10 +52,6 @@ impl ToolHandler for Handler {
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
         }
-        let fork_context = args
-            .fork_context
-            .unwrap_or_else(|| default_fork_context_for_role(&turn.config, role_name));
-
         session
             .send_event(
                 &turn,
@@ -144,16 +141,12 @@ impl ToolHandler for Handler {
                     initial_agent_op.clone(),
                     Some(spawn_source.clone()),
                     SpawnAgentOptions {
-                        fork_parent_spawn_call_id: if fork_context {
+                        fork_parent_spawn_call_id: if fork_mode.is_some() {
                             Some(call_id.clone())
                         } else {
                             None
                         },
-                        fork_mode: if fork_context {
-                            Some(SpawnAgentForkMode::FullHistory)
-                        } else {
-                            None
-                        },
+                        fork_mode: fork_mode.clone(),
                     },
                 )
                 .await;
@@ -262,14 +255,50 @@ impl ToolHandler for Handler {
 
 #[derive(Debug, Deserialize)]
 struct SpawnAgentArgs {
-    message: Option<String>,
-    items: Option<Vec<UserInput>>,
+    message: String,
     task_name: String,
     agent_type: Option<String>,
     model: Option<String>,
     model_fallback_list: Option<Vec<SpawnAgentModelFallbackCandidate>>,
     reasoning_effort: Option<ReasoningEffort>,
+    fork_turns: Option<String>,
     fork_context: Option<bool>,
+}
+
+impl SpawnAgentArgs {
+    fn fork_mode(
+        &self,
+        config: &crate::config::Config,
+        role_name: Option<&str>,
+    ) -> Result<Option<SpawnAgentForkMode>, FunctionCallError> {
+        if let Some(fork_turns) = self.fork_turns.as_deref() {
+            let trimmed = fork_turns.trim();
+            return match trimmed {
+                "none" => Ok(None),
+                "all" => Ok(Some(SpawnAgentForkMode::FullHistory)),
+                _ => {
+                    let Ok(last_n_turns) = trimmed.parse::<usize>() else {
+                        return Err(FunctionCallError::RespondToModel(
+                            "fork_turns must be `none`, `all`, or a positive integer string"
+                                .to_string(),
+                        ));
+                    };
+                    if last_n_turns == 0 {
+                        return Err(FunctionCallError::RespondToModel(
+                            "fork_turns must be `none`, `all`, or a positive integer string"
+                                .to_string(),
+                        ));
+                    }
+                    Ok(Some(SpawnAgentForkMode::LastNTurns(last_n_turns)))
+                }
+            };
+        }
+
+        let fork_context = self
+            .fork_context
+            .unwrap_or_else(|| default_fork_context_for_role(config, role_name));
+        Ok(fork_context.then_some(SpawnAgentForkMode::FullHistory))
+    }
 }
 
 #[derive(Debug, Serialize)]

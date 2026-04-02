@@ -27,6 +27,7 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::SandboxState;
+use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::Config;
 use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
@@ -35,17 +36,17 @@ use crate::config_loader::AppsRequirementsToml;
 use crate::default_client::create_client;
 use crate::default_client::is_first_party_chat_originator;
 use crate::default_client::originator;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
-use crate::mcp::ToolPluginProvenance;
-use crate::mcp::auth::compute_auth_statuses;
-use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use codex_features::Feature;
+use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::mcp::ToolPluginProvenance;
+use codex_mcp::mcp::auth::compute_auth_statuses;
+use codex_mcp::mcp::with_codex_apps_mcp;
 
 pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
@@ -189,7 +190,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
-    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let mcp_manager = McpManager::new(Arc::clone(&plugins_manager));
     let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
@@ -201,12 +203,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
 
-    let mcp_servers = with_codex_apps_mcp(
-        HashMap::new(),
-        /*connectors_enabled*/ true,
-        auth.as_ref(),
-        config,
-    );
+    let mcp_config = config.to_mcp_config(plugins_manager.as_ref());
+    let mcp_servers = with_codex_apps_mcp(HashMap::new(), auth.as_ref(), &mcp_config);
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
@@ -232,6 +230,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,
         &config.permissions.approval_policy,
+        INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         sandbox_state,
         config.codex_home.clone(),
@@ -715,10 +714,6 @@ const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
 pub fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
     filter_disallowed_connectors_for_originator(connectors, originator().value.as_str())
-}
-
-pub(crate) fn is_connector_id_allowed(connector_id: &str) -> bool {
-    is_connector_id_allowed_for_originator(connector_id, originator().value.as_str())
 }
 
 fn filter_disallowed_connectors_for_originator(
