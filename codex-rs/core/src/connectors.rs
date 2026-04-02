@@ -26,9 +26,9 @@ use tracing::warn;
 
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::Config;
-use crate::config::types::AppToolApproval;
-use crate::config::types::AppsConfigToml;
-use crate::config::types::ToolSuggestDiscoverableType;
+use codex_config::types::AppToolApproval;
+use codex_config::types::AppsConfigToml;
+use codex_config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::AppsRequirementsToml;
 use crate::mcp::McpManager;
 use crate::plugins::AppConnectorId;
