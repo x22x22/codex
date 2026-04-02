@@ -44,7 +44,6 @@ class CodexAgentService : AgentService() {
             AgentPlannerRuntimeManager.closeSession(session.sessionId)
         }
         if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER) {
-            AgentQuestionNotifier.cancel(this, session.sessionId)
             return
         }
         if (!pendingQuestionLoads.add(session.sessionId)) {
@@ -65,10 +64,35 @@ class CodexAgentService : AgentService() {
         AgentPlannerRuntimeManager.closeSession(sessionId)
         DesktopInspectionRegistry.removeSession(sessionId)
         AgentQuestionNotifier.cancel(this, sessionId)
+        AgentQuestionNotifier.clearSessionState(sessionId)
         presentationPolicyStore.removePolicy(sessionId)
         handledGenieQuestions.removeIf { it.startsWith("$sessionId:") }
         handledBridgeRequests.removeIf { it.startsWith("$sessionId:") }
         pendingGenieQuestions.removeIf { it.startsWith("$sessionId:") }
+    }
+
+    override fun onShowOrUpdateSessionNotification(
+        session: AgentSessionInfo,
+        notificationToken: String,
+        notificationText: String,
+    ) {
+        showOrUpdateSessionNotification(
+            session = session,
+            notificationToken = notificationToken,
+            notificationText = notificationText,
+        )
+    }
+
+    override fun onCancelSessionNotification(
+        sessionId: String,
+        notificationToken: String,
+        reason: Int,
+    ) {
+        cancelSessionNotification(
+            sessionId = sessionId,
+            notificationToken = notificationToken,
+            reason = reason,
+        )
     }
 
     private fun maybeRollUpParentSession(session: AgentSessionInfo) {
@@ -206,7 +230,7 @@ class CodexAgentService : AgentService() {
         val events = manager.getSessionEvents(session.sessionId)
         val question = findLatestQuestion(events) ?: return
         if (!isBridgeQuestion(question)) {
-            AgentQuestionNotifier.cancel(this, session.sessionId)
+            return
         }
         maybeAutoAnswerGenieQuestion(session, question)
     }
@@ -233,6 +257,67 @@ class CodexAgentService : AgentService() {
                 Log.i(TAG, "Agent bridge-answer unavailable for ${session.sessionId}: ${err.message}")
             }
             pendingGenieQuestions.remove(questionKey)
+        }
+    }
+
+    private fun showOrUpdateSessionNotification(
+        session: AgentSessionInfo,
+        notificationToken: String,
+        notificationText: String,
+    ) {
+        thread(name = "CodexAgentNotificationShow-${session.sessionId}") {
+            val posted = runCatching {
+                AgentQuestionNotifier.showOrUpdateDelegatedNotification(
+                    context = this,
+                    session = session,
+                    notificationToken = notificationToken,
+                    notificationText = notificationText,
+                )
+            }.onFailure { err ->
+                Log.w(
+                    TAG,
+                    "Failed to post delegated notification sessionId=${session.sessionId} token=$notificationToken",
+                    err,
+                )
+            }.getOrDefault(false)
+            if (!posted) {
+                return@thread
+            }
+            runCatching {
+                sessionController.ackSessionNotification(session.sessionId, notificationToken)
+            }.onFailure { err ->
+                Log.w(
+                    TAG,
+                    "Failed to ack delegated notification sessionId=${session.sessionId} token=$notificationToken",
+                    err,
+                )
+            }
+        }
+    }
+
+    private fun cancelSessionNotification(
+        sessionId: String,
+        notificationToken: String,
+        reason: Int,
+    ) {
+        thread(name = "CodexAgentNotificationCancel-$sessionId") {
+            Log.i(
+                TAG,
+                "Cancelling delegated notification sessionId=$sessionId token=$notificationToken reason=${notificationCancelReasonToString(reason)}",
+            )
+            AgentQuestionNotifier.cancel(
+                context = this,
+                sessionId = sessionId,
+                notificationToken = notificationToken,
+            )
+        }
+    }
+
+    private fun notificationCancelReasonToString(reason: Int): String {
+        return when (reason) {
+            NOTIFICATION_CANCEL_REASON_SUPPRESSED -> "SUPPRESSED"
+            NOTIFICATION_CANCEL_REASON_REMOVED -> "REMOVED"
+            else -> reason.toString()
         }
     }
 

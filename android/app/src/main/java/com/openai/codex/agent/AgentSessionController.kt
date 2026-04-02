@@ -548,6 +548,26 @@ class AgentSessionController(context: Context) {
         }
     }
 
+    fun ackSessionNotification(
+        sessionId: String,
+        notificationToken: String,
+    ) {
+        requireAgentManager().ackSessionNotification(sessionId, notificationToken)
+    }
+
+    fun answerQuestionFromNotification(
+        sessionId: String,
+        notificationToken: String,
+        answer: String,
+        parentSessionId: String?,
+    ) {
+        val manager = requireAgentManager()
+        manager.answerQuestionFromNotification(sessionId, notificationToken, answer)
+        if (parentSessionId != null) {
+            manager.publishTrace(parentSessionId, "Answered question for $sessionId: $answer")
+        }
+    }
+
     fun isSessionWaitingForUser(sessionId: String): Boolean {
         val manager = agentManager ?: return false
         return manager.getSessions(currentUserId()).any { session ->

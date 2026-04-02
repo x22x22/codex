@@ -107,6 +107,15 @@ stub SDK docs and the local refactor doc:
   detail UI must cancel the parent and all child Genie sessions through the
   framework `cancelSession(...)` path, even when some of those sessions are
   already terminal.
+- Framework-owned session notifications now support delegated AGENT rendering:
+  - user-facing question/result/error notifications should be rendered by the
+    Agent app when the framework calls `onShowOrUpdateSessionNotification(...)`
+    and cancelled when it calls `onCancelSessionNotification(...)`
+  - the Agent must ACK a posted notification with `ackSessionNotification(...)`
+    and route inline replies through `answerQuestionFromNotification(...)`
+  - if delegated rendering is unavailable, the framework may post a generic
+    fallback notification, so app-side notification code must remain
+    token-aware and idempotent
 
 ## External reference implementations
 

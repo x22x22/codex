@@ -74,7 +74,13 @@ The current repo now contains these implementation slices:
   still-live framework session.
 - The Agent now auto-answers only internal bridge questions. User-facing Genie
   questions remain user-facing and are surfaced through the normal framework
-  question flow, notifications, and desktop/UI answer surfaces.
+  question flow, desktop/UI answer surfaces, and framework-delegated
+  AGENT-rendered notifications with target-app icon branding and inline reply.
+- Framework-owned notification lifecycle now delegates question/result/error
+  notification rendering to the Agent app when available, while retaining a
+  framework fallback path if the Agent renderer is unavailable or does not ACK
+  in time. Inline reply actions route through
+  `answerQuestionFromNotification(sessionId, notificationToken, response)`.
 - The Agent now records an explicit per-child final presentation policy
   (`ATTACHED`, `DETACHED_HIDDEN`, `DETACHED_SHOWN`, or `AGENT_CHOICE`) and
   uses the framework-authoritative `AgentSessionInfo.getTargetPresentation()`
@@ -222,8 +228,10 @@ the Android Agent/Genie flow.
   - detached target ensure-hidden/show/hide/attach/close
   - typed detached frame capture with runtime-aware recovery
 - `request_user_input` bridged from hosted Codex back into AgentSDK questions
-- Framework-owned question notifications for Genie questions that need user
-  input; the Agent app suppresses its former duplicate notification mirror
+- Framework-owned notification lifecycle with delegated Agent rendering for
+  question/result/error notifications; the Agent app posts the visible
+  notification, ACKs the tokenized callback, and falls back to plain
+  framework-owned rendering if the new callback surface is unavailable
 - Detached-mode Genie sessions now request `showDetachedTarget` before entering
   `WAITING_FOR_USER`, so HOME can keep a visible live icon while the user
   answers the question
@@ -249,7 +257,8 @@ the Android Agent/Genie flow.
 - `android/genie`
   - standalone Genie scaffold APK with hosted `codex app-server`
 - `android/app/src/main/java/com/openai/codex/agent/CodexAgentService.kt`
-  - framework `AgentService`
+  - framework `AgentService`, parent roll-up, bridge auto-answering, and
+    delegated notification callbacks
 - `android/app/src/main/java/com/openai/codex/agent/AgentSessionController.kt`
   - Agent-side `AgentManager` orchestration helper
 - `android/app/src/main/java/com/openai/codex/agent/AgentFrameworkToolBridge.kt`
@@ -258,6 +267,11 @@ the Android Agent/Genie flow.
   - Agent session UI, Agent clarification dialogs, and Agent-native auth controls
 - `android/app/src/main/java/com/openai/codex/agent/SessionDetailActivity.kt`
   - HOME/AGENT session inspection and question answering UI
+- `android/app/src/main/java/com/openai/codex/agent/AgentQuestionNotifier.kt`
+  - token-aware Agent-side renderer for delegated framework notifications,
+    including target-app branding and inline reply actions
+- `android/app/src/main/java/com/openai/codex/agent/AgentNotificationReplyReceiver.kt`
+  - inline reply receiver for Agent-rendered question notifications
 - `android/app/src/main/java/com/openai/codex/agent/AgentUserInputPrompter.kt`
   - Android dialog bridge for hosted Agent `request_user_input` calls
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`
