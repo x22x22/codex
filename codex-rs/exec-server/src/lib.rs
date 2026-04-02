@@ -31,6 +31,7 @@ pub use codex_app_server_protocol::FsRemoveParams;
 pub use codex_app_server_protocol::FsRemoveResponse;
 pub use codex_app_server_protocol::FsWriteFileParams;
 pub use codex_app_server_protocol::FsWriteFileResponse;
+pub use environment::AttachedExecutor;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
 pub use environment::Environment;
 pub use environment::EnvironmentManager;

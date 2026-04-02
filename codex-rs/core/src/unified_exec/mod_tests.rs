@@ -26,6 +26,12 @@ async fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
     (Arc::new(session), Arc::new(turn))
 }
 
+fn attached_executor(turn: &TurnContext) -> Arc<codex_exec_server::AttachedExecutor> {
+    turn.environment
+        .attached_executor()
+        .expect("test turn context should have an attached executor")
+}
+
 async fn exec_command(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
@@ -91,6 +97,7 @@ async fn exec_command_with_tty(
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
     let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
 
+    let executor = attached_executor(turn.as_ref());
     let process = Arc::new(
         manager
             .open_session_with_exec_env(
@@ -98,12 +105,16 @@ async fn exec_command_with_tty(
                 &request,
                 tty,
                 Box::new(NoopSpawnLifecycle),
-                turn.environment.as_ref(),
+                executor.as_ref(),
             )
             .await?,
     );
-    let context =
-        UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
+    let context = UnifiedExecContext::new(
+        Arc::clone(session),
+        Arc::clone(turn),
+        "call".to_string(),
+        executor,
+    );
     let started_at = Instant::now();
     let process_started_alive = !process.has_exited() && process.exit_code().is_none();
     if process_started_alive {
@@ -507,13 +518,16 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
     );
 
     let environment = codex_exec_server::Environment::default();
+    let attached_executor = environment
+        .attached_executor()
+        .expect("default environment should have an attached executor");
     let process = UnifiedExecProcessManager::default()
         .open_session_with_exec_env(
             /*process_id*/ 1234,
             &request,
             /*tty*/ false,
             Box::new(NoopSpawnLifecycle),
-            &environment,
+            attached_executor.as_ref(),
         )
         .await?;
 
@@ -540,6 +554,10 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
     };
 
     let remote_test_env = remote_test_env().await?;
+    let attached_executor = remote_test_env
+        .environment()
+        .attached_executor()
+        .expect("remote test environment should have an attached executor");
     let (_, turn) = make_session_and_context().await;
     let request = test_exec_request(
         &turn,
@@ -555,7 +573,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
             &request,
             /*tty*/ true,
             Box::new(NoopSpawnLifecycle),
-            remote_test_env.environment(),
+            attached_executor.as_ref(),
         )
         .await?;
 
@@ -603,6 +621,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
     );
 
     let manager = UnifiedExecProcessManager::default();
+    let attached_executor = attached_executor(&turn);
     let err = manager
         .open_session_with_exec_env(
             /*process_id*/ 1234,
@@ -611,7 +630,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],
             }),
-            turn.environment.as_ref(),
+            attached_executor.as_ref(),
         )
         .await
         .expect_err("expected inherited fd rejection");

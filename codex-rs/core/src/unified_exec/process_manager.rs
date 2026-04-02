@@ -585,7 +585,7 @@ impl UnifiedExecProcessManager {
         env: &ExecRequest,
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
-        environment: &codex_exec_server::Environment,
+        attached_executor: &codex_exec_server::AttachedExecutor,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let (program, args) = env
             .command
@@ -593,14 +593,14 @@ impl UnifiedExecProcessManager {
             .ok_or(UnifiedExecError::MissingCommandLine)?;
         let inherited_fds = spawn_lifecycle.inherited_fds();
 
-        if environment.exec_server_url().is_some() {
+        if attached_executor.exec_server_url().is_some() {
             if !inherited_fds.is_empty() {
                 return Err(UnifiedExecError::create_process(
                     "remote exec-server does not support inherited file descriptors".to_string(),
                 ));
             }
 
-            let started = environment
+            let started = attached_executor
                 .get_exec_backend()
                 .start(codex_exec_server::ExecParams {
                     process_id: exec_server_process_id(process_id).into(),
@@ -656,6 +656,7 @@ impl UnifiedExecProcessManager {
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(
             self,
+            Arc::clone(&context.attached_executor),
             context.turn.tools_config.unified_exec_shell_mode.clone(),
         );
         let exec_approval_requirement = context

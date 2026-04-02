@@ -5259,7 +5259,12 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     let turn_context = Arc::new(turn_context_raw);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
 
-    let handler = UnifiedExecHandler;
+    let handler = UnifiedExecHandler::new(
+        turn_context
+            .environment
+            .attached_executor()
+            .expect("test turn context should have an attached executor"),
+    );
     let resp = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),

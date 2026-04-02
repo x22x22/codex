@@ -1003,7 +1003,7 @@ fn no_attached_executor_hides_executor_backed_tools() {
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
-    .with_has_attached_executor(false);
+    .with_attached_executor(/*attached_executor*/ None);
     tools_config
         .experimental_supported_tools
         .push("list_dir".to_string());

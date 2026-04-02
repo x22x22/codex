@@ -21,6 +21,7 @@ use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::registry::tool_handler_key;
+use codex_exec_server::AttachedExecutor;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_protocol::config_types::WebSearchConfig;
@@ -86,6 +87,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub type JsonSchema = codex_tools::JsonSchema;
 
@@ -171,7 +173,7 @@ pub(crate) struct ToolsConfig {
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
-    pub has_attached_executor: bool,
+    pub attached_executor: Option<Arc<AttachedExecutor>>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -306,12 +308,15 @@ impl ToolsConfig {
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
-            has_attached_executor: true,
+            attached_executor: codex_exec_server::Environment::default().attached_executor(),
         }
     }
 
-    pub fn with_has_attached_executor(mut self, has_attached_executor: bool) -> Self {
-        self.has_attached_executor = has_attached_executor;
+    pub fn with_attached_executor(
+        mut self,
+        attached_executor: Option<Arc<AttachedExecutor>>,
+    ) -> Self {
+        self.attached_executor = attached_executor;
         self
     }
 
@@ -443,16 +448,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
-    use std::sync::Arc;
-
     let mut builder = ToolRegistryBuilder::new();
 
     let shell_handler = Arc::new(ShellHandler);
-    let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
-    let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
@@ -500,7 +501,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler(WAIT_TOOL_NAME, code_mode_wait_handler);
     }
 
-    if config.has_attached_executor {
+    if let Some(attached_executor) = config.attached_executor.as_ref() {
+        let unified_exec_handler = Arc::new(UnifiedExecHandler::new(Arc::clone(attached_executor)));
         match &config.shell_type {
             ConfigShellToolType::Default => {
                 push_tool_spec(
@@ -596,7 +598,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     );
     builder.register_handler("update_plan", plan_handler);
 
-    if config.has_attached_executor && config.js_repl_enabled {
+    if config.attached_executor.is_some() && config.js_repl_enabled {
         push_tool_spec(
             &mut builder,
             create_js_repl_tool(),
@@ -670,7 +672,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
     }
 
-    if config.has_attached_executor
+    if config.attached_executor.is_some()
         && let Some(apply_patch_tool_type) = &config.apply_patch_tool_type
     {
         match apply_patch_tool_type {
@@ -694,7 +696,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("apply_patch", apply_patch_handler);
     }
 
-    if config.has_attached_executor
+    if config.attached_executor.is_some()
         && config
             .experimental_supported_tools
             .iter()
@@ -775,7 +777,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
     }
 
-    if config.has_attached_executor {
+    if let Some(attached_executor) = config.attached_executor.as_ref() {
+        let view_image_handler = Arc::new(ViewImageHandler::new(Arc::clone(attached_executor)));
         push_tool_spec(
             &mut builder,
             create_view_image_tool(ViewImageToolOptions {
