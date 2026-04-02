@@ -140,9 +140,9 @@ mod tests {
 
     #[test]
     fn bring_popup_to_front_makes_clicked_popup_active() {
-        let mut stack = ForkSessionOverlayStack::new(popup(10, 10));
-        stack.push_popup(popup(20, 20));
-        stack.push_popup(popup(30, 30));
+        let mut stack = ForkSessionOverlayStack::new(popup(/*x*/ 10, /*y*/ 10));
+        stack.push_popup(popup(/*x*/ 20, /*y*/ 20));
+        stack.push_popup(popup(/*x*/ 30, /*y*/ 30));
 
         let active = stack
             .bring_popup_to_front(/*index*/ 0)
@@ -155,8 +155,8 @@ mod tests {
 
     #[test]
     fn close_active_popup_keeps_stack_alive_until_last_popup() {
-        let mut stack = ForkSessionOverlayStack::new(popup(10, 10));
-        stack.push_popup(popup(20, 20));
+        let mut stack = ForkSessionOverlayStack::new(popup(/*x*/ 10, /*y*/ 10));
+        stack.push_popup(popup(/*x*/ 20, /*y*/ 20));
 
         let closed = stack.close_active_popup().expect("close topmost popup");
 
