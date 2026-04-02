@@ -1249,7 +1249,7 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
         AgentPath::try_from("/root/worker").expect("agent path"),
         Vec::new(),
         "continue".to_string(),
-        true,
+        /*trigger_turn*/ true,
     );
     assert!(ops_for_agent.iter().any(|op| matches!(op, Op::Interrupt)));
     assert!(ops_for_agent.iter().any(|op| {
