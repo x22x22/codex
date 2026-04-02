@@ -11,7 +11,9 @@ use crate::agent::role::default_fork_context_for_role;
 use crate::agent::role::watchdog_interval_for_role;
 use crate::config::Config;
 use codex_features::Feature;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 pub(crate) struct Handler;
@@ -66,24 +68,11 @@ impl ToolHandler for Handler {
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
         }
-        session
-            .send_event(
-                &turn,
-                CollabAgentSpawnBeginEvent {
-                    call_id: call_id.clone(),
-                    sender_thread_id: session.conversation_id,
-                    prompt: prompt.clone(),
-                    model: args.model.clone().unwrap_or_default(),
-                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
-                }
-                .into(),
-            )
-            .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
         let fork_context = args
             .fork_context
             .unwrap_or_else(|| default_fork_context_for_role(&turn.config, role_name));
+        let mut config =
+            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
         if !fork_context {
             apply_requested_spawn_agent_model_overrides(
                 &session,
@@ -265,7 +254,7 @@ async fn spawn_watchdog(
     spawn_source: SessionSource,
 ) -> crate::error::Result<ThreadId> {
     let target_thread_id = agent_control
-        .spawn_agent_handle(config.clone(), Some(spawn_source))
+        .spawn_agent(config.clone(), Op::Interrupt, Some(spawn_source))
         .await?;
     let superseded_before_register = agent_control
         .unregister_watchdogs_for_owner(owner_thread_id)
