@@ -4035,6 +4035,9 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
+                if at.tasks.is_empty() {
+                    return Err(input);
+                }
                 let mut ts = at.turn_state.lock().await;
                 for item in input {
                     ts.push_pending_input(item);

@@ -4784,6 +4784,25 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 }
 
 #[tokio::test]
+async fn inject_response_items_rejects_pending_turn_start_reservation() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    *sess.active_turn.lock().await = Some(ActiveTurn::default());
+    let pending_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "queued during turn-complete".to_string(),
+        }],
+    };
+
+    let err = sess
+        .inject_response_items(vec![pending_item.clone()])
+        .await
+        .expect_err("empty active turn reservation should reject injected items");
+
+    assert_eq!(err, vec![pending_item]);
+}
+
+#[tokio::test]
 async fn on_task_finished_records_queue_only_mailbox_mail_without_restart() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     sess.spawn_task(
