@@ -91,7 +91,8 @@ async fn run_cmd_result_with_writable_roots(
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    let sandbox_cwd = std::env::current_dir().expect("cwd should exist");
+    let sandbox_cwd = std::env::current_dir()
+        .unwrap_or_else(|error| panic!("cwd should exist: {error}"));
     run_cmd_result_with_policies_and_cwd(
         cmd,
         sandbox_policy,
@@ -160,7 +161,6 @@ async fn run_cmd_result_with_policies_and_cwd(
     .await
 }
 
-#[expect(clippy::expect_used)]
 async fn run_cmd_result_with_policies(
     cmd: &[&str],
     sandbox_policy: SandboxPolicy,
@@ -402,10 +402,6 @@ async fn bwrap_root_cwd_masks_missing_dot_codex_at_runtime() {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
         return;
     }
-    if std::path::Path::new("/.codex").exists() {
-        eprintln!("skipping bwrap test: /.codex already exists on this host");
-        return;
-    }
     if !std::path::Path::new("/dev/shm").exists() {
         eprintln!("skipping bwrap test: /dev/shm is unavailable in this environment");
         return;
@@ -424,7 +420,48 @@ async fn bwrap_root_cwd_masks_missing_dot_codex_at_runtime() {
     // This complements the argv-shape unit test in `bwrap.rs` by exercising
     // the runtime `cwd="/"` path with a missing `/.codex`. The precise `/dev`
     // mount ordering is still asserted at the unit level.
-    let output = run_cmd_result_with_writable_roots_and_cwd(
+    let sandbox_program = std::fs::canonicalize(PathBuf::from(env!(
+        "CARGO_BIN_EXE_codex-linux-sandbox"
+    )))
+    .expect("canonicalize sandbox helper path");
+    let sandbox_helper_dir = sandbox_program
+        .parent()
+        .expect("sandbox helper should have a parent")
+        .to_path_buf();
+    let sandbox_policy = SandboxPolicy::ReadOnly {
+        access: ReadOnlyAccess::FullAccess,
+        network_access: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(sandbox_helper_dir.as_path())
+                    .expect("absolute helper dir"),
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(std::path::Path::new("/dev"))
+                    .expect("absolute /dev path"),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(std::path::Path::new("/.codex"))
+                    .expect("absolute /.codex path"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+    let output = run_cmd_result_with_policies_and_cwd(
         &[
             "bash",
             "-lc",
@@ -433,11 +470,12 @@ async fn bwrap_root_cwd_masks_missing_dot_codex_at_runtime() {
                 target = target_path.to_string_lossy()
             ),
         ],
-        &[PathBuf::from("/dev")],
+        sandbox_policy,
+        file_system_sandbox_policy,
+        NetworkSandboxPolicy::Enabled,
         PathBuf::from("/"),
         LONG_TIMEOUT_MS,
-        false,
-        true,
+        /* use_legacy_landlock */ false,
     )
     .await
     .expect("sandboxed command should execute");
