@@ -1,0 +1,29 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-shell-snapshot"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-otel = { workspace = true }
+codex-protocol = { workspace = true }
+codex-shell = { workspace = true }
+codex-utils-pty = { workspace = true }
+tokio = { workspace = true, features = [
+    "fs",
+    "macros",
+    "process",
+    "rt",
+    "sync",
+    "time",
+] }
+tracing = { workspace = true, features = ["log"] }
+
+[dev-dependencies]
+libc = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

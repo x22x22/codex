@@ -221,9 +221,11 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
+        let session_shell_snapshot = ctx.session.shell_snapshot();
         let command = maybe_wrap_shell_lc_with_snapshot(
             &req.command,
             session_shell.as_ref(),
+            session_shell_snapshot.as_deref(),
             &req.cwd,
             &req.explicit_env_overrides,
         );
