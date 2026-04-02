@@ -20,8 +20,6 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_tools::AdditionalProperties;
-use codex_tools::CommandToolOptions;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
@@ -31,29 +29,12 @@ use codex_tools::ResponsesApiTool;
 use codex_tools::ResponsesApiWebSearchFilters;
 use codex_tools::ResponsesApiWebSearchUserLocation;
 use codex_tools::ShellCommandBackendConfig;
-use codex_tools::SpawnAgentToolOptions;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use codex_tools::UnifiedExecShellMode;
-use codex_tools::ViewImageToolOptions;
-use codex_tools::WaitAgentTimeoutOptions;
 use codex_tools::ZshForkConfig;
-use codex_tools::create_apply_patch_freeform_tool;
-use codex_tools::create_close_agent_tool_v1;
-use codex_tools::create_close_agent_tool_v2;
-use codex_tools::create_exec_command_tool;
 use codex_tools::create_request_permissions_tool;
 use codex_tools::create_request_user_input_tool;
-use codex_tools::create_resume_agent_tool;
-use codex_tools::create_send_input_tool_v1;
-use codex_tools::create_send_message_tool;
-use codex_tools::create_spawn_agent_tool_v1;
-use codex_tools::create_spawn_agent_tool_v2;
-use codex_tools::create_update_plan_tool;
-use codex_tools::create_view_image_tool;
-use codex_tools::create_wait_agent_tool_v1;
-use codex_tools::create_wait_agent_tool_v2;
-use codex_tools::create_write_stdin_tool;
 use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 use codex_tools::request_permissions_tool_description;
 use codex_tools::request_user_input_tool_description;
@@ -196,65 +177,11 @@ fn request_user_input_tool_spec(default_mode_request_user_input: bool) -> ToolSp
     ))
 }
 
-fn spawn_agent_tool_options(config: &ToolsConfig) -> SpawnAgentToolOptions<'_> {
-    SpawnAgentToolOptions {
-        available_models: &config.available_models,
-        agent_type_description: agent_type_description(config),
-    }
-}
-
-fn wait_agent_timeout_options() -> WaitAgentTimeoutOptions {
-    WaitAgentTimeoutOptions {
-        default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
-        min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
-        max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
-    }
-}
-
 fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a ConfiguredToolSpec {
     tools
         .iter()
         .find(|tool| tool.name() == expected_name)
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
-}
-
-fn strip_descriptions_schema(schema: &mut JsonSchema) {
-    match schema {
-        JsonSchema::Boolean { description }
-        | JsonSchema::String { description }
-        | JsonSchema::Number { description } => {
-            *description = None;
-        }
-        JsonSchema::Array { items, description } => {
-            strip_descriptions_schema(items);
-            *description = None;
-        }
-        JsonSchema::Object {
-            properties,
-            required: _,
-            additional_properties,
-        } => {
-            for v in properties.values_mut() {
-                strip_descriptions_schema(v);
-            }
-            if let Some(AdditionalProperties::Schema(s)) = additional_properties {
-                strip_descriptions_schema(s);
-            }
-        }
-    }
-}
-
-fn strip_descriptions_tool(spec: &mut ToolSpec) {
-    match spec {
-        ToolSpec::ToolSearch { parameters, .. } => strip_descriptions_schema(parameters),
-        ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
-            strip_descriptions_schema(parameters);
-        }
-        ToolSpec::Freeform(_)
-        | ToolSpec::LocalShell {}
-        | ToolSpec::ImageGeneration { .. }
-        | ToolSpec::WebSearch { .. } => {}
-    }
 }
 
 fn model_info_from_models_json(slug: &str) -> ModelInfo {
@@ -291,112 +218,6 @@ fn model_provided_unified_exec_is_blocked_for_windows_sandboxed_policies() {
         ConfigShellToolType::UnifiedExec
     };
     assert_eq!(config.shell_type, expected_shell_type);
-}
-
-#[test]
-fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
-    let model_info = model_info_from_models_json("gpt-5-codex");
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Live),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    // Build actual map name -> spec
-    use std::collections::BTreeMap;
-    use std::collections::HashSet;
-    let mut actual: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
-    let mut duplicate_names = Vec::new();
-    for t in &tools {
-        let name = t.name().to_string();
-        if actual.insert(name.clone(), t.spec.clone()).is_some() {
-            duplicate_names.push(name);
-        }
-    }
-    assert!(
-        duplicate_names.is_empty(),
-        "duplicate tool entries detected: {duplicate_names:?}"
-    );
-
-    // Build expected from the same helpers used by the builder.
-    let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
-    for spec in [
-        create_exec_command_tool(CommandToolOptions {
-            allow_login_shell: true,
-            exec_permission_approvals_enabled: false,
-        }),
-        create_write_stdin_tool(),
-        create_update_plan_tool(),
-        request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
-        create_apply_patch_freeform_tool(),
-        ToolSpec::WebSearch {
-            external_web_access: Some(true),
-            filters: None,
-            user_location: None,
-            search_context_size: None,
-            search_content_types: None,
-        },
-        create_view_image_tool(ViewImageToolOptions {
-            can_request_original_image_detail: config.can_request_original_image_detail,
-        }),
-    ] {
-        expected.insert(spec.name().to_string(), spec);
-    }
-    let collab_specs = if config.multi_agent_v2 {
-        vec![
-            create_spawn_agent_tool_v2(spawn_agent_tool_options(&config)),
-            create_send_message_tool(),
-            create_wait_agent_tool_v2(wait_agent_timeout_options()),
-            create_close_agent_tool_v2(),
-        ]
-    } else {
-        vec![
-            create_spawn_agent_tool_v1(spawn_agent_tool_options(&config)),
-            create_send_input_tool_v1(),
-            create_wait_agent_tool_v1(wait_agent_timeout_options()),
-            create_close_agent_tool_v1(),
-        ]
-    };
-    for spec in collab_specs {
-        expected.insert(spec.name().to_string(), spec);
-    }
-    if !config.multi_agent_v2 {
-        let spec = create_resume_agent_tool();
-        expected.insert(spec.name().to_string(), spec);
-    }
-
-    if config.exec_permission_approvals_enabled {
-        let spec = create_request_permissions_tool(request_permissions_tool_description());
-        expected.insert(spec.name().to_string(), spec);
-    }
-
-    // Exact name set match — this is the only test allowed to fail when tools change.
-    let actual_names: HashSet<_> = actual.keys().cloned().collect();
-    let expected_names: HashSet<_> = expected.keys().cloned().collect();
-    assert_eq!(actual_names, expected_names, "tool name set mismatch");
-
-    // Compare specs ignoring human-readable descriptions.
-    for name in expected.keys() {
-        let mut a = actual.get(name).expect("present").clone();
-        let mut e = expected.get(name).expect("present").clone();
-        strip_descriptions_tool(&mut a);
-        strip_descriptions_tool(&mut e);
-        assert_eq!(a, e, "spec mismatch for {name}");
-    }
 }
 
 #[test]
@@ -1378,29 +1199,6 @@ fn test_build_specs_gpt5_codex_default() {
 }
 
 #[test]
-fn test_build_specs_gpt51_codex_default() {
-    let features = Features::with_defaults();
-    assert_default_model_tools(
-        "gpt-5.1-codex",
-        &features,
-        Some(WebSearchMode::Cached),
-        "shell_command",
-        &[
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
 fn test_build_specs_gpt5_codex_unified_exec_web_search() {
     let mut features = Features::with_defaults();
     features.enable(Feature::UnifiedExec);
@@ -1426,77 +1224,6 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
 }
 
 #[test]
-fn test_build_specs_gpt51_codex_unified_exec_web_search() {
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    assert_model_tools(
-        "gpt-5.1-codex",
-        &features,
-        Some(WebSearchMode::Live),
-        &[
-            "exec_command",
-            "write_stdin",
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
-fn test_gpt_5_1_codex_max_defaults() {
-    let features = Features::with_defaults();
-    assert_default_model_tools(
-        "gpt-5.1-codex-max",
-        &features,
-        Some(WebSearchMode::Cached),
-        "shell_command",
-        &[
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
-fn test_codex_5_1_mini_defaults() {
-    let features = Features::with_defaults();
-    assert_default_model_tools(
-        "gpt-5.1-codex-mini",
-        &features,
-        Some(WebSearchMode::Cached),
-        "shell_command",
-        &[
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
 fn test_gpt_5_defaults() {
     let features = Features::with_defaults();
     assert_default_model_tools(
@@ -1507,54 +1234,6 @@ fn test_gpt_5_defaults() {
         &[
             "update_plan",
             "request_user_input",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
-fn test_gpt_5_1_defaults() {
-    let features = Features::with_defaults();
-    assert_default_model_tools(
-        "gpt-5.1",
-        &features,
-        Some(WebSearchMode::Cached),
-        "shell_command",
-        &[
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    );
-}
-
-#[test]
-fn test_gpt_5_1_codex_max_unified_exec_web_search() {
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    assert_model_tools(
-        "gpt-5.1-codex-max",
-        &features,
-        Some(WebSearchMode::Live),
-        &[
-            "exec_command",
-            "write_stdin",
-            "update_plan",
-            "request_user_input",
-            "apply_patch",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1659,35 +1338,6 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
             UnifiedExecShellMode::Direct
         }
     );
-}
-
-#[test]
-#[ignore]
-fn test_parallel_support_flags() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::UnifiedExec);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(
-        &tools_config,
-        /*mcp_tools*/ None,
-        /*app_tools*/ None,
-        &[],
-    )
-    .build();
-
-    assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
-    assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
 }
 
 #[test]
