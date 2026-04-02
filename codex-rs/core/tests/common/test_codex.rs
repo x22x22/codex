@@ -11,7 +11,6 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
@@ -23,6 +22,7 @@ use codex_core::shell::get_shell_by_model_provided_path;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -270,7 +270,7 @@ fn docker_command_success<const N: usize>(args: [&str; N]) -> Result<()> {
     let output = Command::new("docker")
         .args(args)
         .output()
-        .with_context(|| format!("run docker {:?}", args))?;
+        .with_context(|| format!("run docker {args:?}"))?;
     if !output.status.success() {
         return Err(anyhow!(
             "docker {:?} failed: stdout={} stderr={}",
@@ -286,7 +286,7 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     let output = Command::new("docker")
         .args(args)
         .output()
-        .with_context(|| format!("run docker {:?}", args))?;
+        .with_context(|| format!("run docker {args:?}"))?;
     if !output.status.success() {
         return Err(anyhow!(
             "docker {:?} failed: stdout={} stderr={}",
@@ -346,7 +346,7 @@ impl TestCodexBuilder {
     pub fn with_model(self, model: &str) -> Self {
         let new_model = model.to_string();
         self.with_config(move |config| {
-            config.model = Some(new_model.clone());
+            config.model = Some(new_model);
         })
     }
 
@@ -568,15 +568,21 @@ impl TestCodexBuilder {
             hook(home.path());
         }
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
-            config.codex_linux_sandbox_exe = Some(path);
+            config.codex_self_exe = Some(path);
+        } else if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex-exec") {
+            // `codex-exec` also supports `--codex-run-as-apply-patch`, so use it
+            // when the multitool binary is not available in test builds.
+            config.codex_self_exe = Some(path);
         } else if let Ok(exe) = std::env::current_exe()
-            && let Some(path) = exe
-                .parent()
-                .and_then(|parent| parent.parent())
-                .map(|parent| parent.join("codex"))
-            && path.is_file()
+            && let Some(bin_dir) = exe.parent().and_then(|parent| parent.parent())
         {
-            config.codex_linux_sandbox_exe = Some(path);
+            let codex = bin_dir.join("codex");
+            let codex_exec = bin_dir.join("codex-exec");
+            if codex.is_file() {
+                config.codex_self_exe = Some(codex);
+            } else if codex_exec.is_file() {
+                config.codex_self_exe = Some(codex_exec);
+            }
         }
 
         let mut mutators = vec![];
@@ -786,7 +792,9 @@ impl TestCodexHarness {
     }
 
     pub async fn submit(&self, prompt: &str) -> Result<()> {
-        self.test.submit_turn(prompt).await
+        // Box the submit-and-wait path so callers do not inline the full turn
+        // future into their own async state.
+        Box::pin(self.test.submit_turn(prompt)).await
     }
 
     pub async fn submit_with_policy(
@@ -838,13 +846,17 @@ impl TestCodexHarness {
         call_id: &str,
         output_type: ApplyPatchModelOutput,
     ) -> String {
+        // Box the awaited output helpers so callers do not inline request
+        // capture and response parsing into their own async state.
         match output_type {
-            ApplyPatchModelOutput::Freeform => self.custom_tool_call_output(call_id).await,
+            ApplyPatchModelOutput::Freeform => {
+                Box::pin(self.custom_tool_call_output(call_id)).await
+            }
             ApplyPatchModelOutput::Function
             | ApplyPatchModelOutput::Shell
             | ApplyPatchModelOutput::ShellViaHeredoc
             | ApplyPatchModelOutput::ShellCommandViaHeredoc => {
-                self.function_call_stdout(call_id).await
+                Box::pin(self.function_call_stdout(call_id)).await
             }
         }
     }
