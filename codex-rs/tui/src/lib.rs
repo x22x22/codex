@@ -115,6 +115,7 @@ mod get_git_diff;
 mod history_cell;
 pub mod insert_history;
 mod key_hint;
+mod keyboard_enhancement;
 mod line_truncation;
 pub mod live_wrap;
 mod local_chatgpt_auth;
@@ -215,6 +216,8 @@ mod wrapping;
 pub mod test_backend;
 #[cfg(test)]
 pub(crate) mod test_support;
+
+pub use keyboard_enhancement::should_enable_keyboard_enhancement;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;

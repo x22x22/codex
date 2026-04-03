@@ -763,6 +763,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     let backend = backend;
 
     // Terminal setup
+    use codex_tui::should_enable_keyboard_enhancement;
     use crossterm::ExecutableCommand;
     use crossterm::event::DisableBracketedPaste;
     use crossterm::event::EnableBracketedPaste;
@@ -781,14 +782,16 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
     stdout.execute(EnableBracketedPaste)?;
     // Enable enhanced key reporting so Shift+Enter is distinguishable from Enter.
     // Some terminals may not support these flags; ignore errors if enabling fails.
-    let _ = crossterm::execute!(
-        std::io::stdout(),
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        )
-    );
+    if should_enable_keyboard_enhancement() {
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        );
+    }
     let backend_ui = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend_ui)?;
     terminal.clear()?;
