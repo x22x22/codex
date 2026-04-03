@@ -5375,6 +5375,8 @@ mod handlers {
             return;
         };
 
+        sess.ensure_rollout_materialized().await;
+
         let codex_home = sess.codex_home().await;
         if let Err(e) =
             session_index::append_thread_name(&codex_home, sess.conversation_id, &name).await
