@@ -76,9 +76,11 @@
 
         <activity
             android:name=".SessionPopupActivity"
+            android:documentLaunchMode="always"
             android:exported="false"
             android:excludeFromRecents="true"
-            android:launchMode="singleTop"
+            android:launchMode="standard"
+            android:taskAffinity="com.openai.codex.agent.popup"
             android:theme="@style/CodexSessionPopupTheme" />
 
         <receiver

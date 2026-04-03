@@ -243,10 +243,25 @@ class SessionPopupActivity : Activity() {
         button: Button,
     ) {
         AgentQuestionNotifier.cancel(this, session.sessionId)
-        if (!isTopLevelHomeSession(session)) {
-            finish()
+        if (isTopLevelHomeSession(session)) {
+            consumeHomeResultPresentation(session, button)
             return
         }
+        if (isTopLevelAgentSession(session)) {
+            cancelAgentSessionTree(session.sessionId, button)
+            return
+        }
+        if (session.parentSessionId != null) {
+            cancelAgentSession(session.sessionId, button)
+            return
+        }
+        finish()
+    }
+
+    private fun consumeHomeResultPresentation(
+        session: AgentSessionDetails,
+        button: Button,
+    ) {
         button.isEnabled = false
         thread(name = "CodexSessionPopupConsume-${session.sessionId}") {
             runCatching {
@@ -269,6 +284,61 @@ class SessionPopupActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun cancelAgentSessionTree(
+        sessionId: String,
+        button: Button,
+    ) {
+        button.isEnabled = false
+        thread(name = "CodexSessionPopupCancelTree-$sessionId") {
+            runCatching {
+                sessionController.cancelSessionTree(sessionId)
+            }.onFailure { err ->
+                runOnUiThread {
+                    button.isEnabled = true
+                    Toast.makeText(
+                        this,
+                        "Failed to clear session state: ${err.message}",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }.onSuccess {
+                runOnUiThread {
+                    finish()
+                }
+            }
+        }
+    }
+
+    private fun cancelAgentSession(
+        sessionId: String,
+        button: Button,
+    ) {
+        button.isEnabled = false
+        thread(name = "CodexSessionPopupCancel-$sessionId") {
+            runCatching {
+                sessionController.cancelSession(sessionId)
+            }.onFailure { err ->
+                runOnUiThread {
+                    button.isEnabled = true
+                    Toast.makeText(
+                        this,
+                        "Failed to clear session state: ${err.message}",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }.onSuccess {
+                runOnUiThread {
+                    finish()
+                }
+            }
+        }
+    }
+
+    private fun isTopLevelAgentSession(session: AgentSessionDetails): Boolean {
+        return session.anchor == AgentSessionInfo.ANCHOR_AGENT &&
+            session.parentSessionId == null
     }
 
     private fun isTopLevelHomeSession(session: AgentSessionDetails): Boolean {
