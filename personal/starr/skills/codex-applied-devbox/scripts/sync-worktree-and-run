@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  sync-worktree-and-run [options] <local-worktree>
+
+Sync a local Codex worktree to a mirrored path on a remote host, then run a
+command there.
+
+Options:
+  --host <host>               Remote SSH host. Default: dev
+  --local-root <path>         Expected local worktree root.
+                              Default: ~/code/codex-worktrees
+  --remote-root <path>        Remote mirror root.
+                              Default: /tmp/codex-worktrees
+  --command <command>         Command to run on the remote copy.
+                              Default: cd codex-rs &&
+                              export PATH=$HOME/code/openai/project/dotslash-gen/bin:
+                              $HOME/.local/bin:$PATH &&
+                              bazel build --bes_backend= --bes_results_url=
+                              //codex-rs/cli:cli
+  Prints the exact Codex SSH run command for the mirrored checkout on every
+  run. The default remote build remains Bazel-backed, but the helper run
+  command uses cargo because `bazel run //codex-rs/cli:codex` is currently not
+  reliable on `dev`.
+  -h, --help                  Show this help text.
+EOF
+}
+
+shell_single_quote() {
+  local value="$1"
+  value=${value//\'/\'\"\'\"\'}
+  printf "'%s'" "$value"
+}
+
+host="dev"
+local_root="$HOME/code/codex-worktrees"
+remote_root="/tmp/codex-worktrees"
+command_to_run='cd codex-rs && export PATH=$HOME/code/openai/project/dotslash-gen/bin:$HOME/.local/bin:$PATH && bazel build --bes_backend= --bes_results_url= //codex-rs/cli:cli'
+local_worktree=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host)
+      host="$2"
+      shift 2
+      ;;
+    --local-root)
+      local_root="$2"
+      shift 2
+      ;;
+    --remote-root)
+      remote_root="$2"
+      shift 2
+      ;;
+    --command)
+      command_to_run="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [[ -n "$local_worktree" ]]; then
+        echo "expected exactly one local worktree path" >&2
+        usage >&2
+        exit 2
+      fi
+      local_worktree="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$local_worktree" ]]; then
+  echo "missing local worktree path" >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ ! -d "$local_worktree" ]]; then
+  echo "local worktree does not exist: $local_worktree" >&2
+  exit 1
+fi
+
+if [[ ! -d "$local_root" ]]; then
+  echo "local root does not exist: $local_root" >&2
+  exit 1
+fi
+
+local_root_abs="$(cd "$local_root" && pwd -P)"
+local_worktree_abs="$(cd "$local_worktree" && pwd -P)"
+
+case "$local_worktree_abs/" in
+  "$local_root_abs"/*)
+    relative_path="${local_worktree_abs#$local_root_abs/}"
+    ;;
+  *)
+    echo "local worktree must live under local root: $local_root_abs" >&2
+    exit 1
+    ;;
+esac
+
+remote_worktree="${remote_root%/}/$relative_path"
+remote_codex_dir="${remote_worktree%/}/codex-rs"
+remote_codex_run_command="cd $remote_codex_dir && cargo run -p codex-cli --"
+
+echo "# Shared-worktree Bazel Codex run command:"
+echo "ssh -t $host $(shell_single_quote "$remote_codex_run_command")"
+
+if ! command -v rsync >/dev/null 2>&1; then
+  echo "local rsync is not installed or not on PATH" >&2
+  exit 1
+fi
+
+if ! ssh "$host" 'command -v rsync >/dev/null 2>&1'; then
+  echo "remote rsync is not installed on $host" >&2
+  echo "try: ssh $host 'sudo apt-get update && sudo apt-get install -y rsync'" >&2
+  exit 1
+fi
+
+ssh "$host" bash -s -- "$remote_worktree" <<'EOF'
+set -euo pipefail
+remote_worktree="$1"
+mkdir -p "$remote_worktree"
+EOF
+
+rsync -a --delete \
+  --exclude='.git' \
+  --exclude='.sl' \
+  --exclude='.jj' \
+  --exclude='target' \
+  --exclude='node_modules' \
+  --exclude='.venv' \
+  --exclude='venv' \
+  --exclude='dist' \
+  --exclude='build' \
+  --exclude='.next' \
+  --exclude='.pytest_cache' \
+  --exclude='.mypy_cache' \
+  --exclude='__pycache__' \
+  --exclude='.ruff_cache' \
+  --exclude='.DS_Store' \
+  -e ssh \
+  "$local_worktree_abs/" \
+  "$host:$remote_worktree/"
+
+printf -v remote_worktree_q '%q' "$remote_worktree"
+printf -v command_to_run_q '%q' "$command_to_run"
+
+ssh "$host" "bash -s" <<EOF
+set -euo pipefail
+remote_worktree=$remote_worktree_q
+command_to_run=$command_to_run_q
+
+cd "\$remote_worktree"
+echo "REMOTE_PWD=\$PWD"
+eval "\$command_to_run"
+EOF
