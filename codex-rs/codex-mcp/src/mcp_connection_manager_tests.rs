@@ -2,6 +2,7 @@ use super::*;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
 use rmcp::model::JsonObject;
+use serde_json::json;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -520,6 +521,100 @@ fn elicitation_capability_enabled_only_for_codex_apps() {
     ));
 
     assert!(elicitation_capability_for_server("custom_mcp").is_none());
+}
+
+#[test]
+fn experimental_capability_detected_when_present() {
+    let initialize_result: rmcp::model::InitializeResult = serde_json::from_value(json!({
+        "capabilities": {
+            "experimental": {
+                "codex/events": {}
+            }
+        },
+        "instructions": null,
+        "protocolVersion": "2025-06-18",
+        "serverInfo": {
+            "name": "test",
+            "version": "1.0.0"
+        }
+    }))
+    .expect("initialize result");
+
+    assert!(server_supports_experimental_capability(
+        &initialize_result,
+        MCP_CODEX_EVENTS_CAPABILITY,
+    ));
+    assert!(!server_supports_experimental_capability(
+        &initialize_result,
+        MCP_SANDBOX_STATE_CAPABILITY,
+    ));
+}
+
+#[test]
+fn experimental_capability_not_detected_when_missing() {
+    let initialize_result: rmcp::model::InitializeResult = serde_json::from_value(json!({
+        "capabilities": {},
+        "instructions": null,
+        "protocolVersion": "2025-06-18",
+        "serverInfo": {
+            "name": "test",
+            "version": "1.0.0"
+        }
+    }))
+    .expect("initialize result");
+
+    assert!(!server_supports_experimental_capability(
+        &initialize_result,
+        MCP_CODEX_EVENTS_CAPABILITY,
+    ));
+}
+
+#[test]
+fn codex_event_types_loaded_from_capability() {
+    let initialize_result: rmcp::model::InitializeResult = serde_json::from_value(json!({
+        "capabilities": {
+            "experimental": {
+                "codex/events": {
+                    "eventTypes": ["item_completed", "mcp_tool_call_begin"]
+                }
+            }
+        },
+        "instructions": null,
+        "protocolVersion": "2025-06-18",
+        "serverInfo": {
+            "name": "test",
+            "version": "1.0.0"
+        }
+    }))
+    .expect("initialize result");
+
+    assert_eq!(
+        server_codex_event_types("test", &initialize_result),
+        HashSet::from([
+            "item_completed".to_string(),
+            "mcp_tool_call_begin".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn codex_event_types_empty_when_capability_omits_event_types() {
+    let initialize_result: rmcp::model::InitializeResult = serde_json::from_value(json!({
+        "capabilities": {
+            "experimental": {
+                "codex/events": {}
+            }
+        },
+        "instructions": null,
+        "protocolVersion": "2025-06-18",
+        "serverInfo": {
+            "name": "test",
+            "version": "1.0.0"
+        }
+    }))
+    .expect("initialize result");
+
+    assert!(server_codex_event_types("test", &initialize_result).is_empty());
 }
 
 #[test]

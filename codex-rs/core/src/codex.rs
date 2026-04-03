@@ -322,6 +322,11 @@ use codex_git_utils::get_git_repo_root;
 use codex_mcp::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::mcp::auth::compute_auth_statuses;
 use codex_mcp::mcp::with_codex_apps_mcp;
+use codex_mcp::mcp_connection_manager::ExternalMcpEventNotification;
+use codex_mcp::mcp_connection_manager::ExternalMcpEventNotificationMeta;
+use codex_mcp::mcp_connection_manager::McpConnectionManager;
+use codex_mcp::mcp_connection_manager::codex_apps_tools_cache_key;
+use codex_mcp::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::names::THREAD_STARTED_METRIC;
@@ -2772,8 +2777,23 @@ impl Session {
         if let Some(status) = agent_status_from_event(&event.msg) {
             self.agent_status.send_replace(status);
         }
-        if let Err(e) = self.tx_event.send(event).await {
+        if let Err(e) = self.tx_event.send(event.clone()).await {
             debug!("dropping event because channel is closed: {e}");
+        }
+        self.notify_external_mcp_event(&event).await;
+    }
+
+    async fn notify_external_mcp_event(&self, event: &Event) {
+        let params = ExternalMcpEventNotification {
+            meta: ExternalMcpEventNotificationMeta {
+                thread_id: self.conversation_id,
+            },
+            event: event.clone(),
+        };
+
+        let manager = self.services.mcp_connection_manager.read().await;
+        if let Err(err) = manager.notify_codex_event(&params).await {
+            warn!("failed to notify MCP servers about codex event: {err:#}");
         }
     }
 

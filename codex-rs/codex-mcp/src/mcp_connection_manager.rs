@@ -34,6 +34,7 @@ use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
+use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
@@ -357,6 +358,7 @@ struct ManagedClient {
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
     server_supports_sandbox_state_capability: bool,
+    codex_event_types: HashSet<String>,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
 
@@ -400,6 +402,16 @@ impl ManagedClient {
             )
             .await?;
         Ok(())
+    }
+
+    async fn notify_codex_event(&self, event_type: &str, params: &serde_json::Value) -> Result<()> {
+        if !self.codex_event_types.contains(event_type) {
+            return Ok(());
+        }
+
+        self.client
+            .send_custom_notification(MCP_CODEX_EVENT_METHOD, Some(params.clone()))
+            .await
     }
 }
 
@@ -559,13 +571,24 @@ impl AsyncManagedClient {
         let managed = self.client().await?;
         managed.notify_sandbox_state_change(sandbox_state).await
     }
+
+    async fn notify_codex_event(&self, event_type: &str, params: &serde_json::Value) -> Result<()> {
+        if !self.startup_complete.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        let managed = self.client().await?;
+        managed.notify_codex_event(event_type, params).await
+    }
 }
 
 pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
+pub const MCP_CODEX_EVENTS_CAPABILITY: &str = "codex/events";
 
 /// Custom MCP request to push sandbox state updates.
 /// When used, the `params` field of the notification is [`SandboxState`].
 pub const MCP_SANDBOX_STATE_METHOD: &str = "codex/sandbox-state/update";
+pub const MCP_CODEX_EVENT_METHOD: &str = "codex/event";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -575,6 +598,27 @@ pub struct SandboxState {
     pub sandbox_cwd: PathBuf,
     #[serde(default)]
     pub use_legacy_landlock: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExternalMcpEventNotificationMeta {
+    pub(crate) thread_id: ThreadId,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ExternalMcpEventNotification {
+    #[serde(rename = "_meta")]
+    pub(crate) meta: ExternalMcpEventNotificationMeta,
+    #[serde(flatten)]
+    pub(crate) event: Event,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexEventsCapability {
+    #[serde(default)]
+    event_types: HashSet<String>,
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
@@ -1126,6 +1170,44 @@ impl McpConnectionManager {
 
         Ok(())
     }
+
+    pub async fn notify_codex_event(&self, params: &ExternalMcpEventNotification) -> Result<()> {
+        let params = serde_json::to_value(params)?;
+        let Some(event_type) = params
+            .get("msg")
+            .and_then(|msg| msg.get("type"))
+            .and_then(|event_type| event_type.as_str())
+        else {
+            warn!("Skipping codex event notification without msg.type");
+            return Ok(());
+        };
+        let mut join_set = JoinSet::new();
+
+        for async_managed_client in self.clients.values() {
+            let params = params.clone();
+            let event_type = event_type.to_string();
+            let async_managed_client = async_managed_client.clone();
+            join_set.spawn(async move {
+                async_managed_client
+                    .notify_codex_event(&event_type, &params)
+                    .await
+            });
+        }
+
+        while let Some(join_res) = join_set.join_next().await {
+            match join_res {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!("Failed to notify codex event to MCP server: {err:#}");
+                }
+                Err(err) => {
+                    warn!("Task panic when notifying codex event to MCP server: {err:#}");
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 async fn emit_update(
@@ -1297,6 +1379,43 @@ fn resolve_bearer_token(
     }
 }
 
+fn server_supports_experimental_capability(
+    initialize_result: &rmcp::model::InitializeResult,
+    capability: &str,
+) -> bool {
+    initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(capability))
+        .is_some()
+}
+
+fn server_codex_event_types(
+    server_name: &str,
+    initialize_result: &rmcp::model::InitializeResult,
+) -> HashSet<String> {
+    let Some(value) = initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|exp| exp.get(MCP_CODEX_EVENTS_CAPABILITY))
+    else {
+        return HashSet::new();
+    };
+
+    match serde_json::from_value::<CodexEventsCapability>(serde_json::Value::Object(value.clone()))
+    {
+        Ok(capability) => capability.event_types,
+        Err(err) => {
+            warn!(
+                "MCP server {server_name} declared invalid {MCP_CODEX_EVENTS_CAPABILITY} capability: {err:#}"
+            );
+            HashSet::new()
+        }
+    }
+}
+
 #[derive(Debug, Clone, thiserror::Error)]
 enum StartupOutcomeError {
     #[error("MCP startup cancelled")]
@@ -1396,18 +1515,16 @@ async fn start_server_task(
     }
     let tools = filter_tools(tools, &tool_filter);
 
-    let server_supports_sandbox_state_capability = initialize_result
-        .capabilities
-        .experimental
-        .as_ref()
-        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
-        .is_some();
+    let server_supports_sandbox_state_capability =
+        server_supports_experimental_capability(&initialize_result, MCP_SANDBOX_STATE_CAPABILITY);
+    let codex_event_types = server_codex_event_types(&server_name, &initialize_result);
     let managed = ManagedClient {
         client: Arc::clone(&client),
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
         server_supports_sandbox_state_capability,
+        codex_event_types,
         codex_apps_tools_cache_context,
     };
 
