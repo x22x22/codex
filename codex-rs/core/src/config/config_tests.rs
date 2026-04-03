@@ -87,15 +87,6 @@ fn http_mcp(url: &str) -> McpServerConfig {
     }
 }
 
-fn config_builder_without_managed_config() -> ConfigBuilder {
-    ConfigBuilder::default().loader_overrides(crate::config_loader::LoaderOverrides {
-        managed_config_path: None,
-        #[cfg(target_os = "macos")]
-        managed_preferences_base64: Some(String::new()),
-        macos_managed_config_requirements_base64: Some(String::new()),
-    })
-}
-
 #[test]
 fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
     let expected_cwd = AbsolutePathBuf::relative_to_current_dir("nested")?;
@@ -1635,7 +1626,7 @@ profile = "project"
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(workspace.path().to_path_buf()),
@@ -1826,12 +1817,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
     std::fs::write(&config_path, "mcp_oauth_credentials_store = \"file\"\n")?;
     std::fs::write(&managed_path, "mcp_oauth_credentials_store = \"keyring\"\n")?;
 
-    let overrides = LoaderOverrides {
-        managed_config_path: Some(managed_path.clone()),
-        #[cfg(target_os = "macos")]
-        managed_preferences_base64: Some(String::new()),
-        macos_managed_config_requirements_base64: Some(String::new()),
-    };
+    let overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path.clone());
 
     let cwd = codex_home.path().abs();
     let config_layer_stack = load_config_layers_state(
@@ -1956,12 +1942,7 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
     )?;
     std::fs::write(&managed_path, "model = \"managed_config\"\n")?;
 
-    let overrides = LoaderOverrides {
-        managed_config_path: Some(managed_path),
-        #[cfg(target_os = "macos")]
-        managed_preferences_base64: Some(String::new()),
-        macos_managed_config_requirements_base64: Some(String::new()),
-    };
+    let overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path);
 
     let cwd = codex_home.path().abs();
     let config_layer_stack = load_config_layers_state(
@@ -3295,7 +3276,7 @@ nickname_candidates = ["Hypatia", "Noether"]
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -3349,7 +3330,7 @@ nickname_candidates = ["Noether"]
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -3412,7 +3393,7 @@ model = "gpt-5"
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(nested_cwd),
@@ -3466,7 +3447,7 @@ config_file = "./agents/researcher.toml"
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -3519,7 +3500,7 @@ description = "Review role"
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -3581,7 +3562,7 @@ developer_instructions = "Review carefully"
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(nested_cwd),
@@ -3636,7 +3617,7 @@ config_file = "./agents/researcher.toml"
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -3688,7 +3669,7 @@ nickname_candidates = ["Atlas"]
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -3822,7 +3803,7 @@ developer_instructions = "Write carefully"
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(nested_cwd),
@@ -3946,7 +3927,7 @@ model = "gpt-5"
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(nested_cwd),
@@ -4066,7 +4047,7 @@ model = "gpt-5-mini"
     )
     .await?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(nested_cwd),
@@ -5547,7 +5528,7 @@ async fn requirements_disallowing_default_sandbox_falls_back_to_required_default
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
@@ -5589,7 +5570,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         guardian_developer_instructions: None,
     };
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async move {
@@ -5614,7 +5595,7 @@ async fn requirements_web_search_mode_overrides_danger_full_access_default() -> 
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
@@ -5655,7 +5636,7 @@ trust_level = "untrusted"
         ),
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(workspace.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
@@ -5684,7 +5665,7 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
@@ -5706,7 +5687,7 @@ async fn explicit_approval_policy_falls_back_when_disallowed_by_requirements() -
 async fn feature_requirements_normalize_effective_feature_values() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
@@ -5748,7 +5729,7 @@ shell_tool = true
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
@@ -5784,7 +5765,7 @@ async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -
 {
     let codex_home = TempDir::new()?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -5805,7 +5786,7 @@ guardian_approval = true
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -5825,7 +5806,7 @@ async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> 
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -5848,7 +5829,7 @@ approvals_reviewer = "guardian_subagent"
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -5866,7 +5847,7 @@ async fn requirements_disallowing_default_approvals_reviewer_falls_back_to_requi
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
@@ -5894,7 +5875,7 @@ async fn root_approvals_reviewer_falls_back_when_disallowed_by_requirements() ->
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
@@ -5934,7 +5915,7 @@ approvals_reviewer = "user"
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
@@ -5963,7 +5944,7 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
@@ -6003,7 +5984,7 @@ smart_approvals = true
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
@@ -6032,7 +6013,7 @@ smart_approvals = true
 "#,
     )?;
 
-    let config = config_builder_without_managed_config()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
