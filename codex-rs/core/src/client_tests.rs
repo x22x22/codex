@@ -2,6 +2,10 @@ use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
+use codex_api::api_bridge::CoreAuthProvider;
+use codex_app_server_protocol::AuthMode;
+use codex_model_provider_info::WireApi;
+use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelInfo;
@@ -11,19 +15,16 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
-    let provider = crate::model_provider_info::create_oss_provider_with_base_url(
-        "https://example.com/v1",
-        crate::model_provider_info::WireApi::Responses,
-    );
+    let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     ModelClient::new(
-        None,
+        /*auth_manager*/ None,
         ThreadId::new(),
         provider,
         session_source,
-        None,
-        false,
-        false,
-        None,
+        /*model_verbosity*/ None,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
     )
 }
 
@@ -62,11 +63,11 @@ fn test_session_telemetry() -> SessionTelemetry {
         ThreadId::new(),
         "gpt-test",
         "gpt-test",
-        None,
-        None,
-        None,
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
         "test-originator".to_string(),
-        false,
+        /*log_user_prompts*/ false,
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
@@ -91,7 +92,12 @@ async fn summarize_memories_returns_empty_for_empty_input() {
     let session_telemetry = test_session_telemetry();
 
     let output = client
-        .summarize_memories(Vec::new(), &model_info, None, &session_telemetry)
+        .summarize_memories(
+            Vec::new(),
+            &model_info,
+            /*effort*/ None,
+            &session_telemetry,
+        )
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
@@ -100,8 +106,8 @@ async fn summarize_memories_returns_empty_for_empty_input() {
 #[test]
 fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     let auth_context = AuthRequestTelemetryContext::new(
-        Some(crate::auth::AuthMode::Chatgpt),
-        &crate::api_bridge::CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
+        Some(AuthMode::Chatgpt),
+        &CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
         PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
             mode: "managed",
             phase: "refresh_token",
