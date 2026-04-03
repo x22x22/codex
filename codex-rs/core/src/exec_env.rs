@@ -21,8 +21,35 @@ pub fn create_env(
     policy: &ShellEnvironmentPolicy,
     thread_id: Option<ThreadId>,
 ) -> HashMap<String, String> {
-    populate_env(std::env::vars(), policy, thread_id)
+    let mut env_map = populate_env(std::env::vars(), policy, thread_id);
+
+    if cfg!(target_os = "windows") {
+        // This is a workaround to address the failures we are seeing in the
+        // following tests when run via Bazel on Windows:
+        //
+        // ```
+        // suite::shell_command::unicode_output::with_login
+        // suite::shell_command::unicode_output::without_login
+        // ```
+        //
+        // Currently, we can only reproduce these failures in CI, which makes
+        // iteration times long, so we include this quick fix for now to unblock
+        // getting the Windows Bazel build running.
+        //
+        if !env_map.keys().any(|k| k.eq_ignore_ascii_case("PATHEXT")) {
+            env_map.insert("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string());
+        }
+    }
+    env_map
 }
+
+const COMMON_CORE_VARS: &[&str] = &["PATH", "SHELL", "TMPDIR", "TEMP", "TMP"];
+
+#[cfg(target_os = "windows")]
+const PLATFORM_CORE_VARS: &[&str] = { &["PATHEXT", "USERNAME", "USERPROFILE"] };
+
+#[cfg(unix)]
+const PLATFORM_CORE_VARS: &[&str] = &["HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "USER"];
 
 fn populate_env<I>(
     vars: I,
@@ -38,17 +65,18 @@ where
         ShellEnvironmentPolicyInherit::All => vars.into_iter().collect(),
         ShellEnvironmentPolicyInherit::None => HashMap::new(),
         ShellEnvironmentPolicyInherit::Core => {
-            const CORE_VARS: &[&str] = &[
-                "HOME", "LOGNAME", "PATH", "SHELL", "USER", "USERNAME", "TMPDIR", "TEMP", "TMP",
-            ];
-            let allow: HashSet<&str> = CORE_VARS.iter().copied().collect();
+            let core_vars: HashSet<&str> = COMMON_CORE_VARS
+                .iter()
+                .copied()
+                .chain(PLATFORM_CORE_VARS.iter().copied())
+                .collect();
             let is_core_var = |name: &str| {
                 if cfg!(target_os = "windows") {
-                    CORE_VARS
+                    core_vars
                         .iter()
                         .any(|allowed| allowed.eq_ignore_ascii_case(name))
                 } else {
-                    allow.contains(name)
+                    core_vars.contains(name)
                 }
             };
             vars.into_iter().filter(|(k, _)| is_core_var(k)).collect()

@@ -171,6 +171,7 @@ fn test_inherit_all_with_default_excludes() {
 fn test_core_inherit_respects_case_insensitive_names_on_windows() {
     let vars = make_vars(&[
         ("Path", "C:\\Windows\\System32"),
+        ("PathExt", ".COM;.EXE;.BAT;.CMD"),
         ("TEMP", "C:\\Temp"),
         ("FOO", "bar"),
     ]);
@@ -185,6 +186,7 @@ fn test_core_inherit_respects_case_insensitive_names_on_windows() {
     let result = populate_env(vars, &policy, Some(thread_id));
     let mut expected: HashMap<String, String> = hashmap! {
         "Path".to_string() => "C:\\Windows\\System32".to_string(),
+        "PathExt".to_string() => ".COM;.EXE;.BAT;.CMD".to_string(),
         "TEMP".to_string() => "C:\\Temp".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
