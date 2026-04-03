@@ -8322,6 +8322,7 @@ mod tests {
             service_tier: None,
             effort: None,
             summary: None,
+            submission_type: None,
             output_schema: None,
             collaboration_mode: None,
             personality: None,
