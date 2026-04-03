@@ -94,7 +94,11 @@ The current repo now contains these implementation slices:
   controls should not be used just for inspection.
 - For HOME-anchored app sessions, Launcher now standardizes badged icon taps as
   AGENT dispatch for `RUNNING`, `WAITING_FOR_USER`, and `COMPLETED` states. The
-  Agent popup therefore owns the completion policy explicitly:
+  Agent popup therefore owns the tap policy explicitly:
+  - for running HOME states with a detached target, the popup activity
+    immediately calls `showDetachedTarget(...)` so a red-badged live icon brings
+    the paired app on screen without attaching it and terminating the Genie
+    session
   - for question states, the popup shows a shared reply composer with the target
     app icon, question text, and Cancel / Answer actions
   - for result states, the same popup shape shows the final message, an optional

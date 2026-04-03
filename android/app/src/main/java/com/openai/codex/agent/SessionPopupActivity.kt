@@ -37,10 +37,15 @@ class SessionPopupActivity : Activity() {
     private var refreshInFlight = false
     private var sessionListenerRegistered = false
     @Volatile
+    private var answerSubmissionInFlight = false
+    @Volatile
     private var followUpSubmissionInFlight = false
 
     private val sessionListener = object : AgentManager.SessionListener {
         override fun onSessionChanged(session: AgentSessionInfo) {
+            if (answerSubmissionInFlight && session.sessionId == requestedSessionId) {
+                return
+            }
             if (followUpSubmissionInFlight && session.sessionId == requestedSessionId) {
                 return
             }
@@ -50,6 +55,9 @@ class SessionPopupActivity : Activity() {
         }
 
         override fun onSessionRemoved(sessionId: String, userId: Int) {
+            if (answerSubmissionInFlight && sessionId == requestedSessionId) {
+                return
+            }
             if (followUpSubmissionInFlight && sessionId == requestedSessionId) {
                 return
             }
@@ -145,6 +153,7 @@ class SessionPopupActivity : Activity() {
         when {
             isQuestionSession(session) -> showQuestionPopup(session)
             isResultSession(session) -> showResultPopup(session)
+            isRunningHomeSession(session) -> openRunningHomeTarget(session)
             popupRendered || fallbackLaunched -> finish()
             else -> launchFallbackDetail(session.sessionId)
         }
@@ -163,6 +172,12 @@ class SessionPopupActivity : Activity() {
             -> true
             else -> false
         }
+    }
+
+    private fun isRunningHomeSession(session: AgentSessionDetails): Boolean {
+        return session.anchor == AgentSessionInfo.ANCHOR_HOME &&
+            session.parentSessionId == null &&
+            session.state == AgentSessionInfo.STATE_RUNNING
     }
 
     private fun showQuestionPopup(session: AgentSessionDetails) {
@@ -251,6 +266,7 @@ class SessionPopupActivity : Activity() {
             answerInput.error = "Enter an answer"
             return
         }
+        answerSubmissionInFlight = true
         submitButton.isEnabled = false
         cancelButton.isEnabled = false
         thread(name = "CodexSessionPopupAnswer-${session.sessionId}") {
@@ -268,6 +284,7 @@ class SessionPopupActivity : Activity() {
                 )
             }.onFailure { err ->
                 runOnUiThread {
+                    answerSubmissionInFlight = false
                     submitButton.isEnabled = true
                     cancelButton.isEnabled = true
                     Toast.makeText(
@@ -562,6 +579,27 @@ class SessionPopupActivity : Activity() {
                 .putExtra(SessionDetailActivity.EXTRA_SESSION_ID, sessionId),
         )
         finish()
+    }
+
+    private fun openRunningHomeTarget(session: AgentSessionDetails) {
+        fallbackLaunched = true
+        thread(name = "CodexSessionPopupAttachTarget-${session.sessionId}") {
+            runCatching {
+                if (session.targetDetached) {
+                    sessionController.showDetachedTarget(session.sessionId)
+                } else {
+                    sessionController.attachTarget(session.sessionId)
+                }
+            }.onFailure {
+                runOnUiThread {
+                    launchFallbackDetail(session.sessionId)
+                }
+            }.onSuccess {
+                runOnUiThread {
+                    finish()
+                }
+            }
+        }
     }
 
     private fun bindPopupHeader(

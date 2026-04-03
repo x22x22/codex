@@ -125,6 +125,10 @@ stub SDK docs and the local refactor doc:
 - HOME icon / notification taps for question or final-result states should route
   to `SessionPopupActivity`, which uses one dialog-style popup shape for both
   question answering and result follow-up.
+  For top-level HOME `RUNNING` states with a detached target, the same handler
+  should immediately call `showDetachedTarget(sessionId)` so a red-badged live
+  icon brings the paired app on screen without attaching and ending the Genie
+  session.
   Launcher may dispatch HOME-anchored icon taps through either
   `ACTION_HANDLE_AGENT_SESSION` or `ACTION_HANDLE_HOME_AGENT_SESSION`; both
   should resolve to the same Agent-owned popup flow.

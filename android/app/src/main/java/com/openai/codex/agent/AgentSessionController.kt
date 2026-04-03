@@ -580,6 +580,22 @@ class AgentSessionController(context: Context) {
         requireAgentManager().attachTarget(sessionId)
     }
 
+    fun showDetachedTarget(sessionId: String) {
+        val result = requireAgentManager().showDetachedTarget(sessionId)
+        check(result.isSuccess()) {
+            buildString {
+                append("Failed to show detached target for ")
+                append(sessionId)
+                append(": status=")
+                append(result.status)
+                result.message?.takeIf(String::isNotBlank)?.let { message ->
+                    append(" ")
+                    append(message)
+                }
+            }
+        }
+    }
+
     fun cancelSessionTree(sessionId: String) {
         val manager = requireAgentManager()
         val sessions = manager.getSessions(currentUserId())
