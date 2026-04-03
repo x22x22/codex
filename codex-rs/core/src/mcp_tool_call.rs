@@ -696,8 +696,9 @@ fn mcp_tool_approval_prompt_options(
 ///
 /// The function's early-exit order matters:
 /// 1. Full-access mode → skip everything.
-/// 2. Custom MCP in `Auto` mode without annotations → skip (user opted in by
-///    configuring the server; see `should_skip_default_custom_mcp_approval`).
+/// 2. Custom MCP in `Auto` mode without annotations (or with empty annotations
+///    where every hint is `None`) → skip (user opted in by configuring the
+///    server; see `should_skip_default_custom_mcp_approval`).
 /// 3. Annotation-based check → skip if annotations say the tool is safe and
 ///    the mode is not `Prompt`.
 /// 4. ARC safety monitor (for `Approve` mode) → may block or escalate.
@@ -886,14 +887,23 @@ async fn maybe_request_mcp_tool_approval(
 ///
 /// Codex Apps tools always carry `ToolAnnotations`, so the annotation-based logic in
 /// `requires_mcp_tool_approval` is authoritative for them. Custom MCP servers, however,
-/// may not provide annotations at all. When a custom tool is in the default `Auto`
-/// approval mode and no annotations are present, the user has already opted in by
-/// configuring the server — prompting them again would be a regression from the
-/// expected behavior (see #15824).
+/// may omit annotations entirely **or** supply a `ToolAnnotations` struct with every
+/// hint field set to `None` (the "empty annotations" case — common for stdio-based
+/// servers that echo the struct without populating it). Both cases signal the same
+/// thing: the server has no opinion on the tool's risk profile.
+///
+/// When a custom tool is in the default `Auto` approval mode and annotations are absent
+/// or empty, the user has already opted in by configuring the server — prompting them
+/// again would be a regression from the expected behavior (see #15824).
 ///
 /// This gate intentionally does **not** fire for `Prompt` or `Approve` modes: those
 /// represent an explicit per-tool override that should always take effect regardless
 /// of annotation presence.
+///
+/// Callers that set any concrete hint value (e.g. `destructive_hint: Some(true)`)
+/// will fall through to the normal `requires_mcp_tool_approval` path, ensuring
+/// annotation-based approval is still enforced whenever the server actually provides
+/// risk information.
 fn should_skip_default_custom_mcp_approval(
     invocation: &McpInvocation,
     approval_mode: AppToolApproval,
@@ -901,7 +911,11 @@ fn should_skip_default_custom_mcp_approval(
 ) -> bool {
     invocation.server != CODEX_APPS_MCP_SERVER_NAME
         && approval_mode == AppToolApproval::Auto
-        && annotations.is_none()
+        && annotations.is_none_or(|annotations| {
+            annotations.destructive_hint.is_none()
+                && annotations.read_only_hint.is_none()
+                && annotations.open_world_hint.is_none()
+        })
 }
 
 async fn maybe_monitor_auto_approved_mcp_tool_call(
