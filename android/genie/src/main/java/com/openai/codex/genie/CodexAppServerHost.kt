@@ -1345,7 +1345,8 @@ class CodexAppServerHost(
             Avoid `dumpsys` and `cmd package dump` for package/activity inspection because they require `android.permission.DUMP` in the paired app UID and will not help you complete the task.
             If a direct command or intent clearly accomplishes the objective, stop and report success instead of continuing exploratory UI actions.
             The Genie may request detached target launch through the framework callback, and after that it should treat the target as already launched by the framework.
-            Use detached-target tools to show or inspect the target, then continue with supported shell input and inspection surfaces rather than relaunching the target package.
+            Keep the target hidden by default. Use frame capture and shell/UI inspection against the detached target without surfacing it whenever possible.
+            Use `android_target_show` or `android_target_attach` only when the delegated objective explicitly asks to show the app to the user, when the request clearly implies that a visible app handoff is part of success, or when you need to ask the user a question and showing the current UI materially helps them answer.
             If detached recovery is needed because the target disappeared, use android_target_ensure_hidden before retrying UI inspection.
             Use Android dynamic tools only for framework-only detached target operations that do not have a working shell equivalent in the paired app sandbox.
             $startupContextInstructions
@@ -1391,9 +1392,9 @@ class CodexAppServerHost(
     private fun buildDynamicToolSpecs(): JSONArray {
         return JSONArray()
             .put(dynamicToolSpec(AndroidGenieToolExecutor.ENSURE_HIDDEN_TARGET_TOOL, "Ensure the detached target exists and remains hidden. Use this to restore a missing detached target.", emptyObjectSchema()))
-            .put(dynamicToolSpec(AndroidGenieToolExecutor.SHOW_TARGET_TOOL, "Show the detached target window.", emptyObjectSchema()))
+            .put(dynamicToolSpec(AndroidGenieToolExecutor.SHOW_TARGET_TOOL, "Show the detached target window only when the delegated objective asks for a visible app or visible user handoff. Do not call this by default just to inspect state; prefer android_target_capture_frame first.", emptyObjectSchema()))
             .put(dynamicToolSpec(AndroidGenieToolExecutor.HIDE_TARGET_TOOL, "Hide the detached target window.", emptyObjectSchema()))
-            .put(dynamicToolSpec(AndroidGenieToolExecutor.ATTACH_TARGET_TOOL, "Reattach the detached target back to the main display.", emptyObjectSchema()))
+            .put(dynamicToolSpec(AndroidGenieToolExecutor.ATTACH_TARGET_TOOL, "Reattach the detached target back to the main display only when the user explicitly asks to bring the app to the front or the final objective clearly requires a visible attached UI.", emptyObjectSchema()))
             .put(dynamicToolSpec(AndroidGenieToolExecutor.CLOSE_TARGET_TOOL, "Close the detached target window.", emptyObjectSchema()))
             .put(dynamicToolSpec(AndroidGenieToolExecutor.CAPTURE_TARGET_FRAME_TOOL, "Capture the detached target window as an image.", emptyObjectSchema()))
     }

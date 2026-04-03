@@ -87,6 +87,11 @@ The current repo now contains these implementation slices:
   (`ATTACHED`, `DETACHED_HIDDEN`, `DETACHED_SHOWN`, or `AGENT_CHOICE`) and
   uses the framework-authoritative `AgentSessionInfo.getTargetPresentation()`
   state to verify whether a completed child actually satisfied it.
+- Target visibility is now hidden-by-default. The planner should prefer
+  `DETACHED_HIDDEN` unless the user explicitly asks for a visible app handoff
+  or the task clearly implies that the final UI must be shown, and Genie
+  runtime instructions/tool descriptions reinforce that `show` / `attach`
+  controls should not be used just for inspection.
 - For HOME-anchored app sessions, Launcher now standardizes badged icon taps as
   AGENT dispatch for `RUNNING`, `WAITING_FOR_USER`, and `COMPLETED` states. The
   Agent result popup therefore owns the completion policy explicitly: pressing

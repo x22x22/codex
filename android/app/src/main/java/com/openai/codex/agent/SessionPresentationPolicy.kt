@@ -21,7 +21,7 @@ enum class SessionFinalPresentationPolicy(
     ),
     AGENT_CHOICE(
         wireValue = "AGENT_CHOICE",
-        description = "The Agent does not require a specific final presentation state for this target.",
+        description = "The Agent does not require a specific final presentation state for this target, but hidden background completion is preferred unless the user asked for a visible app.",
     ),
     ;
 
@@ -57,7 +57,7 @@ enum class SessionFinalPresentationPolicy(
                 "Before reporting success, ensure the target remains DETACHED_SHOWN. It should stay detached but visibly shown through the detached host."
             }
             AGENT_CHOICE -> {
-                "Choose the final target presentation state yourself and describe the final state accurately in your result."
+                "Prefer finishing DETACHED_HIDDEN so the app does not come to the front by default. Attach or show the target only when the delegated objective explicitly asks for a user-visible app state or clearly implies that the final UI should be visible. Describe the final state accurately in your result."
             }
         }
     }

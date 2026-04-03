@@ -65,6 +65,10 @@ stub SDK docs and the local refactor doc:
 - Genie is headless and should not depend on direct internet access.
 - Detached target handling must use framework-authoritative presentation/runtime
   state and typed detached-target recovery APIs rather than guessed relaunches.
+- Genies should keep the paired app hidden by default. Prefer
+  `DETACHED_HIDDEN` unless the user explicitly asks to bring the app to the
+  front, asks to leave it visibly shown, or the task clearly implies a visible
+  app handoff.
 - App-scoped HOME drafts are real framework `STATE_CREATED` sessions created
   before `startGenieSession(...)`; if you expose that flow outside the on-device
   UI, remember that provisional HOME sessions are expected to hold a

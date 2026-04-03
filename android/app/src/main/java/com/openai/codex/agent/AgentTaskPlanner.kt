@@ -52,10 +52,10 @@ object AgentTaskPlanner {
         - `targets` must be non-empty.
         - Each delegated `objective` should be written for the child Genie, not the user.
         - Each target must include `finalPresentationPolicy`.
-        - Use `ATTACHED` when the user wants the target left on the main screen or explicitly visible to them.
-        - Use `DETACHED_SHOWN` when the target should remain visible but stay detached.
-        - Use `DETACHED_HIDDEN` when the target should complete in the background without remaining visible.
-        - Use `AGENT_CHOICE` only when the final presentation state does not matter.
+        - Prefer `DETACHED_HIDDEN` by default so the target app stays in the background while the Agent reports the outcome.
+        - Use `ATTACHED` only when the user explicitly asks to leave the app open, bring it to the front, show them the resulting screen, or the request clearly implies that the final UI must be visible.
+        - Use `DETACHED_SHOWN` only when the user asks for the app to remain visibly shown in detached mode rather than attached.
+        - Use `AGENT_CHOICE` only when there is a strong reason to let the Genie choose the final presentation dynamically; otherwise pick `DETACHED_HIDDEN`.
         - Stop after at most 6 shell commands.
         - Start from the installed package list, then narrow to the most likely candidates.
         - Prefer direct package-manager commands over broad shell pipelines.
