@@ -242,6 +242,7 @@ class SessionPopupActivity : Activity() {
         session: AgentSessionDetails,
         button: Button,
     ) {
+        AgentQuestionNotifier.cancel(this, session.sessionId)
         if (!isTopLevelHomeSession(session)) {
             finish()
             return
