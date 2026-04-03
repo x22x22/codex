@@ -18,6 +18,8 @@ import kotlin.concurrent.thread
 class SessionPopupActivity : Activity() {
     companion object {
         const val EXTRA_SESSION_ID = "sessionId"
+        private const val HOME_FOLLOW_UP_SETTLE_TIMEOUT_MS = 2_000L
+        private const val HOME_FOLLOW_UP_SETTLE_POLL_MS = 50L
 
         fun intent(
             context: Context,
@@ -34,15 +36,23 @@ class SessionPopupActivity : Activity() {
     private var popupRendered = false
     private var refreshInFlight = false
     private var sessionListenerRegistered = false
+    @Volatile
+    private var followUpSubmissionInFlight = false
 
     private val sessionListener = object : AgentManager.SessionListener {
         override fun onSessionChanged(session: AgentSessionInfo) {
+            if (followUpSubmissionInFlight && session.sessionId == requestedSessionId) {
+                return
+            }
             if (session.sessionId == requestedSessionId || session.parentSessionId == requestedSessionId) {
                 refreshPopup(force = true)
             }
         }
 
         override fun onSessionRemoved(sessionId: String, userId: Int) {
+            if (followUpSubmissionInFlight && sessionId == requestedSessionId) {
+                return
+            }
             if (sessionId == requestedSessionId) {
                 finish()
             } else {
@@ -318,6 +328,7 @@ class SessionPopupActivity : Activity() {
             promptInput.error = "Enter a follow-up prompt"
             return
         }
+        followUpSubmissionInFlight = true
         sendButton.isEnabled = false
         okButton.isEnabled = false
         thread(name = "CodexSessionPopupFollowUp-${session.sessionId}") {
@@ -326,6 +337,7 @@ class SessionPopupActivity : Activity() {
                 AgentQuestionNotifier.cancel(this, session.sessionId)
             }.onFailure { err ->
                 runOnUiThread {
+                    followUpSubmissionInFlight = false
                     sendButton.isEnabled = true
                     okButton.isEnabled = true
                     Toast.makeText(
@@ -336,6 +348,7 @@ class SessionPopupActivity : Activity() {
                 }
             }.onSuccess {
                 runOnUiThread {
+                    followUpSubmissionInFlight = false
                     finish()
                 }
             }
@@ -393,7 +406,8 @@ class SessionPopupActivity : Activity() {
             "No target package available for follow-up"
         }
         val executionSettings = sessionController.executionSettingsForSession(topLevelSession.sessionId)
-        AgentSessionLauncher.startSession(
+        consumePreviousHomeSessionPresentation(topLevelSession)
+        val newSessionId = AgentSessionLauncher.startSession(
             context = this,
             request = LaunchSessionRequest(
                 prompt = prompt,
@@ -402,10 +416,43 @@ class SessionPopupActivity : Activity() {
                 reasoningEffort = executionSettings.reasoningEffort,
             ),
             sessionController = sessionController,
-        )
-        sessionController.consumeHomeSessionPresentation(topLevelSession.sessionId)
-        if (topLevelSession.targetDetached) {
+        ).parentSessionId
+        val deadline = System.currentTimeMillis() + HOME_FOLLOW_UP_SETTLE_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val followUpSession = runCatching {
+                resolvePopupSession(sessionController.loadSnapshot(newSessionId), newSessionId)
+            }.getOrNull()
+            if (followUpSession != null) {
+                if (
+                    followUpSession.targetDetached ||
+                    followUpSession.targetPresentation != AgentSessionInfo.TARGET_PRESENTATION_ATTACHED
+                ) {
+                    return
+                }
+            }
+            Thread.sleep(HOME_FOLLOW_UP_SETTLE_POLL_MS)
+        }
+    }
+
+    private fun consumePreviousHomeSessionPresentation(
+        topLevelSession: AgentSessionDetails,
+    ) {
+        runCatching {
+            sessionController.consumeHomeSessionPresentation(topLevelSession.sessionId)
+        }.onFailure { err ->
+            if (!isUnknownSessionError(err)) {
+                throw err
+            }
+        }
+        if (!topLevelSession.targetDetached) {
+            return
+        }
+        runCatching {
             sessionController.closeDetachedTarget(topLevelSession.sessionId)
+        }.onFailure { err ->
+            if (!isUnknownSessionError(err)) {
+                throw err
+            }
         }
     }
 
@@ -542,5 +589,10 @@ class SessionPopupActivity : Activity() {
         return runCatching {
             InstalledAppCatalog.resolveInstalledApp(this, sessionController, targetPackage).label
         }.getOrDefault(targetPackage)
+    }
+
+    private fun isUnknownSessionError(err: Throwable): Boolean {
+        return err is IllegalArgumentException &&
+            err.message?.contains("Unknown session", ignoreCase = true) == true
     }
 }
