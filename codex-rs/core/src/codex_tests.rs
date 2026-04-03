@@ -1826,6 +1826,7 @@ async fn set_rate_limits_retains_previous_credits() {
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
+        inherited_mcp_connection_manager: None,
         user_shell_override: None,
     };
 
@@ -1924,6 +1925,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
+        inherited_mcp_connection_manager: None,
         user_shell_override: None,
     };
 
@@ -2266,6 +2268,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
+        inherited_mcp_connection_manager: None,
         user_shell_override: None,
     }
 }
@@ -2529,6 +2532,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
+        inherited_mcp_connection_manager: None,
         user_shell_override: None,
     };
 
@@ -2626,6 +2630,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
+        inherited_mcp_connection_manager: None,
         user_shell_override: None,
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
@@ -3463,6 +3468,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         dynamic_tools,
         persist_extended_history: false,
         inherited_shell_snapshot: None,
+        inherited_mcp_connection_manager: None,
         user_shell_override: None,
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
