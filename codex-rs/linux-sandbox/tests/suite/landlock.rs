@@ -119,7 +119,7 @@ async fn run_cmd_result_with_policies_and_cwd(
     sandbox_cwd: PathBuf,
     timeout_ms: u64,
     use_legacy_landlock: bool,
-) -> Result<codex_core::exec::ExecToolCallOutput> {
+) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
     run_cmd_result_with_policies(
         cmd,
         sandbox_policy,
