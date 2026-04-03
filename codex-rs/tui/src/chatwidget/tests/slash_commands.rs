@@ -207,7 +207,10 @@ async fn slash_plan_with_bound_mention_persists_encoded_history_text() {
         .handle_composer_key_event_without_popup(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         InputResult::CommandWithArgs(cmd, args, text_elements) => {
-            assert!(chat.dispatch_command_with_args(cmd, args, text_elements));
+            assert_eq!(
+                chat.dispatch_command_with_args(cmd, args, text_elements),
+                SlashCommandDispatchOutcome::Committed
+            );
             chat.commit_pending_slash_command_history();
         }
         other => panic!("expected inline-arg slash command, got {other:?}"),
@@ -260,6 +263,56 @@ async fn slash_rename_with_args_persists_exact_command_once_and_recalls_it() {
     let _ = drain_insert_history(&mut rx);
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(chat.bottom_pane.composer_text(), "/rename Better title");
+}
+
+#[tokio::test]
+async fn rejected_inline_slash_command_keeps_visible_draft_metadata() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+    let image_path = PathBuf::from("/tmp/plan.png");
+
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        "/fast badarg $sample".to_string(),
+        Vec::new(),
+        vec![image_path.clone()],
+        vec![MentionBinding {
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }],
+    );
+    chat.set_remote_image_urls(vec!["https://example.com/one.png".to_string()]);
+
+    let result = chat
+        .bottom_pane
+        .handle_composer_key_event_without_popup(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match result {
+        InputResult::CommandWithArgs(cmd, args, text_elements) => {
+            assert_eq!(
+                chat.dispatch_command_with_args(cmd, args, text_elements),
+                SlashCommandDispatchOutcome::RejectedKeepDraft
+            );
+            let _ = chat.bottom_pane.take_pending_slash_command_history();
+        }
+        other => panic!("expected inline-arg slash command, got {other:?}"),
+    }
+
+    assert_eq!(chat.bottom_pane.composer_text(), "/fast badarg $sample");
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![image_path]
+    );
+    assert_eq!(
+        chat.bottom_pane.remote_image_urls(),
+        vec!["https://example.com/one.png".to_string()]
+    );
+    assert_eq!(
+        chat.bottom_pane.composer_mention_bindings(),
+        vec![MentionBinding {
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }]
+    );
+    assert!(drain_history_and_user_turn_ops(&mut op_rx).0.is_empty());
 }
 
 #[tokio::test]

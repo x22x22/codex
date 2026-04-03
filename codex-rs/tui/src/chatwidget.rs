@@ -975,6 +975,13 @@ enum CodexOpTarget {
     AppEvent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlashCommandDispatchOutcome {
+    Committed,
+    RejectedKeepDraft,
+    RejectedDiscardPreparedState,
+}
+
 /// Snapshot of active-cell state that affects transcript overlay rendering.
 ///
 /// The overlay keeps a cached "live tail" for the in-flight cell; this key lets
@@ -4945,10 +4952,16 @@ impl ChatWidget {
                     }
                 }
                 InputResult::CommandWithArgs(cmd, args, text_elements) => {
-                    if self.dispatch_command_with_args(cmd, args, text_elements) {
-                        self.commit_pending_slash_command_history();
-                    } else {
-                        self.bottom_pane.drain_pending_submission_state();
+                    match self.dispatch_command_with_args(cmd, args, text_elements) {
+                        SlashCommandDispatchOutcome::Committed => {
+                            self.commit_pending_slash_command_history();
+                        }
+                        SlashCommandDispatchOutcome::RejectedKeepDraft => {
+                            let _ = self.bottom_pane.take_pending_slash_command_history();
+                        }
+                        SlashCommandDispatchOutcome::RejectedDiscardPreparedState => {
+                            self.bottom_pane.drain_pending_submission_state();
+                        }
                     }
                 }
                 InputResult::None => {}
@@ -5430,17 +5443,22 @@ impl ChatWidget {
     /// Executes a slash command that was submitted with inline arguments
     /// (e.g. `/plan investigate this`).
     ///
-    /// Returns `true` when the command succeeds and should be recorded in
-    /// history, mirroring the contract of `dispatch_command`. Commands that
-    /// don't support inline args delegate to `dispatch_command` directly.
+    /// Some rejections happen before submission prep consumes the draft,
+    /// while others happen after the draft was already prepared and cleared.
+    /// The caller uses the returned outcome to preserve visible draft state
+    /// when appropriate.
     fn dispatch_command_with_args(
         &mut self,
         cmd: SlashCommand,
         args: String,
         _text_elements: Vec<TextElement>,
-    ) -> bool {
+    ) -> SlashCommandDispatchOutcome {
         if !cmd.supports_inline_args() {
-            return self.dispatch_command(cmd);
+            return if self.dispatch_command(cmd) {
+                SlashCommandDispatchOutcome::Committed
+            } else {
+                SlashCommandDispatchOutcome::RejectedDiscardPreparedState
+            };
         }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
@@ -5449,14 +5467,18 @@ impl ChatWidget {
             );
             self.add_to_history(history_cell::new_error_event(message));
             self.request_redraw();
-            return false;
+            return SlashCommandDispatchOutcome::RejectedKeepDraft;
         }
 
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Fast => {
                 if trimmed.is_empty() {
-                    return self.dispatch_command(cmd);
+                    return if self.dispatch_command(cmd) {
+                        SlashCommandDispatchOutcome::Committed
+                    } else {
+                        SlashCommandDispatchOutcome::RejectedDiscardPreparedState
+                    };
                 }
                 match trimmed.to_ascii_lowercase().as_str() {
                     "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
@@ -5475,10 +5497,10 @@ impl ChatWidget {
                     }
                     _ => {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
-                        return false;
+                        return SlashCommandDispatchOutcome::RejectedKeepDraft;
                     }
                 };
-                true
+                SlashCommandDispatchOutcome::Committed
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.session_telemetry
@@ -5487,28 +5509,28 @@ impl ChatWidget {
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return false;
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 };
                 let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
-                    return false;
+                    return SlashCommandDispatchOutcome::RejectedDiscardPreparedState;
                 };
                 let cell = Self::rename_confirmation_cell(&name, self.thread_id);
                 self.add_boxed_history(Box::new(cell));
                 self.request_redraw();
                 self.app_event_tx.set_thread_name(name);
                 self.bottom_pane.drain_recent_submission_state();
-                true
+                SlashCommandDispatchOutcome::Committed
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
                 if !self.dispatch_command(cmd) || self.active_mode_kind() != ModeKind::Plan {
-                    return false;
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 }
                 let Some((prepared_args, prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return false;
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 };
                 let local_images = self
                     .bottom_pane
@@ -5530,14 +5552,14 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
-                true
+                SlashCommandDispatchOutcome::Committed
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return false;
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 };
                 self.submit_op(AppCommand::review(ReviewRequest {
                     target: ReviewTarget::Custom {
@@ -5546,23 +5568,29 @@ impl ChatWidget {
                     user_facing_hint: None,
                 }));
                 self.bottom_pane.drain_recent_submission_state();
-                true
+                SlashCommandDispatchOutcome::Committed
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
-                    return false;
+                    return SlashCommandDispatchOutcome::RejectedKeepDraft;
                 };
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
                 self.bottom_pane.drain_recent_submission_state();
-                true
+                SlashCommandDispatchOutcome::Committed
             }
-            _ => self.dispatch_command(cmd),
+            _ => {
+                if self.dispatch_command(cmd) {
+                    SlashCommandDispatchOutcome::Committed
+                } else {
+                    SlashCommandDispatchOutcome::RejectedDiscardPreparedState
+                }
+            }
         }
     }
 
