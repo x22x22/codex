@@ -197,7 +197,7 @@ $lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
 "#,
             )?;
             (
-                "powershell".to_string(),
+                "powershell.exe".to_string(),
                 vec![
                     "-NoProfile".to_string(),
                     "-ExecutionPolicy".to_string(),
@@ -2594,7 +2594,15 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_overrides_assign_properties_used_for_responses_url() {
     skip_if_no_network!();
-    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+
+    // We try to avoid setting env vars in tests because std::env::set_var() is
+    // process-wide and unsafe. Though for this test, we want to simulate the
+    // presence of an environment variable that the provider will read for auth,
+    // so we pick a commonly existing env var that is guaranteed to have a
+    // non-empty value on both Windows and Unix. Note that this test must also
+    // work when run under Bazel in CI, which uses a restricted environment, so
+    // PATH seems like the safest choice.
+    let existing_env_var_with_non_empty_value = "PATH";
 
     // Mock server
     let server = MockServer::start().await;
@@ -2616,7 +2624,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
             "Authorization",
             format!(
                 "Bearer {}",
-                std::env::var(existing_env_var_with_random_value).unwrap()
+                std::env::var(existing_env_var_with_non_empty_value).unwrap()
             )
             .as_str(),
         ))
@@ -2629,7 +2637,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
         // Reuse the existing environment variable to avoid using unsafe code
-        env_key: Some(existing_env_var_with_random_value.to_string()),
+        env_key: Some(existing_env_var_with_non_empty_value.to_string()),
         experimental_bearer_token: None,
         auth: None,
         query_params: Some(std::collections::HashMap::from([(
@@ -2698,7 +2706,7 @@ async fn env_var_overrides_loaded_auth() {
         .and(path("/openai/responses"))
         .and(query_param("api-version", "2025-04-01-preview"))
         .and(header_regex("Custom-Header", "Value"))
-        .and(header_regex(
+        .and(header(
             "Authorization",
             format!(
                 "Bearer {}",
