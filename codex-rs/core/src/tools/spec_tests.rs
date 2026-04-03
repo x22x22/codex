@@ -1,5 +1,4 @@
 use crate::config::test_config;
-use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::model_info::with_config_overrides;
 use crate::shell::Shell;
