@@ -649,6 +649,7 @@ allowed_approval_policies = ["on-request"]
         CloudRequirementsLoader::new(async {
             Ok(Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
@@ -700,6 +701,7 @@ allowed_approval_policies = ["on-request"]
         RequirementSource::CloudRequirements,
         ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::Never]),
+            allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
             feature_requirements: None,
@@ -740,6 +742,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
 
     let requirements = ConfigRequirementsToml {
         allowed_approval_policies: Some(vec![AskForApproval::Never]),
+        allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
         allowed_web_search_modes: None,
         feature_requirements: None,

@@ -3,6 +3,7 @@ use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use crate::config_loader::LoaderOverrides;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
@@ -2206,6 +2207,12 @@ fn text_block(s: &str) -> serde_json::Value {
 async fn build_test_config(codex_home: &Path) -> Config {
     ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            managed_config_path: None,
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
+        })
         .build()
         .await
         .expect("load default test config")
