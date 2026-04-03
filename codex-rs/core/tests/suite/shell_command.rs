@@ -262,6 +262,7 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(true ; "with_login")]
 #[test_case(false ; "without_login")]
+#[serial_test::serial(shell_command_unicode_output)]
 async fn unicode_output(login: bool) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
