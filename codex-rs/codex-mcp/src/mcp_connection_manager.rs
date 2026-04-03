@@ -34,7 +34,6 @@ use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
-use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
@@ -600,20 +599,6 @@ pub struct SandboxState {
     pub use_legacy_landlock: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ExternalMcpEventNotificationMeta {
-    pub(crate) thread_id: ThreadId,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct ExternalMcpEventNotification {
-    #[serde(rename = "_meta")]
-    pub(crate) meta: ExternalMcpEventNotificationMeta,
-    #[serde(flatten)]
-    pub(crate) event: Event,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CodexEventsCapability {
@@ -1171,8 +1156,8 @@ impl McpConnectionManager {
         Ok(())
     }
 
-    pub async fn notify_codex_event(&self, params: &ExternalMcpEventNotification) -> Result<()> {
-        let params = serde_json::to_value(params)?;
+    pub async fn notify_codex_event(&self, event: &Event) -> Result<()> {
+        let params = serde_json::to_value(event)?;
         let Some(event_type) = params
             .get("msg")
             .and_then(|msg| msg.get("type"))
