@@ -3347,6 +3347,7 @@ mod tests {
         handle_turn_complete(
             conversation_id,
             event_turn_id.clone(),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
