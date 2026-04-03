@@ -94,10 +94,7 @@ Default behavior:
 - remote command:
   `cd codex-rs && export PATH=$HOME/code/openai/project/dotslash-gen/bin:$HOME/.local/bin:$PATH && bazel build --bes_backend= --bes_results_url= //codex-rs/cli:cli`
 - prints the exact copy-paste remote Codex Bazel run command for the mirrored checkout
-- the helper command uses `cargo run -p codex-cli --` because that path has
-  been verified on `dev`
-- do not switch the helper command back to Bazel `run` on `dev` until the
-  remote linker failure is resolved
+- the helper command intentionally stays on the mirrored-worktree Bazel path and uses `//codex-rs/cli:codex`
 
 Example:
 
@@ -114,7 +111,7 @@ This will mirror:
 It will print:
 
 ```bash
-ssh -t dev 'cd /tmp/codex-worktrees/my-feature/codex-rs && cargo run -p codex-cli --'
+ssh -t dev 'cd /tmp/codex-worktrees/my-feature/codex-rs && export PATH=$HOME/code/openai/project/dotslash-gen/bin:$HOME/.local/bin:$PATH && bazel run --bes_backend= --bes_results_url= //codex-rs/cli:codex --'
 ```
 
 Custom host, remote root, and command:
@@ -185,17 +182,14 @@ What has been verified:
 - `sync-worktree-and-run` can mirror the local worktree and complete a remote
   Bazel build with:
   `bazel build --bes_backend= --bes_results_url= //codex-rs/cli:cli`
-- `cargo run -p codex-cli -- --help` works from the mirrored remote checkout
-- an interactive `cargo run -p codex-cli --` session starts successfully from
-  the mirrored remote checkout
+- on current `main`, `bazel run --bes_backend= --bes_results_url=
+  //codex-rs/cli:codex --` builds successfully on `dev`
 
-Current caveat:
+Practical note:
 
-- `bazel run --bes_backend= --bes_results_url= //codex-rs/cli:codex --`
-  currently fails on `dev` with a linker error referencing
-  `__libc_csu_init` / `__libc_csu_fini`
-- because of that, the skill's printed helper command intentionally uses
-  `cargo run -p codex-cli --` even though the build step remains Bazel-based
+- older pre-`#16634` checkouts could fail on `dev` when launching
+  `//codex-rs/cli:codex`; treat current `main` as the baseline before carrying
+  that older caveat forward
 
 ## Bazel defaults on the devbox
 
@@ -213,11 +207,11 @@ Use this decision rule:
   - `//codex-rs/tui:tui`
   - `//codex-rs/utils/absolute-path:absolute-path`
 
-Current practical caveat:
+Current practical note:
 
-- `//codex-rs/cli:codex` is not the default helper path here because it hit a
-  remote linker failure on `dev` during validation (`undefined symbol:
-  __libc_csu_init` / `__libc_csu_fini`).
+- older pre-`#16634` checkouts could fail on `dev` when launching
+  `//codex-rs/cli:codex`; re-test current `main` before treating that older
+  caveat as still active
 
 What is shared versus isolated:
 

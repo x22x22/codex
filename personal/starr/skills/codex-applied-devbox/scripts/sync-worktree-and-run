@@ -21,10 +21,8 @@ Options:
                               $HOME/.local/bin:$PATH &&
                               bazel build --bes_backend= --bes_results_url=
                               //codex-rs/cli:cli
-  Prints the exact Codex SSH run command for the mirrored checkout on every
-  run. The default remote build remains Bazel-backed, but the helper run
-  command uses cargo because `bazel run //codex-rs/cli:codex` is currently not
-  reliable on `dev`.
+  Prints the exact Bazel-backed Codex SSH run command for the mirrored
+  checkout on every run.
   -h, --help                  Show this help text.
 EOF
 }
@@ -111,7 +109,7 @@ esac
 
 remote_worktree="${remote_root%/}/$relative_path"
 remote_codex_dir="${remote_worktree%/}/codex-rs"
-remote_codex_run_command="cd $remote_codex_dir && cargo run -p codex-cli --"
+remote_codex_run_command="cd $remote_codex_dir && export PATH=\$HOME/code/openai/project/dotslash-gen/bin:\$HOME/.local/bin:\$PATH && bazel run --bes_backend= --bes_results_url= //codex-rs/cli:codex --"
 
 echo "# Shared-worktree Bazel Codex run command:"
 echo "ssh -t $host $(shell_single_quote "$remote_codex_run_command")"
