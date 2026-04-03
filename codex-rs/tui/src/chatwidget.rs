@@ -5966,12 +5966,21 @@ impl ChatWidget {
     /// ring (enabling Up-arrow recall) and emits `Op::AddToHistory` so the
     /// backend persists it across sessions. Does nothing if no entry was staged.
     fn commit_pending_slash_command_history(&mut self) {
-        let Some(history_text) = self.bottom_pane.record_pending_slash_command_history() else {
+        let Some(history_entry) = self.bottom_pane.record_pending_slash_command_history() else {
             return;
         };
-        if history_text.is_empty() {
+        if history_entry.text.is_empty() {
             return;
         }
+        let encoded_mentions = history_entry
+            .mention_bindings
+            .iter()
+            .map(|binding| LinkedMention {
+                mention: binding.mention.clone(),
+                path: binding.path.clone(),
+            })
+            .collect::<Vec<_>>();
+        let history_text = encode_history_mentions(&history_entry.text, &encoded_mentions);
         self.submit_op(Op::AddToHistory { text: history_text });
     }
 

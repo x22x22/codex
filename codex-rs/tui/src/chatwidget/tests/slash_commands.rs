@@ -1,4 +1,6 @@
 use super::*;
+use crate::mention_codec::LinkedMention;
+use crate::mention_codec::encode_history_mentions;
 use pretty_assertions::assert_eq;
 
 fn configure_session(chat: &mut ChatWidget) {
@@ -183,6 +185,45 @@ async fn slash_plan_with_args_persists_exact_command_once_and_recalls_it() {
     let _ = drain_insert_history(&mut rx);
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(chat.bottom_pane.composer_text(), "/plan investigate this");
+}
+
+#[tokio::test]
+async fn slash_plan_with_bound_mention_persists_encoded_history_text() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    configure_session(&mut chat);
+    let _ = drain_insert_history(&mut rx);
+
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        "/plan ask $sample".to_string(),
+        Vec::new(),
+        Vec::new(),
+        vec![MentionBinding {
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }],
+    );
+    let result = chat
+        .bottom_pane
+        .handle_composer_key_event_without_popup(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match result {
+        InputResult::CommandWithArgs(cmd, args, text_elements) => {
+            assert!(chat.dispatch_command_with_args(cmd, args, text_elements));
+            chat.commit_pending_slash_command_history();
+        }
+        other => panic!("expected inline-arg slash command, got {other:?}"),
+    }
+
+    let (history_texts, _user_turn_text) = drain_history_and_user_turn_ops(&mut op_rx);
+    assert_eq!(
+        history_texts,
+        vec![encode_history_mentions(
+            "/plan ask $sample",
+            &[LinkedMention {
+                mention: "sample".to_string(),
+                path: "plugin://sample@test".to_string(),
+            }],
+        )]
+    );
 }
 
 #[tokio::test]

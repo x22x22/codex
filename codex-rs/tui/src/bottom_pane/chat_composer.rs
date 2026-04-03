@@ -1073,8 +1073,8 @@ impl ChatComposer {
     }
 
     /// Commits the staged slash-command entry into the local history ring
-    /// and returns the stored command text for persistent (cross-session)
-    /// storage via `Op::AddToHistory`.
+    /// and returns the stored draft for persistent (cross-session) storage
+    /// via `Op::AddToHistory`.
     ///
     /// This is the "commit" half of the two-phase slash-command history
     /// protocol. The caller (`ChatWidget::commit_pending_slash_command_history`)
@@ -1082,11 +1082,10 @@ impl ChatComposer {
     ///
     /// Returns `None` if no entry was staged, which happens when the command
     /// was already drained or was never a slash command to begin with.
-    pub(crate) fn record_pending_slash_command_history(&mut self) -> Option<String> {
+    pub(crate) fn record_pending_slash_command_history(&mut self) -> Option<HistoryEntry> {
         let entry = self.pending_slash_command_history.take()?;
-        let text = entry.text.clone();
-        self.history.record_local_submission(entry);
-        Some(text)
+        self.history.record_local_submission(entry.clone());
+        Some(entry)
     }
 
     fn prune_attached_images_for_submission(&mut self, text: &str, text_elements: &[TextElement]) {
@@ -2607,6 +2606,14 @@ impl ChatComposer {
             } => self.handle_submission(/*should_queue*/ false),
             input => self.handle_input_basic(input),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn handle_key_event_without_popup_for_test(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> (InputResult, bool) {
+        self.handle_key_event_without_popup(key_event)
     }
 
     fn is_bang_shell_command(&self) -> bool {
@@ -7952,7 +7959,7 @@ mod tests {
         assert_eq!(result, InputResult::Command(SlashCommand::Diff));
         assert_eq!(
             composer.record_pending_slash_command_history(),
-            Some("/diff".to_string())
+            Some(HistoryEntry::new("/diff".to_string()))
         );
 
         let (result, _needs_redraw) =
@@ -7983,7 +7990,7 @@ mod tests {
         assert_eq!(result, InputResult::Command(SlashCommand::Diff));
         assert_eq!(
             composer.record_pending_slash_command_history(),
-            Some("/diff".to_string())
+            Some(HistoryEntry::new("/diff".to_string()))
         );
 
         let (result, _needs_redraw) =
@@ -8019,10 +8026,11 @@ mod tests {
             }
             other => panic!("expected /plan inline-args command, got {other:?}"),
         }
-        assert_eq!(
-            composer.record_pending_slash_command_history(),
-            Some("/plan investigate this".to_string())
-        );
+        let staged = composer
+            .record_pending_slash_command_history()
+            .expect("expected staged history entry");
+        assert_eq!(staged.text, "/plan investigate this");
+        assert!(staged.mention_bindings.is_empty());
 
         let (prepared_args, prepared_elements) = composer
             .prepare_inline_args_submission(/*record_history*/ false)

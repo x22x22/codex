@@ -289,9 +289,11 @@ impl BottomPane {
     }
 
     /// Commits the staged slash-command entry to the local history ring and
-    /// returns its text for persistent storage.
+    /// returns it for persistent storage.
     /// See [`ChatComposer::record_pending_slash_command_history`].
-    pub(crate) fn record_pending_slash_command_history(&mut self) -> Option<String> {
+    pub(crate) fn record_pending_slash_command_history(
+        &mut self,
+    ) -> Option<chat_composer_history::HistoryEntry> {
         self.composer.record_pending_slash_command_history()
     }
 
@@ -472,6 +474,20 @@ impl BottomPane {
             }
             input_result
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn handle_composer_key_event_without_popup(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> InputResult {
+        let (input_result, needs_redraw) = self
+            .composer
+            .handle_key_event_without_popup_for_test(key_event);
+        if needs_redraw {
+            self.request_redraw();
+        }
+        input_result
     }
 
     /// Handles a Ctrl+C press within the bottom pane.
