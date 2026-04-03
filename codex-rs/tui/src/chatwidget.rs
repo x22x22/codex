@@ -5911,6 +5911,8 @@ impl ChatWidget {
                             status,
                             error,
                         },
+                        completed_at: 0,
+                        duration_ms: None,
                     },
                     Some(replay_kind),
                 );

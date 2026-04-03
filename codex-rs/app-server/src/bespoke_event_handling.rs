@@ -141,6 +141,8 @@ use std::convert::TryFrom;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
@@ -289,6 +291,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let notification = TurnStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn,
+                    created_at: set_turn_started_at(&thread_state).await,
                 };
                 outgoing
                     .send_server_notification(ServerNotification::TurnStarted(notification))
@@ -1947,8 +1950,10 @@ async fn emit_turn_completed_with_status(
     event_turn_id: String,
     status: TurnStatus,
     error: Option<TurnError>,
+    started_at_ms: Option<i64>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
+    let completed_at_ms = now_unix_timestamp_millis();
     let notification = TurnCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn: Turn {
@@ -1957,6 +1962,9 @@ async fn emit_turn_completed_with_status(
             error,
             status,
         },
+        completed_at: completed_at_ms / 1000,
+        duration_ms: started_at_ms
+            .map(|started_at_ms| completed_at_ms.saturating_sub(started_at_ms)),
     };
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
@@ -2105,13 +2113,22 @@ async fn handle_turn_complete(
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let started_at_ms = turn_summary.started_at_ms;
 
     let (status, error) = match turn_summary.last_error {
         Some(error) => (TurnStatus::Failed, Some(error)),
         None => (TurnStatus::Completed, None),
     };
 
-    emit_turn_completed_with_status(conversation_id, event_turn_id, status, error, outgoing).await;
+    emit_turn_completed_with_status(
+        conversation_id,
+        event_turn_id,
+        status,
+        error,
+        started_at_ms,
+        outgoing,
+    )
+    .await;
 }
 
 async fn handle_turn_interrupted(
@@ -2120,16 +2137,31 @@ async fn handle_turn_interrupted(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    find_and_remove_turn_summary(conversation_id, thread_state).await;
+    let turn_summary = find_and_remove_turn_summary(conversation_id, thread_state).await;
 
     emit_turn_completed_with_status(
         conversation_id,
         event_turn_id,
         TurnStatus::Interrupted,
         /*error*/ None,
+        turn_summary.started_at_ms,
         outgoing,
     )
     .await;
+}
+
+async fn set_turn_started_at(thread_state: &Arc<Mutex<ThreadState>>) -> i64 {
+    let started_at_ms = now_unix_timestamp_millis();
+    let mut state = thread_state.lock().await;
+    state.turn_summary.started_at_ms = Some(started_at_ms);
+    started_at_ms / 1000
+}
+
+fn now_unix_timestamp_millis() -> i64 {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
 async fn handle_thread_rollback_failed(
