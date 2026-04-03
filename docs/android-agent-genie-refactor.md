@@ -68,10 +68,10 @@ The current repo now contains these implementation slices:
   `request_user_input` in Default mode so ambiguous delegated tasks can pause in
   real framework `WAITING_FOR_USER` state instead of guessing or emitting a
   plain-text question as a normal completion.
-- In detached mode, Genie question handoff now recovers a missing target task by
-  calling `ensureDetachedTargetHidden` before retrying `showDetachedTarget`, so a
-  `WAITING_FOR_USER` session keeps launcher icon/badge behavior aligned with the
-  still-live framework session.
+- In detached mode, Genie question handoff no longer changes the current target
+  presentation. A hidden session therefore stays `DETACHED_HIDDEN` while waiting
+  for user input unless Codex explicitly asks to show or attach the target via a
+  framework target-control tool.
 - The Agent now auto-answers only internal bridge questions. User-facing Genie
   questions remain user-facing and are surfaced through the normal framework
   question flow, desktop/UI answer surfaces, and framework-delegated
@@ -94,11 +94,18 @@ The current repo now contains these implementation slices:
   controls should not be used just for inspection.
 - For HOME-anchored app sessions, Launcher now standardizes badged icon taps as
   AGENT dispatch for `RUNNING`, `WAITING_FOR_USER`, and `COMPLETED` states. The
-  Agent result popup therefore owns the completion policy explicitly: pressing
-  OK consumes the HOME badge/live-tile presentation through
-  `consumeHomeSessionPresentation(sessionId)` and closes the detached target if
-  one is still present instead of relying on Launcher to consume or open the
-  target app directly.
+  Agent popup therefore owns the completion policy explicitly:
+  - for question states, the popup shows a shared reply composer with the target
+    app icon, question text, and Cancel / Answer actions
+  - for result states, the same popup shape shows the final message, an optional
+    follow-up composer, and OK / Send actions
+  - pressing OK consumes the HOME badge/live-tile presentation through
+    `consumeHomeSessionPresentation(sessionId)` and closes the detached target if
+    one is still present instead of relying on Launcher to consume or open the
+    target app directly
+  - pressing Send on a HOME result starts a fresh app-scoped continuation session
+    with previous-result context, then consumes the completed HOME presentation
+  - pressing Send on an AGENT result continues the direct parent session in place
 - Codex Agent still uses `cancelSession(sessionId)` for user-driven cancellation
   because it is the AGENT-role app, not a HOME-role surface. The
   HOME-only `cancelHomeSession(sessionId)` API is reserved for Launcher/HOME
@@ -252,9 +259,9 @@ the Android Agent/Genie flow.
   framework-owned rendering if the new callback surface is unavailable. Running
   progress notifications are suppressed by ACKing the callback and cancelling
   any stale session notification instead of posting a new one.
-- Detached-mode Genie sessions now request `showDetachedTarget` before entering
-  `WAITING_FOR_USER`, so HOME can keep a visible live icon while the user
-  answers the question
+- Detached-mode Genie sessions preserve their current target presentation when
+  entering `WAITING_FOR_USER`; user prompts that ask to keep the app hidden should
+  therefore remain hidden while waiting for an answer
 - Agent-mediated answers only for internal bridge questions that the user
   should never see as product-facing prompts
 - Agent planning can now use `request_user_input` to ask the user clarifying

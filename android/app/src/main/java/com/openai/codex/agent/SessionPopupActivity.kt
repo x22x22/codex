@@ -5,11 +5,12 @@ import android.app.agent.AgentManager
 import android.app.agent.AgentSessionInfo
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Drawable
 import android.os.Bundle
-import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.concurrent.thread
@@ -156,14 +157,28 @@ class SessionPopupActivity : Activity() {
 
     private fun showQuestionPopup(session: AgentSessionDetails) {
         popupRendered = true
-        setContentView(R.layout.activity_session_question_popup)
-        findViewById<TextView>(R.id.session_popup_question_text).text = session.latestQuestion.orEmpty()
-        val answerInput = findViewById<EditText>(R.id.session_popup_answer_input)
-        findViewById<Button>(R.id.session_popup_cancel_button).setOnClickListener {
+        setContentView(R.layout.activity_session_popup)
+        bindPopupHeader(
+            session = session,
+            title = "Codex needs input for ${targetDisplayName(session)}",
+            body = session.latestQuestion.orEmpty(),
+        )
+        val answerInput = findViewById<EditText>(R.id.session_popup_prompt_input)
+        answerInput.hint = "Answer"
+        val cancelButton = findViewById<Button>(R.id.session_popup_secondary_button)
+        val answerButton = findViewById<Button>(R.id.session_popup_primary_button)
+        cancelButton.text = "Cancel"
+        answerButton.text = "Answer"
+        cancelButton.setOnClickListener {
             finish()
         }
-        findViewById<Button>(R.id.session_popup_submit_button).setOnClickListener {
-            submitAnswer(session, answerInput)
+        answerButton.setOnClickListener {
+            submitAnswer(
+                session = session,
+                answerInput = answerInput,
+                submitButton = answerButton,
+                cancelButton = cancelButton,
+            )
         }
         answerInput.requestFocus()
         window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
@@ -171,20 +186,38 @@ class SessionPopupActivity : Activity() {
 
     private fun showResultPopup(session: AgentSessionDetails) {
         popupRendered = true
-        setContentView(R.layout.activity_session_result_popup)
-        findViewById<TextView>(R.id.session_popup_result_title).text = resultTitle(session)
-        findViewById<TextView>(R.id.session_popup_result_text).text = resultBody(session)
-        findViewById<Button>(R.id.session_popup_ok_button).setOnClickListener { buttonView ->
-            dismissResultPopup(session, buttonView as Button)
+        setContentView(R.layout.activity_session_popup)
+        bindPopupHeader(
+            session = session,
+            title = resultTitle(session),
+            body = resultBody(session),
+        )
+        val followUpInput = findViewById<EditText>(R.id.session_popup_prompt_input)
+        followUpInput.hint = "Follow-up prompt"
+        val okButton = findViewById<Button>(R.id.session_popup_secondary_button)
+        val sendButton = findViewById<Button>(R.id.session_popup_primary_button)
+        okButton.text = "OK"
+        sendButton.text = "Send"
+        okButton.setOnClickListener {
+            dismissResultPopup(session, okButton, sendButton)
+        }
+        sendButton.setOnClickListener {
+            submitFollowUpPrompt(
+                session = session,
+                promptInput = followUpInput,
+                sendButton = sendButton,
+                okButton = okButton,
+            )
         }
     }
 
     private fun resultTitle(session: AgentSessionDetails): String {
+        val targetDisplayName = targetDisplayName(session)
         return when (session.state) {
-            AgentSessionInfo.STATE_COMPLETED -> "Codex Result"
-            AgentSessionInfo.STATE_CANCELLED -> "Codex Session Cancelled"
-            AgentSessionInfo.STATE_FAILED -> "Codex Session Failed"
-            else -> "Codex Session"
+            AgentSessionInfo.STATE_COMPLETED -> "Codex finished $targetDisplayName"
+            AgentSessionInfo.STATE_CANCELLED -> "Codex cancelled $targetDisplayName"
+            AgentSessionInfo.STATE_FAILED -> "Codex hit an issue in $targetDisplayName"
+            else -> "Codex session for $targetDisplayName"
         }
     }
 
@@ -200,14 +233,16 @@ class SessionPopupActivity : Activity() {
     private fun submitAnswer(
         session: AgentSessionDetails,
         answerInput: EditText,
+        submitButton: Button,
+        cancelButton: Button,
     ) {
         val answer = answerInput.text.toString().trim()
         if (answer.isEmpty()) {
             answerInput.error = "Enter an answer"
             return
         }
-        val button = findViewById<Button>(R.id.session_popup_submit_button)
-        button.isEnabled = false
+        submitButton.isEnabled = false
+        cancelButton.isEnabled = false
         thread(name = "CodexSessionPopupAnswer-${session.sessionId}") {
             runCatching {
                 sessionController.answerQuestion(
@@ -223,7 +258,8 @@ class SessionPopupActivity : Activity() {
                 )
             }.onFailure { err ->
                 runOnUiThread {
-                    button.isEnabled = true
+                    submitButton.isEnabled = true
+                    cancelButton.isEnabled = true
                     Toast.makeText(
                         this,
                         "Failed to answer question: ${err.message}",
@@ -240,29 +276,146 @@ class SessionPopupActivity : Activity() {
 
     private fun dismissResultPopup(
         session: AgentSessionDetails,
-        button: Button,
+        okButton: Button,
+        sendButton: Button,
     ) {
         AgentQuestionNotifier.cancel(this, session.sessionId)
         if (isTopLevelHomeSession(session)) {
-            consumeHomeResultPresentation(session, button)
+            consumeHomeResultPresentation(
+                session = session,
+                okButton = okButton,
+                sendButton = sendButton,
+            )
             return
         }
         if (isTopLevelAgentSession(session)) {
-            cancelAgentSessionTree(session.sessionId, button)
+            cancelAgentSessionTree(
+                sessionId = session.sessionId,
+                okButton = okButton,
+                sendButton = sendButton,
+            )
             return
         }
         if (session.parentSessionId != null) {
-            cancelAgentSession(session.sessionId, button)
+            cancelAgentSession(
+                sessionId = session.sessionId,
+                okButton = okButton,
+                sendButton = sendButton,
+            )
             return
         }
         finish()
     }
 
+    private fun submitFollowUpPrompt(
+        session: AgentSessionDetails,
+        promptInput: EditText,
+        sendButton: Button,
+        okButton: Button,
+    ) {
+        val prompt = promptInput.text.toString().trim()
+        if (prompt.isEmpty()) {
+            promptInput.error = "Enter a follow-up prompt"
+            return
+        }
+        sendButton.isEnabled = false
+        okButton.isEnabled = false
+        thread(name = "CodexSessionPopupFollowUp-${session.sessionId}") {
+            runCatching {
+                startFollowUpPrompt(session, prompt)
+                AgentQuestionNotifier.cancel(this, session.sessionId)
+            }.onFailure { err ->
+                runOnUiThread {
+                    sendButton.isEnabled = true
+                    okButton.isEnabled = true
+                    Toast.makeText(
+                        this,
+                        "Failed to send follow-up: ${err.message}",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }.onSuccess {
+                runOnUiThread {
+                    finish()
+                }
+            }
+        }
+    }
+
+    private fun startFollowUpPrompt(
+        session: AgentSessionDetails,
+        prompt: String,
+    ) {
+        val snapshot = sessionController.loadSnapshot(session.sessionId)
+        val selectedSession = resolvePopupSession(snapshot, session.sessionId) ?: session
+        val topLevelSession = selectedSession.parentSessionId
+            ?.let { parentSessionId ->
+                snapshot.sessions.firstOrNull { candidate ->
+                    candidate.sessionId == parentSessionId
+                }
+            }
+            ?: selectedSession
+        if (topLevelSession.anchor == AgentSessionInfo.ANCHOR_HOME) {
+            startHomeFollowUp(
+                topLevelSession = topLevelSession,
+                prompt = SessionContinuationPromptBuilder.build(
+                    sourceTopLevelSession = topLevelSession,
+                    selectedSession = selectedSession,
+                    prompt = prompt,
+                ),
+            )
+            return
+        }
+        val childSession = if (selectedSession.parentSessionId == topLevelSession.sessionId) {
+            selectedSession
+        } else {
+            snapshot.sessions.lastOrNull { candidate ->
+                candidate.parentSessionId == topLevelSession.sessionId
+            } ?: selectedSession
+        }
+        AgentSessionLauncher.continueSessionInPlace(
+            sourceTopLevelSession = topLevelSession,
+            selectedSession = childSession,
+            prompt = SessionContinuationPromptBuilder.build(
+                sourceTopLevelSession = topLevelSession,
+                selectedSession = childSession,
+                prompt = prompt,
+            ),
+            sessionController = sessionController,
+        )
+    }
+
+    private fun startHomeFollowUp(
+        topLevelSession: AgentSessionDetails,
+        prompt: String,
+    ) {
+        val targetPackage = checkNotNull(topLevelSession.targetPackage) {
+            "No target package available for follow-up"
+        }
+        val executionSettings = sessionController.executionSettingsForSession(topLevelSession.sessionId)
+        AgentSessionLauncher.startSession(
+            context = this,
+            request = LaunchSessionRequest(
+                prompt = prompt,
+                targetPackage = targetPackage,
+                model = executionSettings.model,
+                reasoningEffort = executionSettings.reasoningEffort,
+            ),
+            sessionController = sessionController,
+        )
+        sessionController.consumeHomeSessionPresentation(topLevelSession.sessionId)
+        if (topLevelSession.targetDetached) {
+            sessionController.closeDetachedTarget(topLevelSession.sessionId)
+        }
+    }
+
     private fun consumeHomeResultPresentation(
         session: AgentSessionDetails,
-        button: Button,
+        okButton: Button,
+        sendButton: Button,
     ) {
-        button.isEnabled = false
+        okButton.isEnabled = false
+        sendButton.isEnabled = false
         thread(name = "CodexSessionPopupConsume-${session.sessionId}") {
             runCatching {
                 sessionController.consumeHomeSessionPresentation(session.sessionId)
@@ -271,7 +424,8 @@ class SessionPopupActivity : Activity() {
                 }
             }.onFailure { err ->
                 runOnUiThread {
-                    button.isEnabled = true
+                    okButton.isEnabled = true
+                    sendButton.isEnabled = true
                     Toast.makeText(
                         this,
                         "Failed to clear result badge: ${err.message}",
@@ -288,15 +442,18 @@ class SessionPopupActivity : Activity() {
 
     private fun cancelAgentSessionTree(
         sessionId: String,
-        button: Button,
+        okButton: Button,
+        sendButton: Button,
     ) {
-        button.isEnabled = false
+        okButton.isEnabled = false
+        sendButton.isEnabled = false
         thread(name = "CodexSessionPopupCancelTree-$sessionId") {
             runCatching {
                 sessionController.cancelSessionTree(sessionId)
             }.onFailure { err ->
                 runOnUiThread {
-                    button.isEnabled = true
+                    okButton.isEnabled = true
+                    sendButton.isEnabled = true
                     Toast.makeText(
                         this,
                         "Failed to clear session state: ${err.message}",
@@ -313,15 +470,18 @@ class SessionPopupActivity : Activity() {
 
     private fun cancelAgentSession(
         sessionId: String,
-        button: Button,
+        okButton: Button,
+        sendButton: Button,
     ) {
-        button.isEnabled = false
+        okButton.isEnabled = false
+        sendButton.isEnabled = false
         thread(name = "CodexSessionPopupCancel-$sessionId") {
             runCatching {
                 sessionController.cancelSession(sessionId)
             }.onFailure { err ->
                 runOnUiThread {
-                    button.isEnabled = true
+                    okButton.isEnabled = true
+                    sendButton.isEnabled = true
                     Toast.makeText(
                         this,
                         "Failed to clear session state: ${err.message}",
@@ -355,5 +515,32 @@ class SessionPopupActivity : Activity() {
                 .putExtra(SessionDetailActivity.EXTRA_SESSION_ID, sessionId),
         )
         finish()
+    }
+
+    private fun bindPopupHeader(
+        session: AgentSessionDetails,
+        title: String,
+        body: String,
+    ) {
+        findViewById<ImageView>(R.id.session_popup_icon)
+            .setImageDrawable(targetIcon(session))
+        findViewById<TextView>(R.id.session_popup_title).text = title
+        findViewById<TextView>(R.id.session_popup_body_text).text = body
+    }
+
+    private fun targetIcon(session: AgentSessionDetails): Drawable? {
+        val targetPackage = session.targetPackage?.trim()?.ifEmpty { null }
+            ?: return getDrawable(android.R.drawable.ic_dialog_info)
+        return runCatching {
+            InstalledAppCatalog.resolveInstalledApp(this, sessionController, targetPackage).icon
+        }.getOrNull() ?: getDrawable(android.R.drawable.ic_dialog_info)
+    }
+
+    private fun targetDisplayName(session: AgentSessionDetails): String {
+        val targetPackage = session.targetPackage?.trim()?.ifEmpty { null }
+            ?: return "Codex Agent"
+        return runCatching {
+            InstalledAppCatalog.resolveInstalledApp(this, sessionController, targetPackage).label
+        }.getOrDefault(targetPackage)
     }
 }
