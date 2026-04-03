@@ -686,6 +686,23 @@ fn mcp_tool_approval_prompt_options(
     }
 }
 
+/// Determines whether an MCP tool call requires user approval and, if so,
+/// obtains a decision via the appropriate channel (interactive prompt, guardian,
+/// or ARC safety monitor).
+///
+/// Returns `None` when the call may proceed without any approval gate, or
+/// `Some(decision)` when an approval path was triggered. The caller must
+/// inspect the decision variant to decide whether to execute or skip the tool.
+///
+/// The function's early-exit order matters:
+/// 1. Full-access mode → skip everything.
+/// 2. Custom MCP in `Auto` mode without annotations → skip (user opted in by
+///    configuring the server; see `should_skip_default_custom_mcp_approval`).
+/// 3. Annotation-based check → skip if annotations say the tool is safe and
+///    the mode is not `Prompt`.
+/// 4. ARC safety monitor (for `Approve` mode) → may block or escalate.
+/// 5. Non-interactive guard → `Decline` rather than hang.
+/// 6. Guardian / interactive prompt → obtain a user or guardian decision.
 async fn maybe_request_mcp_tool_approval(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -732,6 +749,11 @@ async fn maybe_request_mcp_tool_approval(
         }
     }
 
+    // In runs with `--ask-for-approval never` (for example `codex exec`), no
+    // user is available to answer the approval prompt. Decline rather than
+    // hanging forever. This check is intentionally placed *after* the ARC
+    // safety-monitor block so that `Approve`-mode tools are still
+    // safety-checked even when running non-interactively.
     if matches!(turn_context.approval_policy.value(), AskForApproval::Never) {
         return Some(McpToolApprovalDecision::Decline);
     }
@@ -859,6 +881,19 @@ async fn maybe_request_mcp_tool_approval(
     Some(decision)
 }
 
+/// Returns `true` when a custom (non-Codex-Apps) MCP tool call should bypass the
+/// default annotation-driven approval path entirely.
+///
+/// Codex Apps tools always carry `ToolAnnotations`, so the annotation-based logic in
+/// `requires_mcp_tool_approval` is authoritative for them. Custom MCP servers, however,
+/// may not provide annotations at all. When a custom tool is in the default `Auto`
+/// approval mode and no annotations are present, the user has already opted in by
+/// configuring the server — prompting them again would be a regression from the
+/// expected behavior (see #15824).
+///
+/// This gate intentionally does **not** fire for `Prompt` or `Approve` modes: those
+/// represent an explicit per-tool override that should always take effect regardless
+/// of annotation presence.
 fn should_skip_default_custom_mcp_approval(
     invocation: &McpInvocation,
     approval_mode: AppToolApproval,
