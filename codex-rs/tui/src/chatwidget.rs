@@ -255,10 +255,20 @@ const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and P
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 
+/// The outcome of resolving a [`ModelSelectionTarget`] against the current
+/// widget state.
+///
+/// This sits between the user-facing target (which mode they *want* to
+/// change) and the event dispatch (which `AppEvent`s to send). The
+/// `PromptPlanScope` variant triggers the existing "apply to plan only vs.
+/// all modes" confirmation dialog before committing the selection.
 #[derive(Clone, Copy)]
 enum ModelSelectionResolution {
+    /// Persist as the Default-mode model and reasoning effort.
     UpdateDefault,
+    /// Persist as the Plan-mode model override and reasoning effort.
     UpdatePlan,
+    /// Show the Plan-mode scope prompt before persisting.
     PromptPlanScope,
 }
 
@@ -5495,6 +5505,11 @@ impl ChatWidget {
         }
     }
 
+    /// Drain the composer's pending submission state after a slash command
+    /// with inline args has been accepted and the popup opened.
+    ///
+    /// Without this, the composer would still hold the `/model plan` text and
+    /// treat the next Enter as a duplicate submission.
     fn consume_accepted_inline_args_command(&mut self) {
         let Some((_prepared_args, _prepared_elements)) = self
             .bottom_pane
@@ -7707,6 +7722,10 @@ impl ChatWidget {
         self.open_model_popup_for_target(ModelSelectionTarget::Active);
     }
 
+    /// Open the model picker popup scoped to a specific selection target.
+    ///
+    /// The target determines which mode's current model is highlighted and
+    /// which persistence path is used when the user confirms a selection.
     pub(crate) fn open_model_popup_for_target(&mut self, target: ModelSelectionTarget) {
         if !self.is_session_configured() {
             self.add_info_message(
@@ -7968,6 +7987,8 @@ impl ChatWidget {
         Box::new(header)
     }
 
+    /// Append a mode-scope suffix to the popup title when the selection targets
+    /// a specific mode (e.g. "Select Model for Plan Mode").
     fn model_menu_title(&self, target: ModelSelectionTarget, base_title: &str) -> String {
         match target {
             ModelSelectionTarget::Active => base_title.to_string(),
@@ -7976,6 +7997,7 @@ impl ChatWidget {
         }
     }
 
+    /// Append a mode-scope clarification to the popup subtitle.
     fn model_menu_subtitle(&self, target: ModelSelectionTarget, base_subtitle: &str) -> String {
         match target {
             ModelSelectionTarget::Active => base_subtitle.to_string(),
@@ -8217,6 +8239,12 @@ impl ChatWidget {
         });
     }
 
+    /// Build the closure(s) that fire when the user confirms a model selection.
+    ///
+    /// The returned actions send the appropriate `AppEvent` sequence for the
+    /// given [`ModelSelectionResolution`]. This is a pure factory — it captures
+    /// the resolution at popup-creation time so the popup callback doesn't need
+    /// access to widget state.
     fn model_selection_actions(
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
@@ -8248,6 +8276,13 @@ impl ChatWidget {
         })]
     }
 
+    /// Decide how a model selection should be applied given the target and the
+    /// current widget state.
+    ///
+    /// For explicit `Default`/`Plan` targets the mapping is trivial. For
+    /// `Active`, the function consults `should_prompt_plan_mode_reasoning_scope`
+    /// (which checks whether the effort differs from the Plan preset default)
+    /// and falls back to whichever mode is currently active.
     fn model_selection_resolution(
         &self,
         target: ModelSelectionTarget,
@@ -8549,6 +8584,12 @@ impl ChatWidget {
         }
     }
 
+    /// Dispatch the appropriate update + persist events for a confirmed model
+    /// selection.
+    ///
+    /// This is the non-closure counterpart of [`model_selection_actions`] —
+    /// used when the widget can send events directly (e.g. single-effort
+    /// models that skip the reasoning popup).
     fn apply_model_selection(
         &self,
         target: ModelSelectionTarget,
@@ -9677,6 +9718,16 @@ impl ChatWidget {
         self.model_for_selection_target(ModelSelectionTarget::Active)
     }
 
+    /// Resolve the "current" model for the given selection target.
+    ///
+    /// For Plan mode the precedence is:
+    /// 1. `config.plan_mode_model` (explicit user override),
+    /// 2. the active collaboration mask's model (only when the mask is
+    ///    currently Plan — ignored if the user targeted Plan from Default
+    ///    mode, since the mask belongs to Default in that case),
+    /// 3. the global default model.
+    ///
+    /// For all other modes the global default model is used directly.
     fn model_for_selection_target(&self, target: ModelSelectionTarget) -> &str {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.model();
@@ -9687,6 +9738,9 @@ impl ChatWidget {
                 .plan_mode_model
                 .as_deref()
                 .or_else(|| {
+                    // Only consult the active mask when it *is* Plan mode.
+                    // If the target is Plan but the active mask is Default,
+                    // the mask's model belongs to Default, not Plan.
                     self.active_collaboration_mask
                         .as_ref()
                         .filter(|mask| mask.mode == Some(ModeKind::Plan))
@@ -9830,6 +9884,11 @@ impl ChatWidget {
         }
     }
 
+    /// Resolve the Plan-mode reasoning effort that the picker should treat as
+    /// "current."
+    ///
+    /// Precedence: active Plan mask effort > `config.plan_mode_reasoning_effort`
+    /// > catalog Plan preset default.
     fn plan_mode_reasoning_effort_for_picker(&self) -> Option<ReasoningEffortConfig> {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.reasoning_effort();

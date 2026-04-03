@@ -70,6 +70,12 @@ pub(crate) enum WindowsSandboxEnableMode {
     Legacy,
 }
 
+/// Where a model selection from the picker should be applied.
+///
+/// The TUI model picker can target a specific collaboration mode without
+/// requiring the user to switch into that mode first. `Active` preserves the
+/// legacy behavior (mutate whatever is current); `Default` and `Plan` allow
+/// cross-mode selection, e.g. `/model plan` while in Default mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModelSelectionTarget {
     /// Apply a model selection to whichever collaboration mode is active now.
@@ -81,6 +87,9 @@ pub(crate) enum ModelSelectionTarget {
 }
 
 impl ModelSelectionTarget {
+    /// Resolve the abstract target into a concrete [`ModeKind`] given the
+    /// currently active mode. `Active` is the only variant that depends on
+    /// runtime state; the others are constant.
     pub(crate) fn mode_kind(self, active_mode: ModeKind) -> ModeKind {
         match self {
             Self::Active => active_mode,
