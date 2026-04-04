@@ -169,10 +169,6 @@ jobs:
           restore-keys: |
             sccache-${{ runner.os }}-${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}-remote-tests-${{ steps.lockhash.outputs.hash }}-
             sccache-${{ runner.os }}-${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}-remote-tests-
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
-        with:
-          tool: nextest
-          version: 0.9.103
       - name: Enable unprivileged user namespaces
         run: |
           sudo sysctl -w kernel.unprivileged_userns_clone=1
@@ -186,12 +182,23 @@ jobs:
           export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME=codex-remote-test-env
           source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
           echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
+      - name: Build remote exec-server binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p codex-exec-server --bin codex-exec-server --target ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}
+          binary_path="${GITHUB_WORKSPACE}/codex-rs/target/${{ env.CODEX_TEST_REMOTE_ENV_TARGET }}/debug/codex-exec-server"
+          echo "CARGO_BIN_EXE_codex_exec_server=${binary_path}" >> "$GITHUB_ENV"
       - name: Remote tests
         id: remote_tests
-        run: cargo nextest run -p codex-core --no-fail-fast --target ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }} --cargo-profile ci-test --timings
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p codex-core --target ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }} --lib unified_exec::tests::unified_exec_uses_remote_exec_server_when_configured -- --exact
+          cargo test -p codex-core --target ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }} --lib unified_exec::tests::remote_exec_server_rejects_inherited_fd_launches -- --exact
+          cargo test -p codex-core --target ${{ env.CODEX_TEST_REMOTE_ENV_TARGET }} --test all suite::remote_env::remote_test_env_can_connect_and_use_filesystem -- --exact
         env:
           RUST_BACKTRACE: 1
-          NEXTEST_STATUS_LEVEL: leak
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
         continue-on-error: true
