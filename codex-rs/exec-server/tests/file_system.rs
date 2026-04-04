@@ -5,7 +5,6 @@ mod common;
 use std::os::unix::fs::symlink;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -21,11 +20,12 @@ use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use test_case::test_case;
+use tokio::sync::Mutex;
 
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
 
-static SANDBOX_HELPER_ENV_LOCK: Mutex<()> = Mutex::new(());
+static SANDBOX_HELPER_ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 struct SandboxHelperEnvGuard {
     previous_exec_server_self_exe: Option<std::ffi::OsString>,
@@ -35,12 +35,14 @@ struct SandboxHelperEnvGuard {
 impl SandboxHelperEnvGuard {
     fn install() -> Result<Self> {
         let exec_server_binary = cargo_bin("codex-exec-server")?;
-        let linux_sandbox_binary = cargo_bin("codex-linux-sandbox")?;
+        let linux_sandbox_binary = cargo_bin("codex-linux-sandbox").ok();
         let previous_exec_server_self_exe = std::env::var_os("CODEX_EXEC_SERVER_SELF_EXE");
         let previous_linux_sandbox_exe = std::env::var_os("CODEX_LINUX_SANDBOX_EXE");
         unsafe {
             std::env::set_var("CODEX_EXEC_SERVER_SELF_EXE", &exec_server_binary);
-            std::env::set_var("CODEX_LINUX_SANDBOX_EXE", &linux_sandbox_binary);
+            if let Some(linux_sandbox_binary) = linux_sandbox_binary.as_ref() {
+                std::env::set_var("CODEX_LINUX_SANDBOX_EXE", linux_sandbox_binary);
+            }
         }
         Ok(Self {
             previous_exec_server_self_exe,
@@ -416,9 +418,7 @@ async fn file_system_copy_rejects_standalone_fifo_source(use_remote: bool) -> Re
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_system_methods_support_sandbox_policy_helper(use_remote: bool) -> Result<()> {
-    let _lock = SANDBOX_HELPER_ENV_LOCK
-        .lock()
-        .expect("lock sandbox helper env");
+    let _lock = SANDBOX_HELPER_ENV_LOCK.lock().await;
     let _env_guard = SandboxHelperEnvGuard::install()?;
 
     let context = create_file_system_context(use_remote).await?;

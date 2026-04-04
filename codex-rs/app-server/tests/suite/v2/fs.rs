@@ -20,8 +20,8 @@ use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 use tokio::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -33,7 +33,7 @@ use std::os::unix::fs::symlink;
 use std::process::Command;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
-static EXEC_SERVER_SELF_EXE_ENV_LOCK: Mutex<()> = Mutex::new(());
+static EXEC_SERVER_SELF_EXE_ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 struct SandboxHelperEnvGuard {
     previous_exec_server_self_exe: Option<std::ffi::OsString>,
@@ -43,12 +43,14 @@ struct SandboxHelperEnvGuard {
 impl SandboxHelperEnvGuard {
     fn install() -> Result<Self> {
         let exec_server_binary = cargo_bin("codex-exec-server")?;
-        let linux_sandbox_binary = cargo_bin("codex-linux-sandbox")?;
+        let linux_sandbox_binary = cargo_bin("codex-linux-sandbox").ok();
         let previous_exec_server_self_exe = std::env::var_os("CODEX_EXEC_SERVER_SELF_EXE");
         let previous_linux_sandbox_exe = std::env::var_os("CODEX_LINUX_SANDBOX_EXE");
         unsafe {
             std::env::set_var("CODEX_EXEC_SERVER_SELF_EXE", &exec_server_binary);
-            std::env::set_var("CODEX_LINUX_SANDBOX_EXE", &linux_sandbox_binary);
+            if let Some(linux_sandbox_binary) = linux_sandbox_binary.as_ref() {
+                std::env::set_var("CODEX_LINUX_SANDBOX_EXE", linux_sandbox_binary);
+            }
         }
         Ok(Self {
             previous_exec_server_self_exe,
@@ -370,9 +372,7 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_methods_support_sandbox_policy() -> Result<()> {
-    let _lock = EXEC_SERVER_SELF_EXE_ENV_LOCK
-        .lock()
-        .expect("lock exec-server path env");
+    let _lock = EXEC_SERVER_SELF_EXE_ENV_LOCK.lock().await;
     let _env_guard = SandboxHelperEnvGuard::install()?;
 
     let codex_home = TempDir::new()?;
@@ -380,7 +380,7 @@ async fn fs_methods_support_sandbox_policy() -> Result<()> {
     let copied_path = codex_home.path().join("sandboxed-copy.txt");
     let policy = unrestricted_sandbox_policy();
 
-    let result = async {
+    async {
         let mut mcp = initialized_mcp(&codex_home).await?;
         let write_request_id = mcp
             .send_fs_write_file_request(FsWriteFileParams {
@@ -435,9 +435,7 @@ async fn fs_methods_support_sandbox_policy() -> Result<()> {
 
         Ok::<(), anyhow::Error>(())
     }
-    .await;
-
-    result
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
