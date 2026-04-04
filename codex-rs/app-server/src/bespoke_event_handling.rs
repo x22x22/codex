@@ -1800,7 +1800,14 @@ pub(crate) async fn apply_bespoke_event_handling(
             thread_watch_manager
                 .note_turn_interrupted(&conversation_id.to_string())
                 .await;
-            handle_turn_interrupted(conversation_id, event_turn_id, &outgoing, &thread_state).await;
+            handle_turn_interrupted(
+                conversation_id,
+                event_turn_id,
+                Some(&analytics_events_client),
+                &outgoing,
+                &thread_state,
+            )
+            .await;
         }
         EventMsg::ThreadRolledBack(_rollback_event) => {
             let pending = {
@@ -2158,6 +2165,7 @@ async fn handle_turn_complete(
 async fn handle_turn_interrupted(
     conversation_id: ThreadId,
     event_turn_id: String,
+    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
@@ -2169,7 +2177,7 @@ async fn handle_turn_interrupted(
         TurnStatus::Interrupted,
         /*error*/ None,
         turn_summary.started_at_ms,
-        /*analytics_events_client*/ None,
+        analytics_events_client,
         outgoing,
     )
     .await;
@@ -3392,6 +3400,7 @@ mod tests {
         handle_turn_interrupted(
             conversation_id,
             event_turn_id.clone(),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
