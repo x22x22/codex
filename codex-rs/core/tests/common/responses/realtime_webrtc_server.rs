@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use audiopus::Channels;
-use audiopus::coder::Decoder as OpusDecoder;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use opus::Channels;
+use opus::Decoder as OpusDecoder;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -202,9 +202,10 @@ async fn start_session(
     let (tx_request, rx_request) = mpsc::unbounded_channel::<Value>();
     let (tx_data_channel, rx_data_channel) = oneshot::channel::<Arc<RTCDataChannel>>();
     let tx_data_channel = Mutex::new(Some(tx_data_channel));
+    let tx_data_channel_request = tx_request.clone();
 
     peer_connection.on_data_channel(Box::new(move |data_channel| {
-        let tx_request = tx_request.clone();
+        let tx_request = tx_data_channel_request.clone();
         if let Ok(mut tx_data_channel) = tx_data_channel.lock()
             && let Some(tx_data_channel) = tx_data_channel.take()
         {
