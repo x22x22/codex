@@ -298,11 +298,17 @@ pub async fn wait_for_event_with_timeout<F>(
 where
     F: FnMut(&codex_protocol::protocol::EventMsg) -> bool,
 {
-    use tokio::time::Duration;
     use tokio::time::timeout;
+    let min_wait_time = if cfg!(windows) {
+        tokio::time::Duration::from_secs(30)
+    } else {
+        tokio::time::Duration::from_secs(10)
+    };
     loop {
-        // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
-        let ev = timeout(wait_time.max(Duration::from_secs(10)), codex.next_event())
+        // Allow a bit more time to accommodate async startup work (e.g. config IO, tool
+        // discovery), and give Windows Bazel tests enough headroom for shell startup under local
+        // execution.
+        let ev = timeout(wait_time.max(min_wait_time), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
