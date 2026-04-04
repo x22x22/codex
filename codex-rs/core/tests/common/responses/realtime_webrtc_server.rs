@@ -49,7 +49,6 @@ pub(super) async fn serve_connection(
     requests: Arc<Mutex<Vec<Vec<WebSocketRequest>>>>,
     handshakes: Arc<Mutex<Vec<WebSocketHandshake>>>,
     request_log_updated: Arc<Notify>,
-    start: std::time::Instant,
 ) {
     let Some(request) = read_http_request(&mut stream).await else {
         return;
@@ -73,7 +72,6 @@ pub(super) async fn serve_connection(
         connection_index,
         requests,
         request_log_updated,
-        start,
     )
     .await
     else {
@@ -196,7 +194,6 @@ async fn start_session(
     connection_index: usize,
     requests: Arc<Mutex<Vec<Vec<WebSocketRequest>>>>,
     request_log_updated: Arc<Notify>,
-    start: std::time::Instant,
 ) -> Option<RealtimeSession> {
     let peer_connection = create_peer_connection().await?;
     let (tx_request, rx_request) = mpsc::unbounded_channel::<Value>();
@@ -239,11 +236,6 @@ async fn start_session(
     let _ = gather_complete.recv().await;
     let answer_sdp = peer_connection.local_description().await?.sdp;
 
-    let data_channel = timeout(REALTIME_DATA_CHANNEL_TIMEOUT, rx_data_channel)
-        .await
-        .ok()?
-        .ok()?;
-
     let (done_tx, done_rx) = oneshot::channel();
     tokio::spawn(async move {
         serve_scripted_requests(
@@ -252,8 +244,7 @@ async fn start_session(
             requests,
             request_log_updated,
             rx_request,
-            data_channel,
-            start,
+            rx_data_channel,
         )
         .await;
         let _ = done_tx.send(());
@@ -335,34 +326,18 @@ async fn serve_scripted_requests(
     requests: Arc<Mutex<Vec<Vec<WebSocketRequest>>>>,
     request_log_updated: Arc<Notify>,
     mut rx_request: mpsc::UnboundedReceiver<Value>,
-    data_channel: Arc<RTCDataChannel>,
-    start: std::time::Instant,
+    rx_data_channel: oneshot::Receiver<Arc<RTCDataChannel>>,
 ) {
+    let Ok(Ok(data_channel)) = timeout(REALTIME_DATA_CHANNEL_TIMEOUT, rx_data_channel).await else {
+        return;
+    };
+
     let mut scripted_requests = VecDeque::from(connection.requests);
     while let Some(request_events) = scripted_requests.pop_front() {
         let Some(body) = rx_request.recv().await else {
             break;
         };
-        log_request(
-            connection_index,
-            body,
-            &requests,
-            &request_log_updated,
-            start,
-        );
-        eprintln!(
-            "[ws test server +{}ms] connection={} sending batch_size={} event_types={:?} audio_data={:?}",
-            start.elapsed().as_millis(),
-            connection_index,
-            request_events.len(),
-            request_events
-                .iter()
-                .map(|event| event.get("type").and_then(Value::as_str))
-                .collect::<Vec<_>>(),
-            request_events
-                .iter()
-                .find_map(|event| event.get("delta").and_then(Value::as_str)),
-        );
+        log_request(connection_index, body, &requests, &request_log_updated);
         for event in &request_events {
             let Ok(payload) = serde_json::to_string(event) else {
                 continue;
@@ -383,7 +358,6 @@ fn log_request(
     body: Value,
     requests: &Arc<Mutex<Vec<Vec<WebSocketRequest>>>>,
     request_log_updated: &Arc<Notify>,
-    start: std::time::Instant,
 ) {
     let mut log = requests.lock().unwrap();
     if log.len() <= connection_index {
@@ -391,33 +365,6 @@ fn log_request(
     }
     if let Some(connection_log) = log.get_mut(connection_index) {
         connection_log.push(WebSocketRequest { body });
-        let request_index = connection_log.len() - 1;
-        let request_body = connection_log[request_index].body_json();
-        eprintln!(
-            "[ws test server +{}ms] connection={} received request={} type={:?} role={:?} text={:?} data={:?}",
-            start.elapsed().as_millis(),
-            connection_index,
-            request_index,
-            request_body.get("type").and_then(Value::as_str),
-            request_body
-                .get("item")
-                .and_then(|item| item.get("role"))
-                .and_then(Value::as_str),
-            request_body
-                .get("item")
-                .and_then(|item| item.get("content"))
-                .and_then(Value::as_array)
-                .and_then(|content| content.first())
-                .and_then(|content| content.get("text"))
-                .and_then(Value::as_str),
-            request_body
-                .get("item")
-                .and_then(|item| item.get("content"))
-                .and_then(Value::as_array)
-                .and_then(|content| content.first())
-                .and_then(|content| content.get("data"))
-                .and_then(Value::as_str),
-        );
     }
     drop(log);
     request_log_updated.notify_waiters();

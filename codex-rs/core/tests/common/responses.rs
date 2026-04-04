@@ -1253,7 +1253,6 @@ pub async fn start_websocket_server_with_headers(
                     Arc::clone(&requests),
                     Arc::clone(&handshakes),
                     Arc::clone(&request_log),
-                    start,
                 )
                 .await;
 
