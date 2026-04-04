@@ -7374,6 +7374,8 @@ async fn try_run_sampling_request(
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
+    // Some streams send output text deltas before the assistant message item is announced.
+    // Hold those early bytes so we can replay them once `output_item.added` arrives.
     let mut pending_output_text_delta = String::new();
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let receiving_span = trace_span!("receiving_stream");
@@ -7472,6 +7474,9 @@ async fn try_run_sampling_request(
                     .instrument(handle_responses)
                     .await?;
                 if !pending_output_text_delta.is_empty() {
+                    // If an item completed while this buffer is still non-empty, those bytes could
+                    // not be matched to an assistant item. Clear them so they don't leak into the
+                    // next item.
                     warn!(
                         buffered_len = pending_output_text_delta.len(),
                         "dropping buffered output text deltas after item completion"
@@ -7528,6 +7533,9 @@ async fn try_run_sampling_request(
                         if !pending_output_text_delta.is_empty() {
                             let mut pending_delta = std::mem::take(&mut pending_output_text_delta);
                             if let Some(raw_text) = raw_output_text.as_deref() {
+                                // The item payload may already contain all or part of the text we
+                                // buffered from pre-item deltas. Trim the overlap so replayed
+                                // deltas don't duplicate visible output.
                                 if pending_delta.starts_with(raw_text) {
                                     pending_delta.drain(..raw_text.len());
                                 } else if raw_text.starts_with(&pending_delta) {
@@ -7643,6 +7651,8 @@ async fn try_run_sampling_request(
                             .await;
                     }
                 } else {
+                    // This event should normally follow `output_item.added`, but tolerate the
+                    // reversed ordering by buffering text until the item metadata arrives.
                     if pending_output_text_delta.is_empty() {
                         warn!("buffering OutputTextDelta without active item");
                     }
@@ -7664,6 +7674,8 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
+                    // Without an active reasoning item there is nowhere safe to attach this delta.
+                    // Drop the orphan event and rely on the eventual completed item snapshot.
                     warn!(
                         summary_index,
                         "dropping ReasoningSummaryDelta without active item"
@@ -7679,6 +7691,8 @@ async fn try_run_sampling_request(
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
+                    // Keep section-break handling consistent with summary deltas: a break without
+                    // an active reasoning item is orphaned stream state, not a fatal parser error.
                     warn!(
                         summary_index,
                         "dropping ReasoningSummaryPartAdded without active item"
@@ -7700,6 +7714,8 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
                         .await;
                 } else {
+                    // Raw reasoning deltas can also arrive before their item in malformed or
+                    // reordered streams. Preserve liveness by dropping the orphan event.
                     warn!(
                         content_index,
                         "dropping ReasoningRawContentDelta without active item"
