@@ -6016,9 +6016,12 @@ impl ChatWidget {
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                let mut completed_reasoning = summary.join("");
+                let mut completed_reasoning = summary.join("\n\n");
                 if self.config.show_raw_agent_reasoning {
-                    completed_reasoning.push_str(&content.join(""));
+                    if !completed_reasoning.is_empty() && !content.is_empty() {
+                        completed_reasoning.push_str("\n\n");
+                    }
+                    completed_reasoning.push_str(&content.join("\n\n"));
                 }
                 let streamed_reasoning =
                     format!("{}{}", self.full_reasoning_buffer, self.reasoning_buffer);
