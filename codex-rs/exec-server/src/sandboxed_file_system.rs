@@ -33,6 +33,7 @@ use crate::RemoveOptions;
 use crate::local_file_system::LocalFileSystem;
 
 const INTERNAL_FS_OP_FLAG: &str = "--internal-fs-op";
+const HELPER_WINDOWS_SANDBOX_LEVEL: WindowsSandboxLevel = WindowsSandboxLevel::RestrictedToken;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -408,7 +409,7 @@ fn prepare_helper_request(
         &effective_file_system_policy,
         network_policy,
         codex_sandboxing::SandboxablePreference::Auto,
-        WindowsSandboxLevel::Disabled,
+        HELPER_WINDOWS_SANDBOX_LEVEL,
         /*has_managed_network_requirements*/ false,
     );
     let command = SandboxCommand {
@@ -430,7 +431,7 @@ fn prepare_helper_request(
             sandbox_policy_cwd: helper_cwd.as_path(),
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock: false,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_level: HELPER_WINDOWS_SANDBOX_LEVEL,
             windows_sandbox_private_desktop: false,
         })
         .map_err(io::Error::other)
@@ -517,7 +518,9 @@ fn linux_sandbox_executable_path(helper_exe: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::HELPER_WINDOWS_SANDBOX_LEVEL;
     use super::helper_legacy_policy;
+    use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -550,6 +553,14 @@ mod tests {
             SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Enabled,
             }
+        );
+    }
+
+    #[test]
+    fn helper_sandbox_requests_use_restricted_windows_sandbox_level() {
+        assert_eq!(
+            HELPER_WINDOWS_SANDBOX_LEVEL,
+            WindowsSandboxLevel::RestrictedToken
         );
     }
 }
