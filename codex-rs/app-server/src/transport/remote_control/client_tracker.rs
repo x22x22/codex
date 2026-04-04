@@ -82,12 +82,6 @@ impl ClientTracker {
         while self.join_set.join_next().await.is_some() {}
     }
 
-    pub(crate) fn client_has_open_stream(&self, client_id: &ClientId) -> bool {
-        self.clients
-            .keys()
-            .any(|(open_client_id, _)| open_client_id == client_id)
-    }
-
     pub(crate) async fn handle_message(
         &mut self,
         client_envelope: ClientEnvelope,

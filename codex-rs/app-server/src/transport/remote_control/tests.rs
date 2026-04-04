@@ -410,7 +410,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
 }
 
 #[tokio::test]
-async fn remote_control_transport_clears_outgoing_buffer_when_client_closes() {
+async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -508,6 +508,18 @@ async fn remote_control_transport_clears_outgoing_buffer_when_client_closes() {
             }
         })
     );
+
+    send_client_event(
+        &mut first_websocket,
+        ClientEnvelope {
+            event: ClientEvent::Ack,
+            client_id: client_id.clone(),
+            stream_id: None,
+            seq_id: Some(0),
+            cursor: None,
+        },
+    )
+    .await;
 
     send_client_event(
         &mut first_websocket,

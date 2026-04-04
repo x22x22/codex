@@ -79,12 +79,6 @@ impl BoundedOutboundBuffer {
         self.used_tx.send_modify(|used| *used += 1);
     }
 
-    fn remove(&mut self, client_id: &ClientId) {
-        if let Some(buffer) = self.buffer_by_client.remove(client_id) {
-            self.used_tx.send_modify(|used| *used -= buffer.len());
-        }
-    }
-
     fn ack(&mut self, client_id: &ClientId, acked_seq_id: u64) {
         let Some(buffer) = self.buffer_by_client.get_mut(client_id) else {
             return;
@@ -432,27 +426,11 @@ impl RemoteControlWebsocket {
                     if client_tracker.close_client(&client_key).await.is_err() {
                         return Ok(());
                     }
-                    if !client_tracker.client_has_open_stream(&client_key.0) {
-                        state
-                            .lock()
-                            .await
-                            .outbound_buffer
-                            .remove(&client_key.0);
-                    }
                     continue;
                 }
                 _ = idle_sweep_interval.tick() => {
-                    let expired_client_keys = match client_tracker.close_expired_clients().await {
-                        Ok(expired_client_keys) => expired_client_keys,
-                        Err(_) => return Ok(()),
-                    };
-                    if !expired_client_keys.is_empty() {
-                        let mut state = state.lock().await;
-                        for (client_id, _) in expired_client_keys {
-                            if !client_tracker.client_has_open_stream(&client_id) {
-                                state.outbound_buffer.remove(&client_id);
-                            }
-                        }
+                    if client_tracker.close_expired_clients().await.is_err() {
+                        return Ok(());
                     }
                     continue;
                 }
@@ -509,15 +487,8 @@ impl RemoteControlWebsocket {
                     .outbound_buffer
                     .ack(&client_envelope.client_id, acked_seq_id);
             }
-            if remote_control_message_starts_connection(&client_envelope.event) {
-                websocket_state
-                    .outbound_buffer
-                    .remove(&client_envelope.client_id);
-            }
             drop(websocket_state);
 
-            let is_client_closed = matches!(&client_envelope.event, ClientEvent::ClientClosed);
-            let client_id = client_envelope.client_id.clone();
             if client_tracker
                 .handle_message(client_envelope)
                 .await
@@ -525,22 +496,8 @@ impl RemoteControlWebsocket {
             {
                 return Ok(());
             }
-            if is_client_closed && !client_tracker.client_has_open_stream(&client_id) {
-                state.lock().await.outbound_buffer.remove(&client_id);
-            }
         }
     }
-}
-
-fn remote_control_message_starts_connection(event: &ClientEvent) -> bool {
-    matches!(
-        event,
-        ClientEvent::ClientMessage {
-            message: codex_app_server_protocol::JSONRPCMessage::Request(
-                codex_app_server_protocol::JSONRPCRequest { method, .. }
-            ),
-        } if method == "initialize"
-    )
 }
 
 fn set_remote_control_header(
@@ -1242,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn outbound_buffer_remove_drops_all_streams_for_client_id() {
+    fn outbound_buffer_retains_unacked_messages_until_ack_advances() {
         let (mut outbound_buffer, used_rx) = BoundedOutboundBuffer::new();
         let client_1 = ClientId("client-1".to_string());
         let client_2 = ClientId("client-2".to_string());
@@ -1263,7 +1220,7 @@ mod tests {
             &client_2, "stream-1", /*seq_id*/ 2, "second",
         ));
 
-        outbound_buffer.remove(&client_1);
+        outbound_buffer.ack(&client_1, /*acked_seq_id*/ 0);
 
         let retained = outbound_buffer
             .server_envelopes()
@@ -1275,8 +1232,11 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(retained, vec![("client-2", "stream-1", 2)]);
-        assert_eq!(*used_rx.borrow(), 1);
+        assert_eq!(
+            retained,
+            vec![("client-1", "stream-2", 1), ("client-2", "stream-1", 2)]
+        );
+        assert_eq!(*used_rx.borrow(), 2);
     }
 
     fn server_envelope(
