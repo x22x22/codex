@@ -1141,7 +1141,7 @@ async fn orphan_reasoning_summary_events_do_not_break_completed_reasoning_item()
 
     let stream = sse(vec![
         ev_response_created("resp-1"),
-        ev_reasoning_summary_part_added(0),
+        ev_reasoning_summary_part_added(/*summary_index*/ 0),
         ev_reasoning_summary_text_delta("Summary only"),
         ev_reasoning_item("reasoning-1", &["Summary only"], &[]),
         ev_completed("resp-1"),
