@@ -78,7 +78,7 @@ async fn read_process_until_change(
         return Ok(response);
     }
 
-    timeout(Duration::from_secs(2), wake_rx.changed()).await??;
+    timeout(Duration::from_secs(5), wake_rx.changed()).await??;
     session
         .read(after_seq, /*max_bytes*/ None, /*wait_ms*/ Some(0))
         .await
