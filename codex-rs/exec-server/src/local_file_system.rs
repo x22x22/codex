@@ -253,8 +253,11 @@ fn enforce_access(
     let Some(sandbox_policy) = &options.sandbox_policy else {
         return Ok(());
     };
-    let cwd = std::env::current_dir()
-        .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?;
+    let cwd = match &options.cwd {
+        Some(cwd) => cwd.clone().into_path_buf(),
+        None => std::env::current_dir()
+            .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?,
+    };
     let file_system_policy = FileSystemSandboxPolicy::from(sandbox_policy);
     if is_allowed(&file_system_policy, path.as_path(), cwd.as_path()) {
         Ok(())

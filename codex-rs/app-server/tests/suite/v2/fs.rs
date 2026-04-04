@@ -84,6 +84,7 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
         .send_fs_get_metadata_request(codex_app_server_protocol::FsGetMetadataParams {
             path: absolute_path(file_path.clone()),
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let response = timeout(
@@ -143,6 +144,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             path: absolute_path(nested_dir.clone()),
             recursive: None,
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -156,6 +158,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             path: absolute_path(nested_file.clone()),
             data_base64: STANDARD.encode("hello from app-server"),
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -169,6 +172,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             path: absolute_path(source_file.clone()),
             data_base64: STANDARD.encode("hello from source root"),
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -181,6 +185,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(nested_file.clone()),
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -203,6 +208,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             destination_path: absolute_path(copy_file_path.clone()),
             recursive: false,
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -221,6 +227,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -237,6 +244,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_read_directory_request(codex_app_server_protocol::FsReadDirectoryParams {
             path: absolute_path(source_dir.clone()),
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let readdir_response = timeout(
@@ -270,6 +278,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             recursive: None,
             force: None,
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -297,6 +306,7 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
             path: absolute_path(file_path.clone()),
             data_base64: STANDARD.encode(bytes),
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -310,6 +320,7 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(file_path),
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -340,6 +351,7 @@ async fn fs_write_file_rejects_invalid_base64() -> Result<()> {
             path: absolute_path(file_path),
             data_base64: "%%%".to_string(),
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let error = timeout(
@@ -372,6 +384,7 @@ async fn fs_read_file_respects_sandbox_policy() -> Result<()> {
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(file_path),
             sandbox_policy: Some(read_only_sandbox_policy(allowed_dir)),
+            cwd: None,
         })
         .await?;
     let response: FsReadFileResponse = to_response(
@@ -404,6 +417,7 @@ async fn fs_write_file_rejects_path_outside_sandbox_policy() -> Result<()> {
             path: absolute_path(blocked_path.clone()),
             data_base64: STANDARD.encode("nope"),
             sandbox_policy: Some(read_only_sandbox_policy(allowed_dir)),
+            cwd: None,
         })
         .await?;
     expect_error_message(
@@ -558,6 +572,7 @@ async fn fs_copy_rejects_directory_without_recursive() -> Result<()> {
             destination_path: absolute_path(codex_home.path().join("dest")),
             recursive: false,
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let error = timeout(
@@ -586,6 +601,7 @@ async fn fs_copy_rejects_copying_directory_into_descendant() -> Result<()> {
             destination_path: absolute_path(source_dir.join("nested").join("copy")),
             recursive: true,
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     let error = timeout(
@@ -618,6 +634,7 @@ async fn fs_copy_preserves_symlinks_in_recursive_copy() -> Result<()> {
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -659,6 +676,7 @@ async fn fs_copy_ignores_unknown_special_files_in_recursive_copy() -> Result<()>
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     timeout(
@@ -697,6 +715,7 @@ async fn fs_copy_rejects_standalone_fifo_source() -> Result<()> {
             destination_path: absolute_path(codex_home.path().join("copied")),
             recursive: false,
             sandbox_policy: None,
+            cwd: None,
         })
         .await?;
     expect_error_message(

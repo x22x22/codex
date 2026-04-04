@@ -22,6 +22,7 @@ pub struct CopyOptions {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FileSystemOperationOptions {
     pub sandbox_policy: Option<SandboxPolicy>,
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

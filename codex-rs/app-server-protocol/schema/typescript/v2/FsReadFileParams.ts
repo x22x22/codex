@@ -7,12 +7,16 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 /**
  * Read a file from the host filesystem.
  */
-export type FsReadFileParams = { 
+export type FsReadFileParams = {
 /**
  * Absolute path to read.
  */
-path: AbsolutePathBuf, 
+path: AbsolutePathBuf,
 /**
  * Optional sandbox policy for this filesystem read.
  */
-sandboxPolicy?: SandboxPolicy | null, };
+sandboxPolicy?: SandboxPolicy | null,
+/**
+ * Optional cwd to resolve legacy sandbox workspace roots against.
+ */
+cwd?: AbsolutePathBuf | null, };

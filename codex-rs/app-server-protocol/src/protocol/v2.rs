@@ -2171,6 +2171,9 @@ pub struct FsReadFileParams {
     /// Optional sandbox policy for this filesystem read.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional cwd to resolve legacy sandbox workspace roots against.
+    #[ts(optional = nullable)]
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 /// Base64-encoded file contents returned by `fs/readFile`.
@@ -2194,6 +2197,9 @@ pub struct FsWriteFileParams {
     /// Optional sandbox policy for this filesystem write.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional cwd to resolve legacy sandbox workspace roots against.
+    #[ts(optional = nullable)]
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 /// Successful response for `fs/writeFile`.
@@ -2215,6 +2221,9 @@ pub struct FsCreateDirectoryParams {
     /// Optional sandbox policy for this filesystem mutation.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional cwd to resolve legacy sandbox workspace roots against.
+    #[ts(optional = nullable)]
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 /// Successful response for `fs/createDirectory`.
@@ -2233,6 +2242,9 @@ pub struct FsGetMetadataParams {
     /// Optional sandbox policy for this filesystem metadata lookup.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional cwd to resolve legacy sandbox workspace roots against.
+    #[ts(optional = nullable)]
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 /// Metadata returned by `fs/getMetadata`.
@@ -2262,6 +2274,9 @@ pub struct FsReadDirectoryParams {
     /// Optional sandbox policy for this directory read.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional cwd to resolve legacy sandbox workspace roots against.
+    #[ts(optional = nullable)]
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 /// A directory entry returned by `fs/readDirectory`.
@@ -2302,6 +2317,9 @@ pub struct FsRemoveParams {
     /// Optional sandbox policy for this filesystem mutation.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional cwd to resolve legacy sandbox workspace roots against.
+    #[ts(optional = nullable)]
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 /// Successful response for `fs/remove`.
@@ -2325,6 +2343,9 @@ pub struct FsCopyParams {
     /// Optional sandbox policy for this filesystem copy.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional cwd to resolve legacy sandbox workspace roots against.
+    #[ts(optional = nullable)]
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 /// Successful response for `fs/copy`.
@@ -6548,6 +6569,7 @@ mod tests {
         let params = FsReadFileParams {
             path: absolute_path("tmp/example.txt"),
             sandbox_policy: None,
+            cwd: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
@@ -6556,6 +6578,7 @@ mod tests {
             json!({
                 "path": absolute_path_string("tmp/example.txt"),
                 "sandboxPolicy": null,
+                "cwd": null,
             })
         );
 
@@ -6570,6 +6593,7 @@ mod tests {
             path: absolute_path("tmp/example"),
             recursive: None,
             sandbox_policy: None,
+            cwd: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/createDirectory params");
@@ -6579,6 +6603,7 @@ mod tests {
                 "path": absolute_path_string("tmp/example"),
                 "recursive": null,
                 "sandboxPolicy": null,
+                "cwd": null,
             })
         );
 
@@ -6593,6 +6618,7 @@ mod tests {
             path: absolute_path("tmp/example.bin"),
             data_base64: "AAE=".to_string(),
             sandbox_policy: None,
+            cwd: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/writeFile params");
@@ -6602,6 +6628,7 @@ mod tests {
                 "path": absolute_path_string("tmp/example.bin"),
                 "dataBase64": "AAE=",
                 "sandboxPolicy": null,
+                "cwd": null,
             })
         );
 
@@ -6617,6 +6644,7 @@ mod tests {
             destination_path: absolute_path("tmp/destination"),
             recursive: true,
             sandbox_policy: None,
+            cwd: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/copy params");
@@ -6627,6 +6655,7 @@ mod tests {
                 "destinationPath": absolute_path_string("tmp/destination"),
                 "recursive": true,
                 "sandboxPolicy": null,
+                "cwd": null,
             })
         );
 

@@ -46,6 +46,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
                 sandbox_policy: None,
+                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -71,6 +72,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                     .sandbox_policy
                     .clone()
                     .map(codex_app_server_protocol::SandboxPolicy::from),
+                cwd: options.cwd.clone(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -89,6 +91,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
                 sandbox_policy: None,
+                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -110,6 +113,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                     .sandbox_policy
                     .clone()
                     .map(codex_app_server_protocol::SandboxPolicy::from),
+                cwd: options.cwd.clone(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -127,6 +131,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 path: path.clone(),
                 recursive: Some(options.recursive),
                 sandbox_policy: None,
+                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -148,6 +153,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                     .sandbox_policy
                     .clone()
                     .map(codex_app_server_protocol::SandboxPolicy::from),
+                cwd: options.cwd.clone(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -161,6 +167,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .fs_get_metadata(FsGetMetadataParams {
                 path: path.clone(),
                 sandbox_policy: None,
+                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -186,6 +193,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                     .sandbox_policy
                     .clone()
                     .map(codex_app_server_protocol::SandboxPolicy::from),
+                cwd: options.cwd.clone(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -207,6 +215,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .fs_read_directory(FsReadDirectoryParams {
                 path: path.clone(),
                 sandbox_policy: None,
+                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -235,6 +244,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                     .sandbox_policy
                     .clone()
                     .map(codex_app_server_protocol::SandboxPolicy::from),
+                cwd: options.cwd.clone(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -257,6 +267,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 recursive: Some(options.recursive),
                 force: Some(options.force),
                 sandbox_policy: None,
+                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -279,6 +290,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                     .sandbox_policy
                     .clone()
                     .map(codex_app_server_protocol::SandboxPolicy::from),
+                cwd: options.cwd.clone(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -298,6 +310,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
                 sandbox_policy: None,
+                cwd: None,
             })
             .await
             .map_err(map_remote_error)?;
@@ -321,6 +334,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
                     .sandbox_policy
                     .clone()
                     .map(codex_app_server_protocol::SandboxPolicy::from),
+                cwd: options.cwd.clone(),
             })
             .await
             .map_err(map_remote_error)?;

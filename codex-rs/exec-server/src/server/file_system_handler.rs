@@ -40,7 +40,10 @@ impl FileSystemHandler {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file_with_options(&params.path, &fs_operation_options(params.sandbox_policy))
+            .read_file_with_options(
+                &params.path,
+                &fs_operation_options(params.sandbox_policy, params.cwd),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -61,7 +64,7 @@ impl FileSystemHandler {
             .write_file_with_options(
                 &params.path,
                 bytes,
-                &fs_operation_options(params.sandbox_policy),
+                &fs_operation_options(params.sandbox_policy, params.cwd),
             )
             .await
             .map_err(map_fs_error)?;
@@ -78,7 +81,7 @@ impl FileSystemHandler {
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
                 },
-                &fs_operation_options(params.sandbox_policy),
+                &fs_operation_options(params.sandbox_policy, params.cwd),
             )
             .await
             .map_err(map_fs_error)?;
@@ -91,7 +94,10 @@ impl FileSystemHandler {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata_with_options(&params.path, &fs_operation_options(params.sandbox_policy))
+            .get_metadata_with_options(
+                &params.path,
+                &fs_operation_options(params.sandbox_policy, params.cwd),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -108,7 +114,10 @@ impl FileSystemHandler {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
             .file_system
-            .read_directory_with_options(&params.path, &fs_operation_options(params.sandbox_policy))
+            .read_directory_with_options(
+                &params.path,
+                &fs_operation_options(params.sandbox_policy, params.cwd),
+            )
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {
@@ -134,7 +143,7 @@ impl FileSystemHandler {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),
                 },
-                &fs_operation_options(params.sandbox_policy),
+                &fs_operation_options(params.sandbox_policy, params.cwd),
             )
             .await
             .map_err(map_fs_error)?;
@@ -152,7 +161,7 @@ impl FileSystemHandler {
                 CopyOptions {
                     recursive: params.recursive,
                 },
-                &fs_operation_options(params.sandbox_policy),
+                &fs_operation_options(params.sandbox_policy, params.cwd),
             )
             .await
             .map_err(map_fs_error)?;
@@ -162,9 +171,11 @@ impl FileSystemHandler {
 
 fn fs_operation_options(
     sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
+    cwd: Option<codex_utils_absolute_path::AbsolutePathBuf>,
 ) -> FileSystemOperationOptions {
     FileSystemOperationOptions {
         sandbox_policy: sandbox_policy.map(|policy| policy.to_core()),
+        cwd,
     }
 }
 

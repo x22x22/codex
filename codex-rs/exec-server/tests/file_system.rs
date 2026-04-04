@@ -68,7 +68,37 @@ fn read_only_options(readable_root: std::path::PathBuf) -> FileSystemOperationOp
             },
             network_access: false,
         }),
+        cwd: None,
     }
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_write_with_sandbox_policy_uses_supplied_cwd(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let workspace_root = absolute_path(tmp.path().to_path_buf());
+    let file_path = tmp.path().join("workspace-write.txt");
+    let options = FileSystemOperationOptions {
+        sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+        cwd: Some(workspace_root),
+    };
+
+    file_system
+        .write_file_with_options(
+            &absolute_path(file_path.clone()),
+            b"allowed".to_vec(),
+            &options,
+        )
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+
+    assert_eq!(std::fs::read_to_string(file_path)?, "allowed");
+
+    Ok(())
 }
 
 #[test_case(false ; "local")]

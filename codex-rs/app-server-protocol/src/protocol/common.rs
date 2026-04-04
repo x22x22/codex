@@ -1611,6 +1611,7 @@ mod tests {
             params: v2::FsGetMetadataParams {
                 path: absolute_path("tmp/example"),
                 sandbox_policy: None,
+                cwd: None,
             },
         };
         assert_eq!(
@@ -1619,7 +1620,8 @@ mod tests {
                 "id": 9,
             "params": {
                     "path": absolute_path_string("tmp/example"),
-                    "sandboxPolicy": null
+                    "sandboxPolicy": null,
+                    "cwd": null
                 }
             }),
             serde_json::to_value(&request)?,
