@@ -6,7 +6,7 @@
  
 -        let mut meson = Command::new("meson");
 +        let mut meson =
-+            Command::new(env::var_os("MESON").unwrap_or_else(|| "meson".into()));
++            Command::new(env::var_os("MESON").expect("MESON is set by Bazel"));
          meson.args(["setup", "--prefix", install_dir.to_str().unwrap()]);
          meson.arg("--reconfigure");
  
