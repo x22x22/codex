@@ -373,9 +373,6 @@ crate.annotation(
     build_script_env = {
         "MESON": "$(execpath @meson//:meson)",
     },
-    build_script_tools = [
-        "@meson//:meson",
-    ],
     crate = "webrtc-audio-processing-sys",
     gen_build_script = "on",
     patch_args = ["-p1"],
