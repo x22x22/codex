@@ -347,6 +347,15 @@ inject_repo(crate, "alsa_lib")
 
 bazel_dep(name = "opus", version = "1.6.0")
 
+single_version_override(
+    module_name = "opus",
+    patch_strip = 1,
+    patches = [
+        "//patches:opus_windows_gnullvm_stack_probe.patch",
+    ],
+    version = "1.6.0",
+)
+
 crate.annotation(
     crate = "audiopus_sys",
     gen_build_script = "off",
