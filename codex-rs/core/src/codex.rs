@@ -7416,6 +7416,8 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                let completed_assistant_message =
+                    matches!(&item, ResponseItem::Message { role, .. } if role == "assistant");
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -7473,10 +7475,11 @@ async fn try_run_sampling_request(
                 let output_result = handle_output_item_done(&mut ctx, item, previously_active_item)
                     .instrument(handle_responses)
                     .await?;
-                if !pending_output_text_delta.is_empty() {
-                    // If an item completed while this buffer is still non-empty, those bytes could
-                    // not be matched to an assistant item. Clear them so they don't leak into the
-                    // next item.
+                if completed_assistant_message && !pending_output_text_delta.is_empty() {
+                    // If an assistant message completed while this buffer is still non-empty,
+                    // those bytes could not be matched to that message item. Clear them so they
+                    // don't leak into a later assistant item, but keep the buffer across
+                    // reasoning/tool completions so a delayed message item can still claim it.
                     warn!(
                         buffered_len = pending_output_text_delta.len(),
                         "dropping buffered output text deltas after item completion"
