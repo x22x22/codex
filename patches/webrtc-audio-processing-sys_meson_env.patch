@@ -1,7 +1,8 @@
 --- a/build.rs
 +++ b/build.rs
-@@
+@@ -203,7 +203,8 @@ pub(super) fn build_if_necessary() -> Result<()> {
 -        let mut meson = Command::new("meson");
-+        let mut meson = Command::new(env::var_os("MESON").unwrap_or_else(|| "meson".into()));
++        let mut meson =
++            Command::new(env::var_os("MESON").unwrap_or_else(|| "meson".into()));
          meson.args(["setup", "--prefix", install_dir.to_str().unwrap()]);
          meson.arg("--reconfigure");
