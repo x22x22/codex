@@ -7,10 +7,10 @@
 -        let mut meson = Command::new("meson");
 +        let mut meson =
 +            Command::new(env::var_os("MESON").expect("MESON is set by Bazel"));
-+        let runfiles_dir = Path::new(
-+            &env::var_os("CARGO_MANIFEST_DIR")
-+                .expect("CARGO_MANIFEST_DIR is set by Bazel"),
-+        )
++        let cargo_manifest_dir =
++            env::var_os("CARGO_MANIFEST_DIR")
++                .expect("CARGO_MANIFEST_DIR is set by Bazel");
++        let runfiles_dir = Path::new(&cargo_manifest_dir)
 +        .parent()
 +        .expect("CARGO_MANIFEST_DIR points inside a Bazel runfiles tree");
 +        meson.env("RUNFILES_DIR", runfiles_dir);
