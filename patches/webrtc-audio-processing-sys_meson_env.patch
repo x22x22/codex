@@ -1,8 +1,12 @@
 --- a/build.rs
 +++ b/build.rs
 @@ -203,7 +203,8 @@ pub(super) fn build_if_necessary() -> Result<()> {
+         let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
+         eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
+ 
 -        let mut meson = Command::new("meson");
 +        let mut meson =
 +            Command::new(env::var_os("MESON").unwrap_or_else(|| "meson".into()));
          meson.args(["setup", "--prefix", install_dir.to_str().unwrap()]);
          meson.arg("--reconfigure");
+ 
