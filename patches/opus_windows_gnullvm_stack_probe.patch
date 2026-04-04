@@ -1,5 +1,5 @@
---- a/overlay/BUILD.bazel
-+++ b/overlay/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
 @@ -1,5 +1,5 @@
  load("@rules_cc//cc:defs.bzl", "cc_library")
 -load("//:defs.bzl", "AVX2_COPTS", "OPUS_COPTS", "OPUS_INCLUDES", "OPUS_LINKOPTS", "SSE2_COPTS", "SSE4_1_COPTS", "SSE_COPTS")
@@ -113,8 +113,8 @@
      includes = ["include"],
      deps = [
          ":celt",
---- a/overlay/defs.bzl
-+++ b/overlay/defs.bzl
+--- a/defs.bzl
++++ b/defs.bzl
 @@ -1,4 +1,9 @@
 -OPUS_COPTS = ["-std=gnu99"]
 +OPUS_COPTS = [
