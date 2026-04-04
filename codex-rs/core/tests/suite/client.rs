@@ -824,7 +824,7 @@ async fn send_provider_auth_request(
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
-        auth: Some(auth),
+        auth: Some(auth.clone()),
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
