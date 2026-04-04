@@ -679,11 +679,11 @@ fn file_link_hides_destination() {
 #[test]
 fn file_link_decodes_percent_encoded_bare_path_destination() {
     let text = render_markdown_text_for_cwd(
-        "[Kleidung](/Users/example/code/codex/Archiv%201/Pers%C3%B6nliches/Kleidung/)",
+        "[report](/Users/example/code/codex/Example%20Folder/R%C3%A9sum%C3%A9/report.md)",
         Path::new("/Users/example/code/codex"),
     );
     let expected = Text::from(Line::from_iter([
-        "Archiv 1/Persönliches/Kleidung".cyan(),
+        "Example Folder/Résumé/report.md".cyan(),
     ]));
     assert_eq!(text, expected);
 }
