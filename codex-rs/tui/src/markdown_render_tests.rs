@@ -677,6 +677,18 @@ fn file_link_hides_destination() {
 }
 
 #[test]
+fn file_link_decodes_percent_encoded_bare_path_destination() {
+    let text = render_markdown_text_for_cwd(
+        "[Kleidung](/Users/example/code/codex/Archiv%201/Pers%C3%B6nliches/Kleidung/)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter([
+        "Archiv 1/Persönliches/Kleidung".cyan(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn file_link_appends_line_number_when_label_lacks_it() {
     let text = render_markdown_text_for_cwd(
         "[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)",
