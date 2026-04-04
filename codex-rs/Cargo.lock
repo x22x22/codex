@@ -3407,6 +3407,7 @@ dependencies = [
  "notify",
  "opentelemetry",
  "opentelemetry_sdk",
+ "opus",
  "pretty_assertions",
  "regex-lite",
  "reqwest",
@@ -3419,6 +3420,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "walkdir",
+ "webrtc",
  "wiremock",
  "zstd",
 ]
