@@ -367,11 +367,18 @@ inject_repo(crate, "opus")
 bazel_dep(name = "meson", version = "1.5.1.bcr.1")
 
 crate.annotation(
+    build_script_env = {
+        "MESON": "$(execpath @meson//:meson)",
+    },
     build_script_tools = [
         "@meson//:meson",
     ],
     crate = "webrtc-audio-processing-sys",
     gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:webrtc-audio-processing-sys_meson_env.patch",
+    ],
 )
 
 inject_repo(crate, "meson")
