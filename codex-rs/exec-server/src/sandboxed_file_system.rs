@@ -325,7 +325,9 @@ pub async fn run_internal_fs_op() -> io::Result<()> {
         }),
     };
     let bytes = serde_json::to_vec(&response).map_err(io::Error::other)?;
-    tokio::io::stdout().write_all(&bytes).await?;
+    let mut stdout = tokio::io::stdout();
+    stdout.write_all(&bytes).await?;
+    stdout.flush().await?;
     Ok(())
 }
 
@@ -413,7 +415,7 @@ fn prepare_helper_request(
         /*has_managed_network_requirements*/ false,
     );
     let command = SandboxCommand {
-        program: helper_exe.clone().into(),
+        program: helper_exe.into(),
         args: vec![INTERNAL_FS_OP_FLAG.to_string()],
         cwd: helper_cwd.clone(),
         env: HashMap::new(),
