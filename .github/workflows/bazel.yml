@@ -58,6 +58,20 @@ jobs:
           target: ${{ matrix.target }}
           install-test-prereqs: "true"
 
+      # Restore the Bazel repository cache explicitly so external dependencies
+      # do not need to be re-downloaded on every CI run. Keep restore failures
+      # non-fatal so transient cache-service errors degrade to a cold build
+      # instead of failing the job.
+      - name: Restore bazel repository cache
+        id: cache_bazel_repository_restore
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+          key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+          restore-keys: |
+            bazel-cache-${{ matrix.target }}
+
       - name: Check MODULE.bazel.lock is up to date
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
@@ -112,12 +126,11 @@ jobs:
       # Save bazel repository cache explicitly; make non-fatal so cache uploading
       # never fails the overall job. Only save when key wasn't hit.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        if: always() && !cancelled() && steps.cache_bazel_repository_restore.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
-          path: |
-            ~/.cache/bazel-repo-cache
+          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
 
   clippy:
@@ -147,6 +160,20 @@ jobs:
         uses: ./.github/actions/setup-bazel-ci
         with:
           target: ${{ matrix.target }}
+
+      # Restore the Bazel repository cache explicitly so external dependencies
+      # do not need to be re-downloaded on every CI run. Keep restore failures
+      # non-fatal so transient cache-service errors degrade to a cold build
+      # instead of failing the job.
+      - name: Restore bazel repository cache
+        id: cache_bazel_repository_restore
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+          key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+          restore-keys: |
+            bazel-cache-${{ matrix.target }}
 
       - name: Set up Bazel execution logs
         shell: bash
@@ -186,10 +213,9 @@ jobs:
       # Save bazel repository cache explicitly; make non-fatal so cache uploading
       # never fails the overall job. Only save when key wasn't hit.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        if: always() && !cancelled() && steps.cache_bazel_repository_restore.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
-          path: |
-            ~/.cache/bazel-repo-cache
+          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
