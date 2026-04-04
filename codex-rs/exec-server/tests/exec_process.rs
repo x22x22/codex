@@ -165,7 +165,12 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
 
     let StartedExecProcess { process } = session;
     let wake_rx = process.subscribe_wake();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let startup_delay = if use_remote {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_millis(200)
+    };
+    tokio::time::sleep(startup_delay).await;
     process.write(b"hello\n".to_vec()).await?;
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
 
