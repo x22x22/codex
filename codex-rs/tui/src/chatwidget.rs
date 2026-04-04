@@ -6016,7 +6016,10 @@ impl ChatWidget {
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                if from_replay {
+                let should_backfill_reasoning = from_replay
+                    || (self.reasoning_buffer.trim().is_empty()
+                        && self.full_reasoning_buffer.trim().is_empty());
+                if should_backfill_reasoning {
                     for delta in summary {
                         self.on_agent_reasoning_delta(delta);
                     }

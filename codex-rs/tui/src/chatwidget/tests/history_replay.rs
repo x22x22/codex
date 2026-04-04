@@ -726,6 +726,51 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
 }
 
 #[tokio::test]
+async fn live_reasoning_item_completed_renders_summary_without_prior_delta() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec!["Summary only".to_string()],
+                content: Vec::new(),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.transcript_lines(/*width*/ 80))
+        }
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert!(rendered.contains("Summary only"));
+    assert_chatwidget_snapshot!(
+        "live_reasoning_item_completed_renders_summary_without_prior_delta",
+        rendered
+    );
+}
+
+#[tokio::test]
 async fn replayed_turn_started_does_not_mark_task_running() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
