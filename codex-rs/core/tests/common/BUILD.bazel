@@ -5,6 +5,7 @@ codex_rust_crate(
     crate_name = "core_test_support",
     crate_srcs = glob([
         "*.rs",
+        "responses/*.rs",
         "responses/**/*.rs",
     ]),
     lib_data_extra = [
