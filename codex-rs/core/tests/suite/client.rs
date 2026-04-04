@@ -170,6 +170,7 @@ impl ProviderAuthCommandFixture {
             std::fs::write(
                 &script_path,
                 r#"#!/bin/sh
+printf 'invoked\n' >> invocations.log
 first_line=$(sed -n '1p' tokens.txt)
 printf '%s\n' "$first_line"
 tail -n +2 tokens.txt > tokens.next
@@ -187,23 +188,29 @@ mv tokens.next tokens.txt
 
         #[cfg(windows)]
         let (command, args) = {
-            let script_path = tempdir.path().join("print-token.ps1");
+            let script_path = tempdir.path().join("print-token.cmd");
             std::fs::write(
                 &script_path,
-                r#"$lines = @(Get-Content -Path tokens.txt)
-if ($lines.Count -eq 0) { exit 1 }
-Write-Output $lines[0]
-$lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
+                r#"@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+
+echo invoked>>invocations.log
+set "first_line="
+<tokens.txt set /p first_line=
+if not defined first_line exit /b 1
+
+echo(%first_line%
+more +2 tokens.txt > tokens.next
+move /y tokens.next tokens.txt >nul
 "#,
             )?;
             (
-                "powershell.exe".to_string(),
+                "cmd.exe".to_string(),
                 vec![
-                    "-NoProfile".to_string(),
-                    "-ExecutionPolicy".to_string(),
-                    "Bypass".to_string(),
-                    "-File".to_string(),
-                    ".\\print-token.ps1".to_string(),
+                    "/D".to_string(),
+                    "/Q".to_string(),
+                    "/C".to_string(),
+                    ".\\print-token.cmd".to_string(),
                 ],
             )
         };
@@ -219,7 +226,8 @@ $lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
         ModelProviderAuthInfo {
             command: self.command.clone(),
             args: self.args.clone(),
-            timeout_ms: non_zero_u64(/*value*/ 1_000),
+            // Match the provider-auth default to avoid brittle shell-startup timing in CI.
+            timeout_ms: non_zero_u64(/*value*/ 5_000),
             refresh_interval_ms: 60_000,
             cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
                 Ok(cwd) => cwd,
@@ -765,7 +773,7 @@ async fn provider_auth_command_supplies_bearer_token() {
     .await;
     let auth_fixture = ProviderAuthCommandFixture::new(&["command-token"]).unwrap();
 
-    send_provider_auth_request(&server, auth_fixture.auth()).await;
+    send_provider_auth_request(&server, &auth_fixture).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -797,22 +805,26 @@ async fn provider_auth_command_refreshes_after_401() {
         .mount(&server)
         .await;
 
-    send_provider_auth_request(&server, auth_fixture.auth()).await;
+    send_provider_auth_request(&server, &auth_fixture).await;
 }
 
 /// Issues one streamed Responses request through a provider configured with command-backed auth.
 ///
 /// The caller owns the server-side assertions, so this helper only validates that the request
 /// reaches `Completed` without surfacing an auth or transport error to the client.
-#[expect(clippy::expect_used, clippy::unwrap_used)]
-async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuthInfo) {
+#[expect(clippy::unwrap_used)]
+async fn send_provider_auth_request(
+    server: &MockServer,
+    auth_fixture: &ProviderAuthCommandFixture,
+) {
+    let auth = auth_fixture.auth();
     let provider = ModelProviderInfo {
         name: "corp".into(),
         base_url: Some(format!("{}/v1", server.uri())),
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
-        auth: Some(auth),
+        auth: Some(auth.clone()),
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -884,7 +896,23 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             /*turn_metadata_header*/ None,
         )
         .await
-        .expect("responses stream to start");
+        .unwrap_or_else(|err| {
+            let read_debug_file = |name: &str| -> String {
+                let path = auth_fixture.tempdir.path().join(name);
+                match std::fs::read_to_string(&path) {
+                    Ok(contents) => format!("{name}: {contents:?}"),
+                    Err(file_err) => format!("{name}: <read failed: {file_err}>"),
+                }
+            };
+            panic!(
+                "responses stream to start: {err:?}\nprovider auth fixture command: {} {:?}\nprovider auth fixture cwd: {}\n{}\n{}",
+                auth.command,
+                auth.args,
+                auth.cwd.as_path().display(),
+                read_debug_file("tokens.txt"),
+                read_debug_file("invocations.log")
+            )
+        });
 
     while let Some(event) = stream.next().await {
         if let Ok(ResponseEvent::Completed { .. }) = event {
