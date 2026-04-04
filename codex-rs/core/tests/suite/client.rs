@@ -165,10 +165,12 @@ impl ProviderAuthCommandFixture {
     fn new(tokens: &[&str]) -> std::io::Result<Self> {
         let tempdir = tempfile::tempdir()?;
         let tokens_file = tempdir.path().join("tokens.txt");
+        // `cmd.exe`'s `set /p` treats LF-only input as one line, so use CRLF on Windows.
+        let token_line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
         let mut token_file_contents = String::new();
         for token in tokens {
             token_file_contents.push_str(token);
-            token_file_contents.push('\n');
+            token_file_contents.push_str(token_line_ending);
         }
         std::fs::write(&tokens_file, token_file_contents)?;
 
@@ -195,23 +197,28 @@ mv tokens.next tokens.txt
 
         #[cfg(windows)]
         let (command, args) = {
-            let script_path = tempdir.path().join("print-token.ps1");
+            let script_path = tempdir.path().join("print-token.cmd");
             std::fs::write(
                 &script_path,
-                r#"$lines = @(Get-Content -Path tokens.txt)
-if ($lines.Count -eq 0) { exit 1 }
-Write-Output $lines[0]
-$lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
+                r#"@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+
+set "first_line="
+<tokens.txt set /p first_line=
+if not defined first_line exit /b 1
+
+echo(%first_line%
+more +1 tokens.txt > tokens.next
+move /y tokens.next tokens.txt >nul
 "#,
             )?;
             (
-                "powershell.exe".to_string(),
+                "cmd.exe".to_string(),
                 vec![
-                    "-NoProfile".to_string(),
-                    "-ExecutionPolicy".to_string(),
-                    "Bypass".to_string(),
-                    "-File".to_string(),
-                    ".\\print-token.ps1".to_string(),
+                    "/D".to_string(),
+                    "/Q".to_string(),
+                    "/C".to_string(),
+                    ".\\print-token.cmd".to_string(),
                 ],
             )
         };
@@ -227,7 +234,8 @@ $lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
         ModelProviderAuthInfo {
             command: self.command.clone(),
             args: self.args.clone(),
-            timeout_ms: non_zero_u64(/*value*/ 1_000),
+            // Match the provider-auth default to avoid brittle shell-startup timing in CI.
+            timeout_ms: non_zero_u64(/*value*/ 5_000),
             refresh_interval_ms: 60_000,
             cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
                 Ok(cwd) => cwd,
