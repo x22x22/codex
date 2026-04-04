@@ -5,9 +5,9 @@ use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 
 const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 
@@ -83,9 +83,7 @@ async fn with_exec_server_url_env<T>(
     exec_server_url: Option<&str>,
     future: impl std::future::Future<Output = T>,
 ) -> T {
-    let _guard = exec_server_env_lock()
-        .lock()
-        .expect("exec server env lock should not be poisoned");
+    let _guard = exec_server_env_lock().lock().await;
     let previous = std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok();
     match exec_server_url {
         Some(value) => unsafe { std::env::set_var(CODEX_EXEC_SERVER_URL_ENV_VAR, value) },
