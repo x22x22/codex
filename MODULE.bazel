@@ -367,7 +367,7 @@ inject_repo(crate, "opus")
 bazel_dep(name = "meson", version = "1.5.1.bcr.1")
 
 crate.annotation(
-    build_script_data = [
+    build_script_tools = [
         "@meson//:meson",
     ],
     build_script_env = {
