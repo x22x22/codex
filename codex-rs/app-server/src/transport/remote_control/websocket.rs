@@ -1184,7 +1184,7 @@ mod tests {
 
         outbound_buffer.ack(&client_1, /*acked_seq_id*/ 2);
 
-        let retained = outbound_buffer
+        let mut retained = outbound_buffer
             .server_envelopes()
             .map(|server_envelope| {
                 (
@@ -1194,6 +1194,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
+        retained.sort_unstable();
         assert_eq!(retained, vec![("client-2", "stream-1", 1)]);
         assert_eq!(*used_rx.borrow(), 1);
     }
@@ -1222,7 +1223,7 @@ mod tests {
 
         outbound_buffer.ack(&client_1, /*acked_seq_id*/ 0);
 
-        let retained = outbound_buffer
+        let mut retained = outbound_buffer
             .server_envelopes()
             .map(|server_envelope| {
                 (
@@ -1232,6 +1233,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
+        retained.sort_unstable();
         assert_eq!(
             retained,
             vec![("client-1", "stream-2", 1), ("client-2", "stream-1", 2)]
