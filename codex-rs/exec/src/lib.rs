@@ -1098,6 +1098,8 @@ async fn maybe_backfill_turn_completed_items(
     }
 }
 
+/// Returns true only when `exec` can safely recover missing turn items from
+/// rollout-backed thread history.
 fn should_backfill_turn_completed_items(
     thread_ephemeral: bool,
     notification: &ServerNotification,
