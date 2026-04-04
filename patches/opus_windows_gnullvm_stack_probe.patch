@@ -79,7 +79,7 @@
      includes = OPUS_INCLUDES,
      deps = [
          ":config",
-@@ -258,7 +258,10 @@ cc_library(
+@@ -258,6 +258,9 @@ cc_library(
          "celt/mathops.c",
      ],
 -    copts = OPUS_COPTS,
@@ -102,7 +102,7 @@
      includes = OPUS_INCLUDES,
      deps = [
          ":celt",
-@@ -419,7 +425,10 @@ cc_library(
+@@ -419,6 +425,9 @@ cc_library(
          "src/mlp_data.c",
      ] + glob(["src/*.h"]),
 -    copts = OPUS_COPTS,
