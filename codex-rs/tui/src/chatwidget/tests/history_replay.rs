@@ -771,6 +771,62 @@ async fn live_reasoning_item_completed_renders_summary_without_prior_delta() {
 }
 
 #[tokio::test]
+async fn live_reasoning_item_completed_backfills_missing_prefix_before_streamed_suffix() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "reasoning-1".to_string(),
+            delta: "suffix".to_string(),
+            summary_index: 0,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec!["prefix suffix".to_string()],
+                content: Vec::new(),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.transcript_lines(/*width*/ 80))
+        }
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert_eq!(rendered.matches("prefix suffix").count(), 1);
+    assert_chatwidget_snapshot!(
+        "live_reasoning_item_completed_backfills_missing_prefix_before_streamed_suffix",
+        rendered
+    );
+}
+
+#[tokio::test]
 async fn replayed_turn_started_does_not_mark_task_running() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
