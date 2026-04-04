@@ -13,7 +13,7 @@ use self::protocol::normalize_remote_control_url;
 use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::next_connection_id;
-use codex_core::AuthManager;
+use codex_login::AuthManager;
 use codex_state::StateRuntime;
 use std::io;
 use std::sync::Arc;

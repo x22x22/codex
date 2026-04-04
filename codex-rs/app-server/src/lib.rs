@@ -33,12 +33,12 @@ use crate::transport::route_outgoing_envelope;
 use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
+use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
-use codex_core::AppServerRpcTransport;
 use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
@@ -457,7 +457,9 @@ pub async fn run_main_with_transport(
             range: None,
         });
     }
-    if let Some(warning) = codex_core::config::system_bwrap_warning() {
+    if let Some(warning) =
+        codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+    {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
             details: None,

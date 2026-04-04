@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use codex_core::AuthManager;
 use codex_core::config::Config;
+use codex_login::AuthManager;
 
 pub(crate) fn auth_manager_from_config(
     config: &Config,
