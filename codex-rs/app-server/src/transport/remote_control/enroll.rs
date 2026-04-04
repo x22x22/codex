@@ -7,6 +7,7 @@ use codex_state::StateRuntime;
 use gethostname::gethostname;
 use std::io;
 use std::io::ErrorKind;
+use tracing::info;
 use tracing::warn;
 
 const REMOTE_CONTROL_ENROLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -36,26 +37,48 @@ pub(super) async fn load_persisted_remote_control_enrollment(
     remote_control_target: &RemoteControlTarget,
     account_id: Option<&str>,
 ) -> Option<RemoteControlEnrollment> {
-    let state_db = state_db?;
+    let Some(state_db) = state_db else {
+        info!(
+            "remote control enrollment cache unavailable because sqlite state db is disabled: websocket_url={}, account_id={:?}",
+            remote_control_target.websocket_url, account_id
+        );
+        return None;
+    };
     let enrollment = match state_db
         .get_remote_control_enrollment(&remote_control_target.websocket_url, account_id)
         .await
     {
         Ok(enrollment) => enrollment,
         Err(err) => {
-            warn!("{err}");
+            warn!(
+                "failed to load persisted remote control enrollment: websocket_url={}, account_id={:?}, err={err}",
+                remote_control_target.websocket_url, account_id
+            );
             return None;
         }
     };
 
-    enrollment.map(
-        |(server_id, environment_id, server_name)| RemoteControlEnrollment {
-            account_id: account_id.map(&str::to_string),
-            environment_id,
-            server_id,
-            server_name,
-        },
-    )
+    match enrollment {
+        Some((server_id, environment_id, server_name)) => {
+            info!(
+                "reusing persisted remote control enrollment: websocket_url={}, account_id={:?}, server_id={}, environment_id={}",
+                remote_control_target.websocket_url, account_id, server_id, environment_id
+            );
+            Some(RemoteControlEnrollment {
+                account_id: account_id.map(&str::to_string),
+                environment_id,
+                server_id,
+                server_name,
+            })
+        }
+        None => {
+            info!(
+                "no persisted remote control enrollment found: websocket_url={}, account_id={:?}",
+                remote_control_target.websocket_url, account_id
+            );
+            None
+        }
+    }
 }
 
 pub(super) async fn update_persisted_remote_control_enrollment(
@@ -65,6 +88,12 @@ pub(super) async fn update_persisted_remote_control_enrollment(
     enrollment: Option<&RemoteControlEnrollment>,
 ) -> io::Result<()> {
     let Some(state_db) = state_db else {
+        info!(
+            "skipping remote control enrollment persistence because sqlite state db is disabled: websocket_url={}, account_id={:?}, has_enrollment={}",
+            remote_control_target.websocket_url,
+            account_id,
+            enrollment.is_some()
+        );
         return Ok(());
     };
     if let &Some(enrollment) = &enrollment
@@ -85,13 +114,25 @@ pub(super) async fn update_persisted_remote_control_enrollment(
                 &enrollment.server_name,
             )
             .await
-            .map_err(io::Error::other)
+            .map_err(io::Error::other)?;
+        info!(
+            "persisted remote control enrollment: websocket_url={}, account_id={:?}, server_id={}, environment_id={}",
+            remote_control_target.websocket_url,
+            account_id,
+            enrollment.server_id,
+            enrollment.environment_id
+        );
+        Ok(())
     } else {
-        state_db
+        let rows_affected = state_db
             .delete_remote_control_enrollment(&remote_control_target.websocket_url, account_id)
             .await
-            .map(|_| ())
-            .map_err(io::Error::other)
+            .map_err(io::Error::other)?;
+        info!(
+            "cleared persisted remote control enrollment: websocket_url={}, account_id={:?}, rows_affected={rows_affected}",
+            remote_control_target.websocket_url, account_id
+        );
+        Ok(())
     }
 }
 
