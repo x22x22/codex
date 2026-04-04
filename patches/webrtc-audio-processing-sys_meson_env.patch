@@ -1,12 +1,19 @@
 --- a/build.rs
 +++ b/build.rs
-@@ -203,7 +203,8 @@ pub(super) fn build_if_necessary() -> Result<()> {
+@@ -203,7 +203,15 @@ pub(super) fn build_if_necessary() -> Result<()> {
          let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
          eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
  
 -        let mut meson = Command::new("meson");
 +        let mut meson =
 +            Command::new(env::var_os("MESON").expect("MESON is set by Bazel"));
++        let runfiles_dir = Path::new(
++            &env::var_os("CARGO_MANIFEST_DIR")
++                .expect("CARGO_MANIFEST_DIR is set by Bazel"),
++        )
++        .parent()
++        .expect("CARGO_MANIFEST_DIR points inside a Bazel runfiles tree");
++        meson.env("RUNFILES_DIR", runfiles_dir);
          meson.args(["setup", "--prefix", install_dir.to_str().unwrap()]);
          meson.arg("--reconfigure");
  
