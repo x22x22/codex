@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::io::ErrorKind;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,10 +18,13 @@ use crate::operations::resolve_head;
 use crate::operations::resolve_repository_root;
 use crate::operations::run_git_for_status;
 use crate::operations::run_git_for_stdout;
+use crate::resolve_root_git_project_for_trust;
 
 static WORKTREE_BUCKET_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const CODEX_MANAGED_WORKTREE_MARKER_FILE: &str = "codex-managed";
+pub const CODEX_MANAGED_WORKTREE_METADATA_FILE: &str = "codex-worktree.json";
+const CODEX_MANAGED_WORKTREE_METADATA_VERSION: u64 = 1;
 
 /// Metadata for a detached worktree created under `$CODEX_HOME/worktrees`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +36,20 @@ pub struct CodexManagedWorktree {
     pub worktree_workspace_root: PathBuf,
     pub starting_ref: String,
     pub marker_path: PathBuf,
+    pub metadata_path: PathBuf,
+    pub metadata: CodexManagedWorktreeMetadata,
+}
+
+/// Persisted metadata for a Codex-managed worktree checkout.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CodexManagedWorktreeMetadata {
+    pub version: u64,
+    pub source_repo_root: PathBuf,
+    pub worktree_git_root: PathBuf,
+    pub starting_ref: String,
+    pub created_at: u64,
+    pub last_used_at: u64,
 }
 
 /// Creates a detached worktree for `source_cwd` and returns the mapped cwd
@@ -49,13 +67,14 @@ pub fn create_codex_managed_worktree(
     let starting_ref = starting_ref_for_repo(source_repo_root.as_path())?;
     let worktree_git_root = allocate_worktree_root(codex_home, source_repo_root.as_path())?;
 
+    let metadata = build_worktree_metadata(&source_repo_root, &worktree_git_root, &starting_ref);
     create_worktree_checkout(
         source_repo_root.as_path(),
         &worktree_git_root,
         &starting_ref,
     )?;
-    let setup_result = setup_worktree_checkout(&worktree_git_root);
-    let (worktree_git_dir, marker_path) = match setup_result {
+    let setup_result = setup_worktree_checkout(&worktree_git_root, &metadata);
+    let (worktree_git_dir, marker_path, metadata_path) = match setup_result {
         Ok(setup) => setup,
         Err(err) => {
             cleanup_worktree_checkout(source_repo_root.as_path(), &worktree_git_root);
@@ -76,7 +95,28 @@ pub fn create_codex_managed_worktree(
         worktree_workspace_root,
         starting_ref,
         marker_path,
+        metadata_path,
+        metadata,
     })
+}
+
+/// Updates `last_used_at` when `cwd` belongs to a Codex-managed worktree.
+pub fn touch_codex_managed_worktree_metadata(
+    cwd: &Path,
+) -> Result<Option<CodexManagedWorktreeMetadata>, GitToolingError> {
+    let Ok(worktree_git_dir) = worktree_git_dir(cwd) else {
+        return Ok(None);
+    };
+    let marker_path = worktree_git_dir.join(CODEX_MANAGED_WORKTREE_MARKER_FILE);
+    if !marker_path.exists() {
+        return Ok(None);
+    }
+
+    let metadata_path = worktree_git_dir.join(CODEX_MANAGED_WORKTREE_METADATA_FILE);
+    let mut metadata = read_or_backfill_worktree_metadata(&metadata_path, cwd)?;
+    metadata.last_used_at = unix_timestamp_secs();
+    write_worktree_metadata(&metadata_path, &metadata)?;
+    Ok(Some(metadata))
 }
 
 fn starting_ref_for_repo(repo_root: &Path) -> Result<String, GitToolingError> {
@@ -167,10 +207,12 @@ fn create_worktree_checkout(
 
 fn setup_worktree_checkout(
     worktree_git_root: &Path,
-) -> Result<(PathBuf, PathBuf), GitToolingError> {
+    metadata: &CodexManagedWorktreeMetadata,
+) -> Result<(PathBuf, PathBuf, PathBuf), GitToolingError> {
     let worktree_git_dir = worktree_git_dir(worktree_git_root)?;
     let marker_path = write_codex_managed_marker(&worktree_git_dir)?;
-    Ok((worktree_git_dir, marker_path))
+    let metadata_path = write_worktree_metadata_in_git_dir(&worktree_git_dir, metadata)?;
+    Ok((worktree_git_dir, marker_path, metadata_path))
 }
 
 fn cleanup_worktree_checkout(source_repo_root: &Path, worktree_git_root: &Path) {
@@ -194,7 +236,72 @@ fn write_codex_managed_marker(worktree_git_dir: &Path) -> Result<PathBuf, GitToo
     Ok(marker_path)
 }
 
-fn worktree_git_dir(worktree_git_root: &Path) -> Result<PathBuf, GitToolingError> {
+fn write_worktree_metadata_in_git_dir(
+    worktree_git_dir: &Path,
+    metadata: &CodexManagedWorktreeMetadata,
+) -> Result<PathBuf, GitToolingError> {
+    let metadata_path = worktree_git_dir.join(CODEX_MANAGED_WORKTREE_METADATA_FILE);
+    write_worktree_metadata(&metadata_path, metadata)?;
+    Ok(metadata_path)
+}
+
+fn write_worktree_metadata(
+    metadata_path: &Path,
+    metadata: &CodexManagedWorktreeMetadata,
+) -> Result<(), GitToolingError> {
+    let metadata_json = serde_json::to_vec_pretty(metadata)?;
+    fs::write(metadata_path, metadata_json)?;
+    Ok(())
+}
+
+pub(crate) fn read_or_backfill_worktree_metadata(
+    metadata_path: &Path,
+    cwd: &Path,
+) -> Result<CodexManagedWorktreeMetadata, GitToolingError> {
+    match fs::read(metadata_path) {
+        Ok(metadata_json) => Ok(serde_json::from_slice(&metadata_json)?),
+        Err(err) if err.kind() == ErrorKind::NotFound => backfill_worktree_metadata(cwd),
+        Err(err) => Err(GitToolingError::Io(err)),
+    }
+}
+
+fn backfill_worktree_metadata(cwd: &Path) -> Result<CodexManagedWorktreeMetadata, GitToolingError> {
+    let worktree_git_root = resolve_repository_root(cwd)?;
+    let source_repo_root = resolve_root_git_project_for_trust(worktree_git_root.as_path())
+        .unwrap_or_else(|| worktree_git_root.clone());
+    // Legacy marker-only worktrees do not record the original checkout ref, so
+    // fail closed by leaving `starting_ref` unknown instead of inferring HEAD.
+    Ok(build_worktree_metadata(
+        &source_repo_root,
+        &worktree_git_root,
+        "",
+    ))
+}
+
+fn build_worktree_metadata(
+    source_repo_root: &Path,
+    worktree_git_root: &Path,
+    starting_ref: &str,
+) -> CodexManagedWorktreeMetadata {
+    let timestamp = unix_timestamp_secs();
+    CodexManagedWorktreeMetadata {
+        version: CODEX_MANAGED_WORKTREE_METADATA_VERSION,
+        source_repo_root: source_repo_root.to_path_buf(),
+        worktree_git_root: worktree_git_root.to_path_buf(),
+        starting_ref: starting_ref.to_string(),
+        created_at: timestamp,
+        last_used_at: timestamp,
+    }
+}
+
+fn unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+pub(crate) fn worktree_git_dir(worktree_git_root: &Path) -> Result<PathBuf, GitToolingError> {
     let git_dir = run_git_for_stdout(
         worktree_git_root,
         vec![OsString::from("rev-parse"), OsString::from("--git-dir")],
@@ -211,12 +318,15 @@ fn worktree_git_dir(worktree_git_root: &Path) -> Result<PathBuf, GitToolingError
 #[cfg(test)]
 mod tests {
     use super::CODEX_MANAGED_WORKTREE_MARKER_FILE;
+    use super::CODEX_MANAGED_WORKTREE_METADATA_FILE;
     use super::CodexManagedWorktree;
+    use super::CodexManagedWorktreeMetadata;
     use super::allocate_worktree_root;
     use super::cleanup_worktree_checkout;
     use super::create_codex_managed_worktree;
     use super::create_worktree_checkout;
     use super::starting_ref_for_repo;
+    use super::touch_codex_managed_worktree_metadata;
     use crate::GitToolingError;
     #[cfg(unix)]
     use crate::platform::create_symlink;
@@ -306,6 +416,23 @@ mod tests {
                 .worktree_git_dir
                 .join(CODEX_MANAGED_WORKTREE_MARKER_FILE)
         );
+        assert_eq!(
+            result.metadata_path,
+            result
+                .worktree_git_dir
+                .join(CODEX_MANAGED_WORKTREE_METADATA_FILE)
+        );
+        assert_eq!(
+            result.metadata,
+            CodexManagedWorktreeMetadata {
+                version: 1,
+                source_repo_root: expected_repo_root,
+                worktree_git_root: result.worktree_git_root.clone(),
+                starting_ref: "main".to_string(),
+                created_at: result.metadata.created_at,
+                last_used_at: result.metadata.created_at,
+            }
+        );
     }
 
     #[test]
@@ -356,6 +483,33 @@ mod tests {
                 .join(CODEX_MANAGED_WORKTREE_MARKER_FILE)
         );
         assert!(repo.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn create_codex_managed_worktree_writes_and_touches_metadata() -> Result<(), GitToolingError> {
+        let (_temp, _repo, nested) = create_repo_with_nested_cwd();
+        let codex_home = tempdir().expect("codex home");
+
+        let result = create_codex_managed_worktree(&nested, codex_home.path())?;
+        let mut metadata: CodexManagedWorktreeMetadata =
+            serde_json::from_slice(&fs::read(&result.metadata_path)?)?;
+        assert_eq!(metadata, result.metadata);
+
+        metadata.last_used_at = 1;
+        fs::write(&result.metadata_path, serde_json::to_vec_pretty(&metadata)?)?;
+
+        let touched = touch_codex_managed_worktree_metadata(&result.worktree_workspace_root)?
+            .expect("managed worktree metadata");
+
+        assert_eq!(touched.created_at, result.metadata.created_at);
+        assert!(touched.last_used_at > 1);
+        assert_eq!(
+            serde_json::from_slice::<CodexManagedWorktreeMetadata>(&fs::read(
+                &result.metadata_path
+            )?)?,
+            touched
+        );
         Ok(())
     }
 

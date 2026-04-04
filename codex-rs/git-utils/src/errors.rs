@@ -29,6 +29,8 @@ pub enum GitToolingError {
     #[error("failed to process path inside worktree")]
     PathPrefix(#[from] std::path::StripPrefixError),
     #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
     Walkdir(#[from] WalkdirError),
     #[error(transparent)]
     Io(#[from] std::io::Error),

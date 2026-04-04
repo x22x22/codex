@@ -9,6 +9,7 @@ mod info;
 mod operations;
 mod platform;
 mod worktree;
+mod worktree_prune;
 
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;
@@ -50,8 +51,18 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
+pub use worktree::CODEX_MANAGED_WORKTREE_METADATA_FILE;
 pub use worktree::CodexManagedWorktree;
+pub use worktree::CodexManagedWorktreeMetadata;
 pub use worktree::create_codex_managed_worktree;
+pub use worktree::touch_codex_managed_worktree_metadata;
+pub use worktree_prune::CodexWorktreePruneCandidate;
+pub use worktree_prune::CodexWorktreePruneMode;
+pub use worktree_prune::CodexWorktreePruneOptions;
+pub use worktree_prune::CodexWorktreePruneReport;
+pub use worktree_prune::CodexWorktreePruneSkipReason;
+pub use worktree_prune::CodexWorktreePruneSkipped;
+pub use worktree_prune::prune_codex_managed_worktrees;
 
 type CommitID = String;
 

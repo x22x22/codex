@@ -39,10 +39,13 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod worktree_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+use crate::worktree_cmd::WorktreeCli;
+use crate::worktree_cmd::run_worktree_command;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -150,6 +153,9 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Manage Codex-created local git worktrees.
+    Worktree(WorktreeCli),
 }
 
 #[derive(Debug, Parser)]
@@ -1028,6 +1034,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 disable_feature_in_config(&interactive, &feature).await?;
             }
         },
+        Some(Subcommand::Worktree(worktree_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "worktree",
+            )?;
+            run_worktree_command(worktree_cli)?;
+        }
     }
 
     Ok(())

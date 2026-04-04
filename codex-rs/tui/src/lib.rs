@@ -43,6 +43,7 @@ use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_git_utils::CodexManagedWorktree;
 use codex_git_utils::GitToolingError;
 use codex_git_utils::create_codex_managed_worktree;
+use codex_git_utils::touch_codex_managed_worktree_metadata;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
@@ -606,6 +607,9 @@ fn resolve_startup_cwd(
     };
 
     let Some(worktree_creator) = worktree_creator else {
+        if let Err(err) = touch_codex_managed_worktree_metadata(config_cwd.as_path()) {
+            warn!(?err, "failed to refresh Codex-managed worktree metadata");
+        }
         return Ok(StartupCwd {
             cwd: requested_cwd,
             config_cwd,
@@ -1692,6 +1696,7 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
     use codex_features::Feature;
+    use codex_git_utils::CodexManagedWorktreeMetadata;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
@@ -1759,7 +1764,7 @@ mod tests {
             StartupCwd {
                 cwd: Some(cwd.path().to_path_buf()),
                 config_cwd: AbsolutePathBuf::from_absolute_path(
-                    &cwd.path().canonicalize().expect("canonicalize cwd")
+                    cwd.path().canonicalize().expect("canonicalize cwd")
                 )
                 .expect("absolute cwd"),
             }
@@ -1778,6 +1783,7 @@ mod tests {
                 let worktree_git_root = codex_home.join("worktrees/fake/project");
                 let worktree_git_dir = worktree_git_root.join(".git");
                 let marker_path = worktree_git_dir.join("codex-managed");
+                let metadata_path = worktree_git_dir.join("codex-worktree.json");
                 Ok(CodexManagedWorktree {
                     source_cwd: source_cwd.to_path_buf(),
                     source_repo_root: source_cwd.to_path_buf(),
@@ -1786,6 +1792,15 @@ mod tests {
                     worktree_workspace_root: worktree_git_root.join("nested/path"),
                     starting_ref: "main".to_string(),
                     marker_path,
+                    metadata_path,
+                    metadata: CodexManagedWorktreeMetadata {
+                        version: 1,
+                        source_repo_root: source_cwd.to_path_buf(),
+                        worktree_git_root,
+                        starting_ref: "main".to_string(),
+                        created_at: 1,
+                        last_used_at: 1,
+                    },
                 })
             }),
         )

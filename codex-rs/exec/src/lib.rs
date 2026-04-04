@@ -70,6 +70,7 @@ use codex_git_utils::CodexManagedWorktree;
 use codex_git_utils::GitToolingError;
 use codex_git_utils::create_codex_managed_worktree;
 use codex_git_utils::get_git_repo_root;
+use codex_git_utils::touch_codex_managed_worktree_metadata;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
 use codex_protocol::config_types::SandboxMode;
@@ -196,6 +197,9 @@ fn resolve_startup_cwd(
     };
 
     let Some(worktree_creator) = worktree_creator else {
+        if let Err(err) = touch_codex_managed_worktree_metadata(config_cwd.as_path()) {
+            warn!(?err, "failed to refresh Codex-managed worktree metadata");
+        }
         return Ok(StartupCwd {
             resolved_cwd: requested_cwd,
             config_cwd,
@@ -1709,6 +1713,7 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_git_utils::CodexManagedWorktreeMetadata;
     use codex_otel::set_parent_from_w3c_trace_context;
     use codex_protocol::config_types::ApprovalsReviewer;
     use opentelemetry::trace::TraceContextExt;
@@ -1785,6 +1790,7 @@ mod tests {
                 let worktree_git_root = codex_home.join("worktrees/fake/project");
                 let worktree_git_dir = worktree_git_root.join(".git");
                 let marker_path = worktree_git_dir.join("codex-managed");
+                let metadata_path = worktree_git_dir.join("codex-worktree.json");
                 Ok(CodexManagedWorktree {
                     source_cwd: source_cwd.to_path_buf(),
                     source_repo_root: source_cwd.to_path_buf(),
@@ -1793,6 +1799,15 @@ mod tests {
                     worktree_workspace_root: worktree_git_root.join("nested/path"),
                     starting_ref: "main".to_string(),
                     marker_path,
+                    metadata_path,
+                    metadata: CodexManagedWorktreeMetadata {
+                        version: 1,
+                        source_repo_root: source_cwd.to_path_buf(),
+                        worktree_git_root,
+                        starting_ref: "main".to_string(),
+                        created_at: 1,
+                        last_used_at: 1,
+                    },
                 })
             }),
         )
