@@ -1,19 +1,39 @@
 --- a/build.rs
 +++ b/build.rs
-@@ -203,7 +203,15 @@ pub(super) fn build_if_necessary() -> Result<()> {
+@@ -1,9 +1,9 @@
+ use anyhow::{bail, Context, Result};
+ use bindgen::callbacks::{AttributeInfo, DeriveInfo, ParseCallbacks};
+ use std::{
+     env,
+-    fs::File,
++    fs::{self, File},
+     io::{BufWriter, Write},
+     path::PathBuf,
+     process::Command,
+ };
+@@ -203,7 +203,24 @@ pub(super) fn build_if_necessary() -> Result<()> {
          let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
          eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
  
 -        let mut meson = Command::new("meson");
-+        let mut meson =
-+            Command::new(env::var_os("MESON").expect("MESON is set by Bazel"));
++        let meson_launcher =
++            env::var_os("MESON").expect("MESON is set by Bazel");
 +        let cargo_manifest_dir =
 +            env::var_os("CARGO_MANIFEST_DIR")
 +                .expect("CARGO_MANIFEST_DIR is set by Bazel");
 +        let runfiles_dir = Path::new(&cargo_manifest_dir)
-+        .parent()
-+        .expect("CARGO_MANIFEST_DIR points inside a Bazel runfiles tree");
-+        meson.env("RUNFILES_DIR", runfiles_dir);
++            .parent()
++            .expect("CARGO_MANIFEST_DIR points inside a Bazel runfiles tree");
++        let staged_meson = build_dir.join("meson");
++        fs::copy(&meson_launcher, &staged_meson)
++            .context("Failed to stage Meson launcher")?;
++        let mut meson_runfiles = staged_meson.as_os_str().to_owned();
++        meson_runfiles.push(".runfiles");
++        let _ = fs::remove_file(&meson_runfiles);
++        std::os::unix::fs::symlink(runfiles_dir, &meson_runfiles)
++            .context("Failed to link Meson runfiles")?;
++
++        let mut meson = Command::new(staged_meson);
          meson.args(["setup", "--prefix", install_dir.to_str().unwrap()]);
          meson.arg("--reconfigure");
  
