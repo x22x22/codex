@@ -227,7 +227,10 @@ $lines | Select-Object -Skip 1 | Set-Content -Path tokens.txt
         ModelProviderAuthInfo {
             command: self.command.clone(),
             args: self.args.clone(),
-            timeout_ms: non_zero_u64(/*value*/ 1_000),
+            // Process startup can be slow on loaded Windows CI workers, so keep this aligned with
+            // `codex-login` auth tests and avoid turning provider-auth assertions into a
+            // process-launch timing test.
+            timeout_ms: non_zero_u64(/*value*/ 10_000),
             refresh_interval_ms: 60_000,
             cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
                 Ok(cwd) => cwd,
