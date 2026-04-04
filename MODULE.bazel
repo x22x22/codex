@@ -364,6 +364,18 @@ crate.annotation(
 
 inject_repo(crate, "opus")
 
+bazel_dep(name = "meson", version = "1.5.1")
+
+crate.annotation(
+    build_script_tools = [
+        "@meson//:meson",
+    ],
+    crate = "webrtc-audio-processing-sys",
+    gen_build_script = "on",
+)
+
+inject_repo(crate, "meson")
+
 bazel_dep(name = "v8", version = "14.6.202.9")
 archive_override(
     module_name = "v8",
