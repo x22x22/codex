@@ -384,6 +384,7 @@ crate.annotation(
 )
 
 inject_repo(crate, "meson")
+inject_repo(crate, "rules_foreign_cc")
 
 bazel_dep(name = "v8", version = "14.6.202.9")
 archive_override(
