@@ -75,13 +75,19 @@ fn common_ninja() -> Option<PathBuf> {
         PathBuf::from("/bin/ninja"),
         PathBuf::from("/usr/local/bin/ninja"),
         PathBuf::from("/opt/homebrew/bin/ninja"),
+        PathBuf::from("/usr/local/opt/ninja/bin/ninja"),
+        PathBuf::from("/opt/homebrew/opt/ninja/bin/ninja"),
     ] {
         if candidate.is_file() {
             return Some(candidate);
         }
     }
 
-    let output = Command::new("xcrun").args(["-f", "ninja"]).output().ok()?;
+    let xcrun = PathBuf::from("/usr/bin/xcrun");
+    if !xcrun.is_file() {
+        return None;
+    }
+    let output = Command::new(xcrun).args(["-f", "ninja"]).output().ok()?;
     if !output.status.success() {
         return None;
     }
