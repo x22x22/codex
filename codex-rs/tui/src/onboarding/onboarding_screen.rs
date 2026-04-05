@@ -443,6 +443,103 @@ impl WidgetRef for Step {
     }
 }
 
+pub(crate) async fn run_onboarding_app(
+    args: OnboardingScreenArgs,
+    mut app_server: Option<AppServerSession>,
+    tui: &mut Tui,
+) -> Result<OnboardingResult> {
+    use tokio_stream::StreamExt;
+
+    let mut onboarding_screen = OnboardingScreen::new(tui, args);
+    // One-time guard to fully clear the screen after ChatGPT login success message is shown
+    let mut did_full_clear_after_success = false;
+
+    tui.draw(u16::MAX, |frame| {
+        frame.render_widget_ref(&onboarding_screen, frame.area());
+    })?;
+
+    let tui_events = tui.event_stream();
+    tokio::pin!(tui_events);
+
+    while !onboarding_screen.is_done() {
+        tokio::select! {
+            event = tui_events.next() => {
+                if let Some(event) = event {
+                    match event {
+                        TuiEvent::Key(key_event) => {
+                            onboarding_screen.handle_key_event(key_event);
+                        }
+                        TuiEvent::Paste(text) => {
+                            onboarding_screen.handle_paste(text);
+                        }
+                        TuiEvent::Draw => {
+                            if !did_full_clear_after_success
+                                && onboarding_screen.steps.iter().any(|step| {
+                                    if let Step::Auth(w) = step {
+                                        w.sign_in_state.read().is_ok_and(|g| {
+                                            matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+                                        })
+                                    } else {
+                                        false
+                                    }
+                                })
+                            {
+                                // Reset any lingering SGR (underline/color) before clearing
+                                let _ = ratatui::crossterm::execute!(
+                                    std::io::stdout(),
+                                    ratatui::crossterm::style::SetAttribute(
+                                        ratatui::crossterm::style::Attribute::Reset
+                                    ),
+                                    ratatui::crossterm::style::SetAttribute(
+                                        ratatui::crossterm::style::Attribute::NoUnderline
+                                    ),
+                                    ratatui::crossterm::style::SetForegroundColor(
+                                        ratatui::crossterm::style::Color::Reset
+                                    ),
+                                    ratatui::crossterm::style::SetBackgroundColor(
+                                        ratatui::crossterm::style::Color::Reset
+                                    )
+                                );
+                                let _ = tui.terminal.clear();
+                                did_full_clear_after_success = true;
+                            }
+                            let _ = tui.draw(u16::MAX, |frame| {
+                                frame.render_widget_ref(&onboarding_screen, frame.area());
+                            });
+                        }
+                    }
+                }
+            }
+            event = async {
+                match app_server.as_mut() {
+                    Some(app_server) => app_server.next_event().await,
+                    None => None,
+                }
+            }, if app_server.is_some() => {
+                if let Some(event) = event {
+                    match event {
+                        AppServerEvent::ServerNotification(notification) => {
+                            onboarding_screen.handle_app_server_notification(notification);
+                        }
+                        AppServerEvent::Disconnected { message } => {
+                            return Err(color_eyre::eyre::eyre!(message));
+                        }
+                        AppServerEvent::Lagged { .. }
+                        | AppServerEvent::ServerRequest(_) => {}
+                    }
+                }
+            }
+        }
+    }
+    if let Some(app_server) = app_server {
+        app_server.shutdown().await.ok();
+    }
+    Ok(OnboardingResult {
+        directory_trust_decision: onboarding_screen.directory_trust_decision(),
+        should_exit: onboarding_screen.should_exit(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,101 +661,4 @@ mod tests {
         assert_eq!(screen.should_suppress_animations(), false);
         assert!(welcome_frames.try_recv().is_ok());
     }
-}
-
-pub(crate) async fn run_onboarding_app(
-    args: OnboardingScreenArgs,
-    mut app_server: Option<AppServerSession>,
-    tui: &mut Tui,
-) -> Result<OnboardingResult> {
-    use tokio_stream::StreamExt;
-
-    let mut onboarding_screen = OnboardingScreen::new(tui, args);
-    // One-time guard to fully clear the screen after ChatGPT login success message is shown
-    let mut did_full_clear_after_success = false;
-
-    tui.draw(u16::MAX, |frame| {
-        frame.render_widget_ref(&onboarding_screen, frame.area());
-    })?;
-
-    let tui_events = tui.event_stream();
-    tokio::pin!(tui_events);
-
-    while !onboarding_screen.is_done() {
-        tokio::select! {
-            event = tui_events.next() => {
-                if let Some(event) = event {
-                    match event {
-                        TuiEvent::Key(key_event) => {
-                            onboarding_screen.handle_key_event(key_event);
-                        }
-                        TuiEvent::Paste(text) => {
-                            onboarding_screen.handle_paste(text);
-                        }
-                        TuiEvent::Draw => {
-                            if !did_full_clear_after_success
-                                && onboarding_screen.steps.iter().any(|step| {
-                                    if let Step::Auth(w) = step {
-                                        w.sign_in_state.read().is_ok_and(|g| {
-                                            matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
-                                        })
-                                    } else {
-                                        false
-                                    }
-                                })
-                            {
-                                // Reset any lingering SGR (underline/color) before clearing
-                                let _ = ratatui::crossterm::execute!(
-                                    std::io::stdout(),
-                                    ratatui::crossterm::style::SetAttribute(
-                                        ratatui::crossterm::style::Attribute::Reset
-                                    ),
-                                    ratatui::crossterm::style::SetAttribute(
-                                        ratatui::crossterm::style::Attribute::NoUnderline
-                                    ),
-                                    ratatui::crossterm::style::SetForegroundColor(
-                                        ratatui::crossterm::style::Color::Reset
-                                    ),
-                                    ratatui::crossterm::style::SetBackgroundColor(
-                                        ratatui::crossterm::style::Color::Reset
-                                    )
-                                );
-                                let _ = tui.terminal.clear();
-                                did_full_clear_after_success = true;
-                            }
-                            let _ = tui.draw(u16::MAX, |frame| {
-                                frame.render_widget_ref(&onboarding_screen, frame.area());
-                            });
-                        }
-                    }
-                }
-            }
-            event = async {
-                match app_server.as_mut() {
-                    Some(app_server) => app_server.next_event().await,
-                    None => None,
-                }
-            }, if app_server.is_some() => {
-                if let Some(event) = event {
-                    match event {
-                        AppServerEvent::ServerNotification(notification) => {
-                            onboarding_screen.handle_app_server_notification(notification);
-                        }
-                        AppServerEvent::Disconnected { message } => {
-                            return Err(color_eyre::eyre::eyre!(message));
-                        }
-                        AppServerEvent::Lagged { .. }
-                        | AppServerEvent::ServerRequest(_) => {}
-                    }
-                }
-            }
-        }
-    }
-    if let Some(app_server) = app_server {
-        app_server.shutdown().await.ok();
-    }
-    Ok(OnboardingResult {
-        directory_trust_decision: onboarding_screen.directory_trust_decision(),
-        should_exit: onboarding_screen.should_exit(),
-    })
 }

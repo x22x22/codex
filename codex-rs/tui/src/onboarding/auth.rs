@@ -239,10 +239,10 @@ impl AuthModeWidget {
     }
 
     pub(crate) fn should_suppress_animations(&self) -> bool {
-        match &*self.sign_in_state.read().unwrap() {
-            SignInState::ChatGptContinueInBrowser(_) | SignInState::ChatGptDeviceCode(_) => true,
-            _ => false,
-        }
+        matches!(
+            &*self.sign_in_state.read().unwrap(),
+            SignInState::ChatGptContinueInBrowser(_) | SignInState::ChatGptDeviceCode(_)
+        )
     }
 
     pub(crate) fn cancel_active_attempt(&self) {
