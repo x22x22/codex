@@ -110,3 +110,21 @@
          meson.arg("--reconfigure");
  
          if cfg!(target_os = "macos") {
+@@ -221,14 +312,15 @@
+             .context("Failed to execute meson. Do you have it installed?")?;
+         assert!(status.success(), "Command failed: {:?}", &meson);
+ 
+-        let mut ninja = Command::new("ninja");
++        let ninja_launcher = env::var_os("NINJA").expect("NINJA is set by Bazel");
++        let mut ninja = Command::new(ninja_launcher.clone());
+         let status = ninja
+             .current_dir(&webrtc_build_dir)
+             .status()
+             .context("Failed to execute ninja. Do you have it installed?")?;
+         assert!(status.success(), "Command failed: {:?}", &ninja);
+ 
+-        let mut install = Command::new("ninja");
++        let mut install = Command::new(ninja_launcher);
+         let status = install
+             .current_dir(&webrtc_build_dir)
+             .arg("install")
