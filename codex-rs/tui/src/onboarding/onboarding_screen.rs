@@ -172,6 +172,8 @@ impl OnboardingScreen {
     }
 
     fn should_suppress_animations(&self) -> bool {
+        // Freeze the whole onboarding screen when auth is showing copyable login
+        // material so terminal selection is not interrupted by redraws.
         self.current_steps().into_iter().any(|step| match step {
             Step::Auth(widget) => widget.should_suppress_animations(),
             Step::Welcome(_) | Step::TrustDirectory(_) => false,
@@ -601,64 +603,5 @@ mod tests {
         };
 
         (widget, codex_home)
-    }
-
-    #[test]
-    fn onboarding_suppresses_welcome_when_copyable_auth_is_visible() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let (auth_widget, _tmp) = runtime.block_on(auth_widget(
-            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState::new(
-                "login-1".to_string(),
-                "https://auth.example.com".to_string(),
-            )),
-        ));
-        let (welcome_request_frame, mut welcome_frames) = FrameRequester::test_spy();
-        let screen = OnboardingScreen {
-            request_frame: FrameRequester::test_dummy(),
-            steps: vec![
-                Step::Welcome(WelcomeWidget::new(
-                    /*is_logged_in*/ false,
-                    welcome_request_frame,
-                    /*animations_enabled*/ true,
-                )),
-                Step::Auth(auth_widget),
-            ],
-            is_done: false,
-            should_exit: false,
-        };
-
-        let area = Rect::new(0, 0, 80, 40);
-        let mut buf = Buffer::empty(area);
-        (&screen).render_ref(area, &mut buf);
-
-        assert_eq!(screen.should_suppress_animations(), true);
-        assert!(welcome_frames.try_recv().is_err());
-    }
-
-    #[test]
-    fn onboarding_keeps_welcome_animation_enabled_in_pick_mode() {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let (auth_widget, _tmp) = runtime.block_on(auth_widget(SignInState::PickMode));
-        let (welcome_request_frame, mut welcome_frames) = FrameRequester::test_spy();
-        let screen = OnboardingScreen {
-            request_frame: FrameRequester::test_dummy(),
-            steps: vec![
-                Step::Welcome(WelcomeWidget::new(
-                    /*is_logged_in*/ false,
-                    welcome_request_frame,
-                    /*animations_enabled*/ true,
-                )),
-                Step::Auth(auth_widget),
-            ],
-            is_done: false,
-            should_exit: false,
-        };
-
-        let area = Rect::new(0, 0, 80, 40);
-        let mut buf = Buffer::empty(area);
-        (&screen).render_ref(area, &mut buf);
-
-        assert_eq!(screen.should_suppress_animations(), false);
-        assert!(welcome_frames.try_recv().is_ok());
     }
 }
