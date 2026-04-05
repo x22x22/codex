@@ -1,27 +1,29 @@
 --- a/build.rs
 +++ b/build.rs
-@@ -2,7 +2,9 @@
+@@ -2,11 +2,13 @@
  use bindgen::callbacks::{AttributeInfo, DeriveInfo, ParseCallbacks};
  use std::{
      env,
 -    fs::File,
 +    fs::{self, File},
      io::{BufWriter, Write},
-     path::PathBuf,
+-    path::PathBuf,
++    path::{Path, PathBuf},
      process::Command,
  };
 +#[cfg(unix)]
 +use std::os::unix::fs::PermissionsExt;
-@@ -203,8 +205,112 @@
+ 
+ /// Name and minimum version of the library that we are binding to.
+ const LIB_NAME: &str = "webrtc-audio-processing-2";
+@@ -203,8 +205,44 @@
          let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
          eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
  
 -        let mut meson = Command::new("meson");
-+        let meson_launcher =
-+            env::var_os("MESON").expect("MESON is set by Bazel");
-+        let cargo_manifest_dir =
-+            env::var_os("CARGO_MANIFEST_DIR")
-+                .expect("CARGO_MANIFEST_DIR is set by Bazel");
++        let meson_launcher = env::var_os("MESON").expect("MESON is set by Bazel");
++        let cargo_manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
++            .expect("CARGO_MANIFEST_DIR is set by Bazel");
 +        let runfiles_dir = Path::new(&cargo_manifest_dir)
 +            .parent()
 +            .expect("CARGO_MANIFEST_DIR points inside a Bazel runfiles tree");
@@ -53,88 +55,14 @@
 +            .transpose()?;
 +
 +        let mut meson = Command::new(staged_meson);
-+        let mut meson_cross_file = None;
-+        if let (Ok(host), Ok(target)) = (env::var("HOST"), env::var("TARGET")) {
-+            if host != target {
-+                let mut target_parts = target.split('-');
-+                let cpu_family = target_parts
-+                    .next()
-+                    .expect("TARGET triple has an architecture");
-+                let system = target_parts
-+                    .next_back()
-+                    .expect("TARGET triple has an operating system");
-+                let endian = match cpu_family {
-+                    "aarch64" | "x86_64" => "little",
-+                    _ => bail!(
-+                        "Unsupported TARGET architecture for Meson cross file: {cpu_family}"
-+                    ),
-+                };
-+                let cross_file = build_dir.join("meson-cross-file.ini");
-+                fs::write(
-+                    &cross_file,
-+                    format!(
-+                        concat!(
-+                            "[host_machine]\n",
-+                            "system = '{system}'\n",
-+                            "cpu_family = '{cpu_family}'\n",
-+                            "cpu = '{cpu_family}'\n",
-+                            "endian = '{endian}'\n",
-+                            "\n",
-+                            "[properties]\n",
-+                            "needs_exe_wrapper = true\n",
-+                        ),
-+                        system = system,
-+                        cpu_family = cpu_family,
-+                        endian = endian,
-+                    ),
-+                )
-+                .context("Failed to write Meson cross file")?;
-+                meson_cross_file = Some(cross_file);
-+            }
-+        }
-+
-+        if let Ok(ldflags) = env::var("LDFLAGS") {
-+            let mut execroot = build_dir.clone();
-+            while execroot.file_name().map_or(true, |name| name != "bazel-out") {
-+                let had_parent = execroot.pop();
-+                assert!(had_parent, "OUT_DIR points inside bazel-out");
-+            }
-+            let had_parent = execroot.pop();
-+            assert!(had_parent, "bazel-out has an execroot parent");
-+            let ldflags = ldflags
-+                .split_whitespace()
-+                .map(|arg| {
-+                    if let Some(path) = arg.strip_prefix("-L") {
-+                        if path.starts_with("bazel-out/")
-+                            || path.starts_with("external/")
-+                        {
-+                            return format!("-L{}/{}", execroot.display(), path);
-+                        }
-+                    }
-+                    if arg.starts_with("bazel-out/")
-+                        || arg.starts_with("external/")
-+                    {
-+                        format!("{}/{}", execroot.display(), arg)
-+                    } else {
-+                        arg.to_string()
-+                    }
-+                })
-+                .collect::<Vec<_>>()
-+                .join(" ");
-+            meson.env("LDFLAGS", ldflags);
-+        }
          meson.args(["setup", "--prefix", install_dir.to_str().unwrap()]);
 +        if let Some(staged_ninja) = staged_ninja.as_ref() {
 +            meson.env("NINJA", staged_ninja);
 +        }
-+        if let Some(cross_file) = meson_cross_file {
-+            meson.arg("--cross-file");
-+            meson.arg(cross_file);
-+        }
          meson.arg("--reconfigure");
  
          if cfg!(target_os = "macos") {
-@@ -221,14 +327,18 @@
+@@ -221,14 +259,17 @@
              .context("Failed to execute meson. Do you have it installed?")?;
          assert!(status.success(), "Command failed: {:?}", &meson);
  
