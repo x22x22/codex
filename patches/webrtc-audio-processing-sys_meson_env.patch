@@ -11,7 +11,7 @@
      path::PathBuf,
      process::Command,
  };
-@@ -203,7 +203,55 @@ pub(super) fn build_if_necessary() -> Result<()> {
+@@ -203,7 +203,93 @@ pub(super) fn build_if_necessary() -> Result<()> {
          let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
          eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
  
@@ -34,6 +34,44 @@
 +            .context("Failed to link Meson runfiles")?;
 +
 +        let mut meson = Command::new(staged_meson);
++        if let (Ok(host), Ok(target)) = (env::var("HOST"), env::var("TARGET")) {
++            if host != target {
++                let mut target_parts = target.split('-');
++                let cpu_family =
++                    target_parts
++                        .next()
++                        .expect("TARGET triple has an architecture");
++                let system =
++                    target_parts
++                        .next_back()
++                        .expect("TARGET triple has an operating system");
++                let endian = match cpu_family {
++                    "aarch64" | "x86_64" => "little",
++                    _ => bail!(
++                        "Unsupported TARGET architecture for Meson cross file: {cpu_family}"
++                    ),
++                };
++                let cross_file = build_dir.join("meson-cross-file.ini");
++                fs::write(
++                    &cross_file,
++                    format!(
++                        concat!(
++                            "[host_machine]\n",
++                            "system = '{system}'\n",
++                            "cpu_family = '{cpu_family}'\n",
++                            "cpu = '{cpu_family}'\n",
++                            "endian = '{endian}'\n",
++                            "\n",
++                            "[properties]\n",
++                            "needs_exe_wrapper = true\n",
++                        ),
++                    ),
++                )
++                .context("Failed to write Meson cross file")?;
++                meson.arg("--cross-file");
++                meson.arg(cross_file);
++            }
++        }
 +
 +        if let Ok(ldflags) = env::var("LDFLAGS") {
 +            let mut execroot = build_dir.clone();
