@@ -1,7 +1,6 @@
 --- a/build.rs
 +++ b/build.rs
-@@ -1,9 +1,9 @@
- use anyhow::{bail, Context, Result};
+@@ -2,7 +2,7 @@
  use bindgen::callbacks::{AttributeInfo, DeriveInfo, ParseCallbacks};
  use std::{
      env,
@@ -10,8 +9,7 @@
      io::{BufWriter, Write},
      path::PathBuf,
      process::Command,
- };
-@@ -203,7 +203,96 @@ pub(super) fn build_if_necessary() -> Result<()> {
+@@ -203,8 +203,99 @@
          let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
          eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
  
@@ -34,17 +32,16 @@
 +            .context("Failed to link Meson runfiles")?;
 +
 +        let mut meson = Command::new(staged_meson);
++        let mut meson_cross_file = None;
 +        if let (Ok(host), Ok(target)) = (env::var("HOST"), env::var("TARGET")) {
 +            if host != target {
 +                let mut target_parts = target.split('-');
-+                let cpu_family =
-+                    target_parts
-+                        .next()
-+                        .expect("TARGET triple has an architecture");
-+                let system =
-+                    target_parts
-+                        .next_back()
-+                        .expect("TARGET triple has an operating system");
++                let cpu_family = target_parts
++                    .next()
++                    .expect("TARGET triple has an architecture");
++                let system = target_parts
++                    .next_back()
++                    .expect("TARGET triple has an operating system");
 +                let endian = match cpu_family {
 +                    "aarch64" | "x86_64" => "little",
 +                    _ => bail!(
@@ -71,8 +68,7 @@
 +                    ),
 +                )
 +                .context("Failed to write Meson cross file")?;
-+                meson.arg("--cross-file");
-+                meson.arg(cross_file);
++                meson_cross_file = Some(cross_file);
 +            }
 +        }
 +
@@ -107,5 +103,10 @@
 +            meson.env("LDFLAGS", ldflags);
 +        }
          meson.args(["setup", "--prefix", install_dir.to_str().unwrap()]);
++        if let Some(cross_file) = meson_cross_file {
++            meson.arg("--cross-file");
++            meson.arg(cross_file);
++        }
          meson.arg("--reconfigure");
  
+         if cfg!(target_os = "macos") {
