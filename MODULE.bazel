@@ -288,9 +288,12 @@ http_archive(
     build_file_content = """\
 package(default_visibility = ["//visibility:public"])
 
-filegroup(
+genrule(
     name = "ninja_bin",
     srcs = ["ninja"],
+    outs = ["ninja.exec"],
+    cmd = "cp $< $@ && chmod +x $@",
+    executable = True,
 )
 """,
 )
@@ -305,9 +308,12 @@ http_archive(
     build_file_content = """\
 package(default_visibility = ["//visibility:public"])
 
-filegroup(
+genrule(
     name = "ninja_bin",
     srcs = ["ninja"],
+    outs = ["ninja.exec"],
+    cmd = "cp $< $@ && chmod +x $@",
+    executable = True,
 )
 """,
 )
