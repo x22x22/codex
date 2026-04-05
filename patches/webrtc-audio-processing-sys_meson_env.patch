@@ -11,7 +11,7 @@
      path::PathBuf,
      process::Command,
  };
-@@ -203,7 +203,48 @@ pub(super) fn build_if_necessary() -> Result<()> {
+@@ -203,7 +203,50 @@ pub(super) fn build_if_necessary() -> Result<()> {
          let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
          eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
  
@@ -41,12 +41,14 @@
 +            let ldflags = ldflags
 +                .split_whitespace()
 +                .map(|arg| {
-+                    if let Some(path) = arg.strip_prefix("-L")
-+                        && (path.starts_with("bazel-out/")
-+                            || path.starts_with("external/"))
-+                    {
-+                        format!("-L{}/{}", execroot.display(), path)
-+                    } else if arg.starts_with("bazel-out/")
++                    if let Some(path) = arg.strip_prefix("-L") {
++                        if path.starts_with("bazel-out/")
++                            || path.starts_with("external/")
++                        {
++                            return format!("-L{}/{}", execroot.display(), path);
++                        }
++                    }
++                    if arg.starts_with("bazel-out/")
 +                        || arg.starts_with("external/")
 +                    {
 +                        format!("{}/{}", execroot.display(), arg)
