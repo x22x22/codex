@@ -11,7 +11,7 @@
      path::PathBuf,
      process::Command,
  };
-@@ -203,7 +203,50 @@ pub(super) fn build_if_necessary() -> Result<()> {
+@@ -203,7 +203,55 @@ pub(super) fn build_if_necessary() -> Result<()> {
          let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
          eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
  
@@ -36,8 +36,13 @@
 +        let mut meson = Command::new(staged_meson);
 +
 +        if let Ok(ldflags) = env::var("LDFLAGS") {
-+            let execroot =
-+                env::current_dir().expect("Cargo build script runs from Bazel execroot");
++            let mut execroot = build_dir.clone();
++            while execroot.file_name().map_or(true, |name| name != "bazel-out") {
++                let had_parent = execroot.pop();
++                assert!(had_parent, "OUT_DIR points inside bazel-out");
++            }
++            let had_parent = execroot.pop();
++            assert!(had_parent, "bazel-out has an execroot parent");
 +            let ldflags = ldflags
 +                .split_whitespace()
 +                .map(|arg| {
