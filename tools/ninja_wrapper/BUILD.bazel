@@ -1,0 +1,11 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "ninja",
+    crate_name = "ninja_wrapper",
+    crate_root = "main.rs",
+    srcs = ["main.rs"],
+    edition = "2021",
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)

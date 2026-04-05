@@ -369,11 +369,11 @@ bazel_dep(name = "meson", version = "1.5.1.bcr.1")
 crate.annotation(
     build_script_tools = [
         "@meson//:meson",
-        "@rules_foreign_cc//toolchains/private:ninja_tool",
+        "//tools/ninja_wrapper:ninja",
     ],
     build_script_env = {
         "MESON": "$(execpath @meson//:meson)",
-        "NINJA": "$(execpath @rules_foreign_cc//toolchains/private:ninja_tool)/bin/ninja",
+        "NINJA": "$(execpath //tools/ninja_wrapper:ninja)",
     },
     crate = "webrtc-audio-processing-sys",
     gen_build_script = "on",
@@ -384,7 +384,6 @@ crate.annotation(
 )
 
 inject_repo(crate, "meson")
-inject_repo(crate, "rules_foreign_cc")
 
 bazel_dep(name = "v8", version = "14.6.202.9")
 archive_override(
