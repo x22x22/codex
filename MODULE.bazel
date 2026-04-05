@@ -420,7 +420,6 @@ bazel_dep(name = "meson", version = "1.5.1.bcr.1")
 crate.annotation(
     build_script_tools = [
         "@meson//:meson",
-        "@@//tools/ninja_wrapper:ninja_wrapper.sh",
         "@ninja_1.11.0_linux//:ninja_bin",
         "@ninja_1.11.0_mac//:ninja_bin",
         "@ninja_1.11.0_win//:ninja_bin",
@@ -429,12 +428,12 @@ crate.annotation(
         "MESON": "$(execpath @meson//:meson)",
     },
     build_script_env_select = {
-        "aarch64-apple-darwin": "{\"NINJA\":\"$(execpath @@//tools/ninja_wrapper:ninja_wrapper.sh)\",\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_mac//:ninja_bin)\"}",
-        "x86_64-apple-darwin": "{\"NINJA\":\"$(execpath @@//tools/ninja_wrapper:ninja_wrapper.sh)\",\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_mac//:ninja_bin)\"}",
-        "aarch64-unknown-linux-gnu": "{\"NINJA\":\"$(execpath @@//tools/ninja_wrapper:ninja_wrapper.sh)\",\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
-        "x86_64-unknown-linux-gnu": "{\"NINJA\":\"$(execpath @@//tools/ninja_wrapper:ninja_wrapper.sh)\",\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
-        "aarch64-unknown-linux-musl": "{\"NINJA\":\"$(execpath @@//tools/ninja_wrapper:ninja_wrapper.sh)\",\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
-        "x86_64-unknown-linux-musl": "{\"NINJA\":\"$(execpath @@//tools/ninja_wrapper:ninja_wrapper.sh)\",\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
+        "aarch64-apple-darwin": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_mac//:ninja_bin)\"}",
+        "x86_64-apple-darwin": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_mac//:ninja_bin)\"}",
+        "aarch64-unknown-linux-gnu": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
+        "x86_64-unknown-linux-gnu": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
+        "aarch64-unknown-linux-musl": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
+        "x86_64-unknown-linux-musl": "{\"NINJA_REAL\":\"$(execpath @ninja_1.11.0_linux//:ninja_bin)\"}",
         "aarch64-pc-windows-msvc": "{\"NINJA\":\"$(execpath @ninja_1.11.0_win//:ninja_bin)\"}",
         "x86_64-pc-windows-msvc": "{\"NINJA\":\"$(execpath @ninja_1.11.0_win//:ninja_bin)\"}",
         "aarch64-pc-windows-gnullvm": "{\"NINJA\":\"$(execpath @ninja_1.11.0_win//:ninja_bin)\"}",

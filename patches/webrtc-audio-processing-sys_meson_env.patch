@@ -1,6 +1,6 @@
 --- a/build.rs
 +++ b/build.rs
-@@ -2,7 +2,7 @@
+@@ -2,7 +2,9 @@
  use bindgen::callbacks::{AttributeInfo, DeriveInfo, ParseCallbacks};
  use std::{
      env,
@@ -9,7 +9,10 @@
      io::{BufWriter, Write},
      path::PathBuf,
      process::Command,
-@@ -203,8 +203,99 @@
+ };
++#[cfg(unix)]
++use std::os::unix::fs::PermissionsExt;
+@@ -203,8 +205,112 @@
          let webrtc_build_dir = build_dir.join(BUNDLED_SOURCE_PATH);
          eprintln!("Building webrtc-audio-processing in {}", webrtc_build_dir.display());
  
@@ -30,6 +33,24 @@
 +        let _ = fs::remove_file(&meson_runfiles);
 +        std::os::unix::fs::symlink(runfiles_dir, &meson_runfiles)
 +            .context("Failed to link Meson runfiles")?;
++
++        let staged_ninja = env::var_os("NINJA_REAL")
++            .map(|ninja_launcher| {
++                let staged_ninja = build_dir.join("ninja");
++                fs::copy(&ninja_launcher, &staged_ninja)
++                    .context("Failed to stage Ninja launcher")?;
++                #[cfg(unix)]
++                {
++                    let mut permissions = fs::metadata(&staged_ninja)
++                        .context("Failed to read staged Ninja permissions")?
++                        .permissions();
++                    permissions.set_mode(0o755);
++                    fs::set_permissions(&staged_ninja, permissions)
++                        .context("Failed to mark staged Ninja executable")?;
++                }
++                Ok::<PathBuf, anyhow::Error>(staged_ninja)
++            })
++            .transpose()?;
 +
 +        let mut meson = Command::new(staged_meson);
 +        let mut meson_cross_file = None;
@@ -103,6 +124,9 @@
 +            meson.env("LDFLAGS", ldflags);
 +        }
          meson.args(["setup", "--prefix", install_dir.to_str().unwrap()]);
++        if let Some(staged_ninja) = staged_ninja.as_ref() {
++            meson.env("NINJA", staged_ninja);
++        }
 +        if let Some(cross_file) = meson_cross_file {
 +            meson.arg("--cross-file");
 +            meson.arg(cross_file);
@@ -110,12 +134,14 @@
          meson.arg("--reconfigure");
  
          if cfg!(target_os = "macos") {
-@@ -221,14 +312,15 @@
+@@ -221,14 +327,18 @@
              .context("Failed to execute meson. Do you have it installed?")?;
          assert!(status.success(), "Command failed: {:?}", &meson);
  
 -        let mut ninja = Command::new("ninja");
-+        let ninja_launcher = env::var_os("NINJA").expect("NINJA is set by Bazel");
++        let ninja_launcher = staged_ninja
++            .map(Into::into)
++            .unwrap_or_else(|| env::var_os("NINJA").expect("NINJA is set by Bazel"));
 +        let mut ninja = Command::new(ninja_launcher.clone());
          let status = ninja
              .current_dir(&webrtc_build_dir)
