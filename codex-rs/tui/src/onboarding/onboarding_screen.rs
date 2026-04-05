@@ -86,10 +86,8 @@ impl OnboardingScreen {
             config,
         } = args;
         let cwd = config.cwd.to_path_buf();
-        let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
-        let forced_login_method = config.forced_login_method;
         let codex_home = config.codex_home.clone();
-        let cli_auth_credentials_store_mode = config.cli_auth_credentials_store_mode;
+        let forced_login_method = config.forced_login_method;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
             !matches!(login_status, LoginStatus::NotAuthenticated),
@@ -107,13 +105,11 @@ impl OnboardingScreen {
                     highlighted_mode,
                     error: Arc::new(RwLock::new(None)),
                     sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
-                    codex_home: codex_home.clone(),
-                    cli_auth_credentials_store_mode,
                     login_status,
                     app_server_request_handle,
-                    forced_chatgpt_workspace_id,
                     forced_login_method,
                     animations_enabled: config.animations,
+                    animations_suppressed: std::cell::Cell::new(false),
                 }));
             } else {
                 tracing::warn!("skipping onboarding login step without app-server request handle");
@@ -173,6 +169,13 @@ impl OnboardingScreen {
             }
         }
         out
+    }
+
+    fn should_suppress_animations(&self) -> bool {
+        self.current_steps().into_iter().any(|step| match step {
+            Step::Auth(widget) => widget.should_suppress_animations(),
+            Step::Welcome(_) | Step::TrustDirectory(_) => false,
+        })
     }
 
     fn is_auth_in_progress(&self) -> bool {
@@ -323,6 +326,15 @@ impl KeyboardHandler for OnboardingScreen {
 
 impl WidgetRef for &OnboardingScreen {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let suppress_animations = self.should_suppress_animations();
+        for step in self.current_steps() {
+            match step {
+                Step::Welcome(widget) => widget.set_animations_suppressed(suppress_animations),
+                Step::Auth(widget) => widget.set_animations_suppressed(suppress_animations),
+                Step::TrustDirectory(_) => {}
+            }
+        }
+
         Clear.render(area, buf);
         // Render steps top-to-bottom, measuring each step's height dynamically.
         let mut y = area.y;
@@ -428,6 +440,129 @@ impl WidgetRef for Step {
                 widget.render_ref(area, buf);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::onboarding::auth::ContinueInBrowserState;
+    use codex_app_server_client::AppServerRequestHandle;
+    use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+    use codex_app_server_client::InProcessAppServerClient;
+    use codex_app_server_client::InProcessClientStartArgs;
+    use codex_arg0::Arg0DispatchPaths;
+    use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+    use codex_core::config::ConfigBuilder;
+    use codex_login::AuthCredentialsStoreMode;
+    use codex_protocol::protocol::SessionSource;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    async fn auth_widget(sign_in_state: SignInState) -> (AuthModeWidget, TempDir) {
+        let codex_home = TempDir::new().unwrap();
+        let codex_home_path = codex_home.path().to_path_buf();
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home_path.clone())
+            .build()
+            .await
+            .unwrap();
+        let client = InProcessAppServerClient::start(InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            cli_overrides: Vec::new(),
+            loader_overrides: Default::default(),
+            cloud_requirements: cloud_requirements_loader_for_storage(
+                codex_home_path,
+                /*enable_codex_api_key_env*/ false,
+                AuthCredentialsStoreMode::File,
+                "https://chatgpt.com/backend-api/".to_string(),
+            ),
+            feedback: codex_feedback::CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "test".to_string(),
+            client_version: "test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .unwrap();
+
+        let widget = AuthModeWidget {
+            request_frame: FrameRequester::test_dummy(),
+            highlighted_mode: SignInOption::ChatGpt,
+            error: Arc::new(RwLock::new(None)),
+            sign_in_state: Arc::new(RwLock::new(sign_in_state)),
+            login_status: LoginStatus::NotAuthenticated,
+            app_server_request_handle: AppServerRequestHandle::InProcess(client.request_handle()),
+            forced_login_method: None,
+            animations_enabled: true,
+            animations_suppressed: std::cell::Cell::new(false),
+        };
+
+        (widget, codex_home)
+    }
+
+    #[test]
+    fn onboarding_suppresses_welcome_when_copyable_auth_is_visible() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (auth_widget, _tmp) = runtime.block_on(auth_widget(
+            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState::new(
+                "login-1".to_string(),
+                "https://auth.example.com".to_string(),
+            )),
+        ));
+        let (welcome_request_frame, mut welcome_frames) = FrameRequester::test_spy();
+        let screen = OnboardingScreen {
+            request_frame: FrameRequester::test_dummy(),
+            steps: vec![
+                Step::Welcome(WelcomeWidget::new(
+                    /*is_logged_in*/ false,
+                    welcome_request_frame,
+                    /*animations_enabled*/ true,
+                )),
+                Step::Auth(auth_widget),
+            ],
+            is_done: false,
+            should_exit: false,
+        };
+
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        (&screen).render_ref(area, &mut buf);
+
+        assert_eq!(screen.should_suppress_animations(), true);
+        assert!(welcome_frames.try_recv().is_err());
+    }
+
+    #[test]
+    fn onboarding_keeps_welcome_animation_enabled_in_pick_mode() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (auth_widget, _tmp) = runtime.block_on(auth_widget(SignInState::PickMode));
+        let (welcome_request_frame, mut welcome_frames) = FrameRequester::test_spy();
+        let screen = OnboardingScreen {
+            request_frame: FrameRequester::test_dummy(),
+            steps: vec![
+                Step::Welcome(WelcomeWidget::new(
+                    /*is_logged_in*/ false,
+                    welcome_request_frame,
+                    /*animations_enabled*/ true,
+                )),
+                Step::Auth(auth_widget),
+            ],
+            is_done: false,
+            should_exit: false,
+        };
+
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        (&screen).render_ref(area, &mut buf);
+
+        assert_eq!(screen.should_suppress_animations(), false);
+        assert!(welcome_frames.try_recv().is_ok());
     }
 }
 
